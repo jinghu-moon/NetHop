@@ -211,10 +211,35 @@ impl SingBoxCheckRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|_| RunnerError::SpawnFailed)?;
-        let stdout = child.stdout.take().ok_or(RunnerError::SpawnFailed)?;
-        let stderr = child.stderr.take().ok_or(RunnerError::SpawnFailed)?;
-        let stdout_reader = spawn_reader(stdout, self.limits.output_bytes_per_stream)?;
-        let stderr_reader = spawn_reader(stderr, self.limits.output_bytes_per_stream)?;
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                terminate_child(&mut child);
+                return Err(RunnerError::SpawnFailed);
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(stderr) => stderr,
+            None => {
+                terminate_child(&mut child);
+                return Err(RunnerError::SpawnFailed);
+            }
+        };
+        let stdout_reader = match spawn_reader(stdout, self.limits.output_bytes_per_stream) {
+            Ok(reader) => reader,
+            Err(error) => {
+                terminate_child(&mut child);
+                return Err(error);
+            }
+        };
+        let stderr_reader = match spawn_reader(stderr, self.limits.output_bytes_per_stream) {
+            Ok(reader) => reader,
+            Err(error) => {
+                terminate_child(&mut child);
+                let _ = join_reader(stdout_reader);
+                return Err(error);
+            }
+        };
 
         let status = loop {
             match child.try_wait() {
@@ -295,7 +320,15 @@ impl SingBoxCheckRunner {
     }
 }
 
-fn checked_regular_file(path: PathBuf, error: RunnerError) -> Result<PathBuf, RunnerError> {
+fn terminate_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+pub(crate) fn checked_regular_file(
+    path: PathBuf,
+    error: RunnerError,
+) -> Result<PathBuf, RunnerError> {
     let metadata = fs::symlink_metadata(&path).map_err(|_| error.clone())?;
     if !path.is_absolute() || !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(error);
@@ -303,7 +336,7 @@ fn checked_regular_file(path: PathBuf, error: RunnerError) -> Result<PathBuf, Ru
     path.canonicalize().map_err(|_| error)
 }
 
-fn spawn_reader<R: Read + Send + 'static>(
+pub(crate) fn spawn_reader<R: Read + Send + 'static>(
     reader: R,
     limit: usize,
 ) -> Result<thread::JoinHandle<io::Result<CheckOutputSummary>>, RunnerError> {
@@ -313,7 +346,7 @@ fn spawn_reader<R: Read + Send + 'static>(
         .map_err(|_| RunnerError::OutputReadFailed)
 }
 
-fn join_reader(
+pub(crate) fn join_reader(
     reader: thread::JoinHandle<io::Result<CheckOutputSummary>>,
 ) -> Result<CheckOutputSummary, RunnerError> {
     reader
@@ -455,7 +488,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "android")))]
     fn unix_runner(
         script: &str,
         limits: RunnerLimits,
@@ -475,7 +508,7 @@ mod tests {
         (directory, runner, config)
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "android")))]
     #[test]
     fn unix_process_contract_covers_success_and_output_truncation() {
         let script = "#!/bin/sh\n[ \"$1\" = check ] && [ \"$2\" = -c ] || exit 9\ni=0; while [ $i -lt 100 ]; do printf 0123456789; i=$((i+1)); done\n";
@@ -489,7 +522,7 @@ mod tests {
         assert!(report.stdout().truncated());
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "android")))]
     #[test]
     fn unix_process_contract_kills_a_timed_out_check() {
         let script = "#!/bin/sh\nexec sleep 5\n";

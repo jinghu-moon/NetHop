@@ -9,5 +9,8 @@ pub mod state;
 pub use capture::{CaptureMode, CapturePolicy, CapturePolicyError};
 pub use composer::{ComposerError, ManagedConfig, TerminalOutbound};
 pub use diagnostics::{CoreDiagnosticCode, CoreError};
-pub use generation::{Candidate, GenerationId, GenerationManifest, GenerationStore};
+pub use generation::{
+    Candidate, GenerationId, GenerationManifest, GenerationStore, PreparedCandidate,
+    SealedGeneration,
+};
 pub use state::{RuntimeState, StateTransitionError};

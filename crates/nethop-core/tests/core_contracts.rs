@@ -128,6 +128,79 @@ fn generation_store_publishes_manifest_and_current_pointer_atomically() {
 }
 
 #[test]
+fn generation_lifecycle_does_not_activate_before_explicit_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = GenerationStore::new(directory.path()).unwrap();
+    let candidate = Candidate::new(
+        GenerationId::new(11).unwrap(),
+        ManagedConfig::from_outbounds(vec![outbound("eleven")]).unwrap(),
+    );
+
+    let prepared = store.prepare_candidate(&candidate).unwrap();
+    assert!(prepared.config_path().is_file());
+    assert_eq!(store.current_generation().unwrap(), None);
+
+    let sealed = store.seal_candidate(&prepared).unwrap();
+    assert!(sealed.config_path().is_file());
+    assert_eq!(store.current_generation().unwrap(), None);
+
+    store.commit_generation(&sealed).unwrap();
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(candidate.generation())
+    );
+}
+
+#[test]
+fn generation_discard_and_rollback_preserve_a_valid_active_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = GenerationStore::new(directory.path()).unwrap();
+    let first = Candidate::new(
+        GenerationId::new(1).unwrap(),
+        ManagedConfig::from_outbounds(vec![outbound("one")]).unwrap(),
+    );
+    store.publish(&first, |_| Ok(())).unwrap();
+
+    let second = Candidate::new(
+        GenerationId::new(2).unwrap(),
+        ManagedConfig::from_outbounds(vec![outbound("two")]).unwrap(),
+    );
+    let prepared = store.prepare_candidate(&second).unwrap();
+    store.discard_prepared(prepared).unwrap();
+    assert!(!directory.path().join("generations/2").exists());
+
+    let prepared = store.prepare_candidate(&second).unwrap();
+    let sealed = store.seal_candidate(&prepared).unwrap();
+    store.commit_generation(&sealed).unwrap();
+    store.rollback_to(first.generation()).unwrap();
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(first.generation())
+    );
+    store.discard_sealed(sealed).unwrap();
+    assert!(!directory.path().join("generations/2").exists());
+}
+
+#[test]
+fn rollback_rejects_a_generation_whose_config_no_longer_matches_manifest() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = GenerationStore::new(directory.path()).unwrap();
+    let first = Candidate::new(
+        GenerationId::new(1).unwrap(),
+        ManagedConfig::from_outbounds(vec![outbound("one")]).unwrap(),
+    );
+    store.publish(&first, |_| Ok(())).unwrap();
+    std::fs::write(
+        directory.path().join("generations/1/config.json"),
+        b"{\"outbounds\":[]}",
+    )
+    .unwrap();
+
+    let error = store.rollback_to(first.generation()).unwrap_err();
+    assert_eq!(error.code(), CoreDiagnosticCode::GenerationPublishFailed);
+}
+
+#[test]
 fn generation_id_zero_is_rejected() {
     assert_eq!(
         GenerationId::new(0).unwrap_err(),

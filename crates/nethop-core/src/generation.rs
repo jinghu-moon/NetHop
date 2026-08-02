@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     composer::ManagedConfig,
@@ -72,6 +73,50 @@ impl Candidate {
     }
 }
 
+/// Capability token for a fully written candidate that is not yet at a stable path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedCandidate {
+    store_root: PathBuf,
+    generation: GenerationId,
+    directory: PathBuf,
+}
+
+impl PreparedCandidate {
+    pub const fn generation(&self) -> GenerationId {
+        self.generation
+    }
+
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.directory.join("config.json")
+    }
+}
+
+/// Capability token for a generation at its stable path but not necessarily active.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedGeneration {
+    store_root: PathBuf,
+    generation: GenerationId,
+    directory: PathBuf,
+}
+
+impl SealedGeneration {
+    pub const fn generation(&self) -> GenerationId {
+        self.generation
+    }
+
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.directory.join("config.json")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GenerationStore {
     root: PathBuf,
@@ -82,7 +127,18 @@ impl GenerationStore {
         let root = root.into();
         fs::create_dir_all(root.join("generations"))
             .map_err(|error| io_error("create_root", error))?;
+        let root = root
+            .canonicalize()
+            .map_err(|error| io_error("canonicalize_root", error))?;
         Ok(Self { root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn generations_root(&self) -> PathBuf {
+        self.root.join("generations")
     }
 
     pub fn current_generation(&self) -> Result<Option<GenerationId>, CoreError> {
@@ -98,6 +154,107 @@ impl GenerationStore {
         GenerationId::new(value).map(Some)
     }
 
+    pub fn prepare_candidate(&self, candidate: &Candidate) -> Result<PreparedCandidate, CoreError> {
+        let generations = self.generations_root();
+        let final_dir = generations.join(candidate.generation.get().to_string());
+        if final_dir.exists() {
+            return Err(publish_error(
+                "reserve_generation",
+                "generation already exists",
+            ));
+        }
+        let directory = generations.join(format!(
+            ".candidate-{}-{}",
+            candidate.generation.get(),
+            std::process::id()
+        ));
+        if directory.exists() {
+            fs::remove_dir_all(&directory)
+                .map_err(|error| io_error("remove_stale_candidate", error))?;
+        }
+        fs::create_dir(&directory).map_err(|error| io_error("create_candidate", error))?;
+        let result = self.write_candidate(candidate, &directory);
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&directory);
+        }
+        result?;
+        Ok(PreparedCandidate {
+            store_root: self.root.clone(),
+            generation: candidate.generation,
+            directory,
+        })
+    }
+
+    pub fn seal_candidate(
+        &self,
+        prepared: &PreparedCandidate,
+    ) -> Result<SealedGeneration, CoreError> {
+        self.ensure_owned(&prepared.store_root)?;
+        let final_dir = self
+            .generations_root()
+            .join(prepared.generation.get().to_string());
+        if final_dir.exists() {
+            return Err(publish_error(
+                "seal_generation",
+                "generation already exists",
+            ));
+        }
+        fs::rename(&prepared.directory, &final_dir)
+            .map_err(|error| io_error("seal_generation", error))?;
+        sync_directory(&self.generations_root())
+            .map_err(|error| io_error("sync_generations", error))?;
+        Ok(SealedGeneration {
+            store_root: self.root.clone(),
+            generation: prepared.generation,
+            directory: final_dir,
+        })
+    }
+
+    pub fn commit_generation(&self, sealed: &SealedGeneration) -> Result<(), CoreError> {
+        self.ensure_owned(&sealed.store_root)?;
+        self.ensure_sealed_exists(sealed.generation)?;
+        self.write_current(sealed.generation)
+    }
+
+    pub fn discard_prepared(&self, prepared: PreparedCandidate) -> Result<(), CoreError> {
+        self.ensure_owned(&prepared.store_root)?;
+        remove_directory_if_present(&prepared.directory, "discard_candidate")
+    }
+
+    pub fn discard_sealed(&self, sealed: SealedGeneration) -> Result<(), CoreError> {
+        self.ensure_owned(&sealed.store_root)?;
+        if self.current_generation()? == Some(sealed.generation) {
+            return Err(publish_error(
+                "discard_generation",
+                "active generation cannot be discarded",
+            ));
+        }
+        remove_directory_if_present(&sealed.directory, "discard_generation")?;
+        sync_directory(&self.generations_root())
+            .map_err(|error| io_error("sync_generations", error))
+    }
+
+    pub fn rollback_to(&self, generation: GenerationId) -> Result<(), CoreError> {
+        self.ensure_sealed_exists(generation)?;
+        self.write_current(generation)
+    }
+
+    pub fn sealed_generation(
+        &self,
+        generation: GenerationId,
+    ) -> Result<SealedGeneration, CoreError> {
+        self.ensure_sealed_exists(generation)?;
+        Ok(SealedGeneration {
+            store_root: self.root.clone(),
+            generation,
+            directory: self.generations_root().join(generation.get().to_string()),
+        })
+    }
+
+    pub fn verify_generation(&self, generation: GenerationId) -> Result<(), CoreError> {
+        self.ensure_sealed_exists(generation)
+    }
+
     pub fn publish<F>(&self, candidate: &Candidate, validate: F) -> Result<(), CoreError>
     where
         F: FnOnce(&[u8]) -> Result<(), CoreError>,
@@ -109,65 +266,108 @@ impl GenerationStore {
     where
         F: FnOnce(&Path, &[u8]) -> Result<(), CoreError>,
     {
-        let generations = self.root.join("generations");
-        let final_dir = generations.join(candidate.generation.get().to_string());
-        if final_dir.exists() {
-            return Err(CoreError::GenerationPublishFailed {
-                operation: "reserve_generation".into(),
-                message: "generation already exists".into(),
-            });
+        let prepared = self.prepare_candidate(candidate)?;
+        if let Err(error) = validate(&prepared.config_path(), candidate.config.bytes()) {
+            let _ = self.discard_prepared(prepared);
+            return Err(error);
         }
-        let temp_dir = generations.join(format!(
-            ".candidate-{}-{}",
-            candidate.generation.get(),
-            std::process::id()
-        ));
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)
-                .map_err(|error| io_error("remove_stale_candidate", error))?;
+        let sealed = match self.seal_candidate(&prepared) {
+            Ok(sealed) => sealed,
+            Err(error) => {
+                let _ = self.discard_prepared(prepared);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.commit_generation(&sealed) {
+            let _ = self.discard_sealed(sealed);
+            return Err(error);
         }
-        fs::create_dir(&temp_dir).map_err(|error| io_error("create_candidate", error))?;
-        let result = self.publish_inner(candidate, &temp_dir, &final_dir, validate);
-        if result.is_err() {
-            let _ = fs::remove_dir_all(&temp_dir);
-        }
-        result
+        Ok(())
     }
 
-    fn publish_inner<F>(
-        &self,
-        candidate: &Candidate,
-        temp_dir: &Path,
-        final_dir: &Path,
-        validate: F,
-    ) -> Result<(), CoreError>
-    where
-        F: FnOnce(&Path, &[u8]) -> Result<(), CoreError>,
-    {
-        let config_path = temp_dir.join("config.json");
-        let manifest_path = temp_dir.join("manifest.json");
-        write_sync(&config_path, candidate.config.bytes())
+    fn write_candidate(&self, candidate: &Candidate, directory: &Path) -> Result<(), CoreError> {
+        write_sync(&directory.join("config.json"), candidate.config.bytes())
             .map_err(|error| io_error("write_config", error))?;
         let manifest = serde_json::to_vec(&candidate.manifest)
             .map_err(|error| CoreError::SerializationFailure(error.to_string()))?;
-        write_sync(&manifest_path, &manifest).map_err(|error| io_error("write_manifest", error))?;
-        sync_directory(temp_dir).map_err(|error| io_error("sync_candidate", error))?;
-        validate(&config_path, candidate.config.bytes())?;
-        fs::rename(temp_dir, final_dir).map_err(|error| io_error("publish_generation", error))?;
-        sync_directory(final_dir.parent().expect("generation directory has parent"))
-            .map_err(|error| io_error("sync_generations", error))?;
-        let current_temp = self
-            .root
-            .join(format!(".current-{}", candidate.generation.get()));
-        write_sync(
-            &current_temp,
-            format!("{}\n", candidate.generation.get()).as_bytes(),
-        )
-        .map_err(|error| io_error("write_current", error))?;
+        write_sync(&directory.join("manifest.json"), &manifest)
+            .map_err(|error| io_error("write_manifest", error))?;
+        sync_directory(directory).map_err(|error| io_error("sync_candidate", error))
+    }
+
+    fn write_current(&self, generation: GenerationId) -> Result<(), CoreError> {
+        let current_temp = self.root.join(format!(".current-{}", generation.get()));
+        write_sync(&current_temp, format!("{}\n", generation.get()).as_bytes())
+            .map_err(|error| io_error("write_current", error))?;
         fs::rename(&current_temp, self.root.join("current"))
             .map_err(|error| io_error("publish_current", error))?;
-        sync_directory(&self.root).map_err(|error| io_error("sync_root", error))?;
+        sync_directory(&self.root).map_err(|error| io_error("sync_root", error))
+    }
+
+    fn ensure_owned(&self, token_root: &Path) -> Result<(), CoreError> {
+        if token_root == self.root {
+            Ok(())
+        } else {
+            Err(publish_error(
+                "verify_store_owner",
+                "generation token belongs to another store",
+            ))
+        }
+    }
+
+    fn ensure_sealed_exists(&self, generation: GenerationId) -> Result<(), CoreError> {
+        let directory = self.generations_root().join(generation.get().to_string());
+        let config = directory.join("config.json");
+        let manifest = directory.join("manifest.json");
+        let directory_valid = fs::symlink_metadata(&directory)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if !directory_valid
+            || !is_regular_non_symlink(&config)
+            || !is_regular_non_symlink(&manifest)
+        {
+            return Err(publish_error(
+                "verify_generation",
+                "generation is incomplete or missing",
+            ));
+        }
+        let manifest: GenerationManifest = serde_json::from_slice(
+            &fs::read(&manifest).map_err(|error| io_error("read_manifest", error))?,
+        )
+        .map_err(|_| publish_error("verify_manifest", "generation manifest is invalid"))?;
+        let config = fs::read(config).map_err(|error| io_error("read_config", error))?;
+        let digest = Sha256::digest(&config)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if manifest.schema != MANIFEST_SCHEMA
+            || manifest.generation != generation
+            || manifest.config_sha256 != digest
+        {
+            return Err(publish_error(
+                "verify_manifest",
+                "generation manifest does not match config",
+            ));
+        }
         Ok(())
+    }
+}
+
+fn is_regular_non_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+fn remove_directory_if_present(path: &Path, operation: &str) -> Result<(), CoreError> {
+    if path.exists() {
+        fs::remove_dir_all(path).map_err(|error| io_error(operation, error))?;
+    }
+    Ok(())
+}
+
+fn publish_error(operation: &str, message: &str) -> CoreError {
+    CoreError::GenerationPublishFailed {
+        operation: operation.to_owned(),
+        message: message.to_owned(),
     }
 }
 
