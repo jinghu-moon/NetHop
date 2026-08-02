@@ -32,6 +32,10 @@ pub enum FormatHint {
     SingboxJson,
     IniProfile,
     Quantumultx,
+    SurgeIni,
+    SurfboardIni,
+    ShadowrocketServers,
+    QuantumultxSnippet,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

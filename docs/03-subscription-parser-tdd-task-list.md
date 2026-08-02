@@ -218,7 +218,7 @@ flowchart LR
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 ```
 
-结果：退出码 `0`。A001-A010 已完成；B001 及后续任务仍保持未开始状态。
+结果：退出码 `0`。A001-A010 已完成；B001-B015 已完成；C001 及后续任务仍保持未开始状态。
 
 ## 6. B - 公共模型、资源限制与诊断
 
@@ -368,7 +368,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 ## 7. C - 内容规范化与格式探测
 
-- [ ] **C001 - 拒绝超限原始 payload**
+- [x] **C001 - 拒绝超限原始 payload**
   - `depends_on`: B015；`parallel_group`: C-normalize
   - `scope`: 任何探测或解码前执行 5 MiB reader/body 上限。
   - `RED`: 5 MiB+1 输入进入 detector 的测试失败。
@@ -376,7 +376,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 所有 carrier 共用该入口。
   - `done`: 5 MiB-1/5 MiB/5 MiB+1 boundary tests 通过。
 
-- [ ] **C002 - 规范化 BOM 与换行但不改写凭据**
+- [x] **C002 - 规范化 BOM 与换行但不改写凭据**
   - `depends_on`: B015；`parallel_group`: C-normalize
   - `scope`: 只处理允许的 UTF-8 BOM 和 CRLF/CR，保留其余 bytes。
   - `RED`: `+`、`/`、`%`、大小写或内部空白被改写的 canary test 失败。
@@ -384,7 +384,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 优先借用输入，避免第二份完整 body。
   - `done`: credential preservation golden 通过。
 
-- [ ] **C003 - 拒绝非法 UTF-8 与 NUL 控制输入**
+- [x] **C003 - 拒绝非法 UTF-8 与 NUL 控制输入**
   - `depends_on`: C001；`parallel_group`: C-normalize
   - `scope`: 文本格式在解析前对非法 UTF-8/NUL 给稳定诊断。
   - `RED`: 非法 bytes 被 lossy 转换或 panic 的测试失败。
@@ -392,7 +392,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 二进制 reader 与文本 view 生命周期分离。
   - `done`: invalid UTF-8 corpus 通过。
 
-- [ ] **C004 - 实现显式 `expected_format` 证据**
+- [x] **C004 - 实现显式 `expected_format` 证据**
   - `depends_on`: C002,C003；`parallel_group`: C-evidence
   - `scope`: 用户 hint 只提高候选优先级，不能绕过结构校验和安全限制。
   - `RED`: hint 把任意文本强制解析成功的测试失败。
@@ -400,7 +400,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: hint 与 parser registry 解耦。
   - `done`: valid/mismatch hint integration tests 通过。
 
-- [ ] **C005 - 识别 JSON 强结构证据**
+- [x] **C005 - 识别 JSON 强结构证据**
   - `depends_on`: C002,C003；`parallel_group`: C-evidence
   - `scope`: 首个有效 token 为 `{`/`[` 且结构符合候选时产生 JSON evidence。
   - `RED`: JSON 被误识别为 Base64/URI 的测试失败。
@@ -408,7 +408,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 只返回证据，不解析节点。
   - `done`: JSON evidence table tests 通过。
 
-- [ ] **C006 - 识别 YAML 强结构证据**
+- [x] **C006 - 识别 YAML 强结构证据**
   - `depends_on`: C002,C003；`parallel_group`: C-evidence
   - `scope`: `proxies` 等受支持顶层结构产生 YAML evidence，字符串偶然包含不算成功解析。
   - `RED`: 普通文本包含 `proxies:` 被错误接受的测试失败。
@@ -416,7 +416,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: YAML 错误定位留给 adapter。
   - `done`: YAML evidence golden 通过。
 
-- [ ] **C007 - 识别 URI 列表证据**
+- [x] **C007 - 识别 URI 列表证据**
   - `depends_on`: C002,C003,B008；`parallel_group`: C-evidence
   - `scope`: 至少一个完整白名单 scheme 行才产生 URI evidence。
   - `RED`: 注释、URL query 或行中子串被误识别的测试失败。
@@ -424,7 +424,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 与真正 URI parser 共享 scheme 常量。
   - `done`: supported/unsupported/mixed evidence tests 通过。
 
-- [ ] **C008 - 识别 Base64 候选而不提前解码**
+- [x] **C008 - 识别 Base64 候选而不提前解码**
   - `depends_on`: C002,C003；`parallel_group`: C-evidence
   - `scope`: 只产生弱 Base64 evidence，并保留标准/URL-safe/缺 padding 信息。
   - `RED`: 任意 ASCII 文本被判为强 Base64 的测试失败。
@@ -432,7 +432,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不在 detector 重复分配 decoded buffer。
   - `done`: Base64 evidence property tests 通过。
 
-- [ ] **C009 - 对冲突强证据返回 `ambiguous_format`**
+- [x] **C009 - 对冲突强证据返回 `ambiguous_format`**
   - `depends_on`: C004,C005,C006,C007,C008；`parallel_group`: serial
   - `scope`: 多个不可消歧的强证据不靠固定顺序猜测。
   - `RED`: 冲突 fixture 静默选择首个 adapter 的测试失败。
@@ -440,7 +440,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 排序规则数据化并有 golden。
   - `done`: pairwise ambiguity matrix 通过。
 
-- [ ] **C010 - 结构化 JSON 失败时禁止回退 Base64**
+- [x] **C010 - 结构化 JSON 失败时禁止回退 Base64**
   - `depends_on`: C005,C008,C009；`parallel_group`: C-no-fallback
   - `scope`: 已获得 JSON 强证据后返回 JSON 结构错误。
   - `RED`: malformed JSON 最终被 Base64/URI 接受的测试失败。
@@ -448,7 +448,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 与 YAML 共用失败策略。
   - `done`: malformed JSON fallback regression 通过。
 
-- [ ] **C011 - 结构化 YAML 失败时禁止回退 Base64**
+- [x] **C011 - 结构化 YAML 失败时禁止回退 Base64**
   - `depends_on`: C006,C008,C009；`parallel_group`: C-no-fallback
   - `scope`: 已获得 YAML 强证据后返回 YAML 诊断。
   - `RED`: malformed `proxies:` YAML 被其他 adapter 接受的测试失败。
@@ -456,13 +456,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不吞掉 YAML 行列信息。
   - `done`: malformed YAML fallback regression 通过。
 
-- [ ] **C012 - 通过格式探测 gate**
+- [x] **C012 - 通过格式探测 gate**
   - `depends_on`: C001,C009,C010,C011；`parallel_group`: serial
   - `scope`: detector 对 carrier 无感、证据确定、有界且不危险回退。
   - `RED`: 全矩阵 gate 在任一 format evidence 或 fallback case 缺失时失败。
   - `GREEN`: 只汇总 detector integration tests。
   - `REFACTOR`: gate 使用公共 detect API。
   - `done`: detect golden、ambiguity、hint mismatch 和 malformed fallback 全绿。
+
+### C 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| 有界规范化视图 | `src/normalize.rs` | 5 MiB 边界、UTF-8/NUL 拒绝、单次 BOM/首尾视图和 CRLF/CR/LF 行迭代通过；不复制完整 body |
+| 格式证据模型 | `src/detect.rs` | JSON、Clash YAML、白名单 URI、INI/Quantumult X 和弱 Base64 证据均有界；Base64 不提前解码 |
+| hint 与失败策略 | `src/detect.rs`、`src/diagnostics.rs` | 显式 hint 只约束候选；强证据冲突返回 `ambiguous_format`；JSON/YAML 结构失败不回退其他格式 |
+| 公共 carrier 入口 | `src/lib.rs` | `ImportPayload` 与 raw bytes 共用同一 normalize/detect API，载体不参与格式选择 |
+| C 专项测试 | `tests/c_contracts.rs` | 12 个边界、证据、hint、歧义和终止失败测试全部通过 |
+
+本次 C 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test c_contracts
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
+```
+
+结果：全部退出码为 `0`。C001-C012 已完成；D001 及后续任务仍保持未开始状态。
 
 ## 8. D - URI 与 Base64 容器
 
