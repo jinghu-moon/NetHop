@@ -100,7 +100,9 @@ fn release_profile_and_parser_feature_closure_remain_frozen() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
     )
     .expect("crate manifest");
-    assert!(crate_manifest.contains("fetch = [\"parser\", \"dep:ureq\", \"dep:url\"]"));
+    assert!(
+        crate_manifest.contains("fetch = [\"parser\", \"dep:flate2\", \"dep:ureq\", \"dep:url\"]")
+    );
     assert!(crate_manifest.contains("sha2 ="));
     assert!(!crate_manifest.contains("blake3 ="));
     assert!(!crate_manifest.contains("base64-simd"));

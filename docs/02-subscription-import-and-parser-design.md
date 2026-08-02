@@ -146,11 +146,11 @@ experimental-formats = [
   "format-shadowrocket",
   "format-quantumultx",
 ]
-fetch = ["parser", "dep:ureq", "dep:url"]
+fetch = ["parser", "dep:flate2", "dep:ureq", "dep:url"]
 
 [dependencies]
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
-serde_json = { version = "1", default-features = false, features = ["std"] }
+serde_json = { version = "1", default-features = false, features = ["std", "raw_value"] }
 serde-saphyr = { version = "1", optional = true, default-features = false, features = ["deserialize"] }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 url = { version = "2", optional = true, default-features = false, features = ["std"] }
@@ -160,11 +160,13 @@ uuid = { version = "1", default-features = false }
 thiserror = "2"
 zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 
-ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "gzip"] }
+flate2 = { version = "1", optional = true, default-features = false, features = ["rust_backend"] }
+ureq = { version = "=3.3.0", optional = true, default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 proptest = { version = "1", default-features = false, features = ["std"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3"
 
 [profile.release]
@@ -195,11 +197,12 @@ incremental = false
 | `uuid` | protocol validation | VLESS/VMess/TUIC UUID 解析和格式校验 | 仅解析，不启用 RNG、版本生成、serde 或 `std` feature |
 | `thiserror` | all | 稳定错误类型和匹配码 | 必需；无常驻运行时框架 |
 | `zeroize` | model/normalization | 敏感临时缓冲清零 | 条件保留；只包裹明确的 secret 类型 |
+| `flate2` | optional `fetch` | 手动 gzip 解压，并分别限制压缩输入和解压输出 | 只启用 Rust backend；替代不可审计双层大小的透明解压 |
 | `ureq` | optional `fetch` | 低频 HTTPS 订阅下载 | 可选；关闭 feature 时不进入 parser binary |
 
 #### 为什么不使用 `reqwest`/`tokio`
 
-订阅下载是 worker 的低频、受控任务，不是高并发代理数据面。`ureq` 提供同步 HTTP、Rustls 和 gzip，足以覆盖 source fetch；引入 `reqwest + tokio + hyper` 会扩大依赖树、编译时间和 Android 交叉编译面，并在常驻 worker 中引入不必要的异步 runtime。
+订阅下载是 worker 的低频、受控任务，不是高并发代理数据面。`ureq` 提供同步 HTTP 和 Rustls，`flate2` 负责可独立计数的 gzip 解压，足以覆盖 source fetch；引入 `reqwest + tokio + hyper` 会扩大依赖树、编译时间和 Android 交叉编译面，并在常驻 worker 中引入不必要的异步 runtime。
 
 如果未来出现并发下载、多 source 取消或 daemon 已经统一使用 Tokio 的事实，应先做依赖 ADR，比较：
 
@@ -286,13 +289,13 @@ parser-only 依赖树出现 `url`、`idna` 或 ICU4X 即视为 feature 泄漏并
 
 | 类别 | 快照结果 | 设计结论 |
 |---|---:|---|
-| 直接依赖 | 14 | 11 个运行时候选，3 个 dev-only |
+| 直接依赖 | 16 | 12 个运行时候选，4 个 dev-only；测试用 `rustls` 与 fetch 传递版本一致 |
 | `Cargo.lock` package | 181 | 包含 target/dev/build 候选，不能等同 Android 运行时依赖数 |
 | 当前未裁剪 normal closure | 88 个唯一 package/version | 同时包含 fetch、ICU、Rustls、YAML serialize 等，不是 parser-only 目标 |
 | normal + build + dev closure | 146 个唯一 package/version | criterion/proptest/tempfile 及其依赖不进入 release binary |
 | vendor 源码体积 | 310,969,912 bytes | 只反映离线源码闭包，不作为 APK/模块体积指标 |
 
-快照解析到的直接版本为：`serde 1.0.229`、`serde_json 1.0.151`、`serde-saphyr 1.0.0`、`base64 0.23.0`、`url 2.5.8`、`percent-encoding 2.3.2`、`sha2 0.11.0`、`uuid 1.24.0`、`thiserror 2.0.19`、`zeroize 1.9.0`、`ureq 3.3.0`；dev-only 为 `criterion 0.8.2`、`proptest 1.11.0`、`tempfile 3.27.0`。许可证均为 `MIT OR Apache-2.0` 或等价顺序，但最终仍以完整 SBOM 的传递许可证为准。
+快照解析到的直接版本为：`serde 1.0.229`、`serde_json 1.0.151`、`serde-saphyr 1.0.0`、`base64 0.23.0`、`url 2.5.8`、`percent-encoding 2.3.2`、`sha2 0.11.0`、`uuid 1.24.0`、`thiserror 2.0.19`、`zeroize 1.9.0`、`flate2 1.1.9`、`ureq 3.3.0`；dev-only 为 `criterion 0.8.2`、`proptest 1.11.0`、`rustls 0.23.43`、`tempfile 3.27.0`。许可证均为 `MIT OR Apache-2.0` 或等价顺序，但最终仍以完整 SBOM 的传递许可证为准。
 
 源码闭包揭示以下必须量化的重复版本：
 
@@ -447,12 +450,12 @@ URL 获取由 `nethop-subscription` 的可选 `fetch` 模块完成，解析器�
 - 订阅下载可经 NetHop loopback proxy inbound，直连回退必须显式记录；
 - response Content-Type 只是探测提示，不能绕过内容安全校验。
 
-`ureq` 的 `.limit()` 施加在其内部 `LimitReader` 上，而 gzip decoder 位于该 reader 之后；因此仅设置 `.limit(5 MiB)` 不能证明解压后仍不超过 5 MiB。NetHop 必须：
+`ureq/gzip` 的透明解压会在调用方取得响应前移除原始 `Content-Encoding` 和压缩态 `Content-Length`；只对返回的 body 设置 `.limit(5 MiB)` 不能证明压缩输入也受限。NetHop 因此不启用 `ureq/gzip`，改用同一 fetch feature 下的 `flate2` 手动解压：
 
 1. 在响应头阶段拒绝超过压缩输入上限的已知 `Content-Length`；
-2. 用 `body.with_config().limit(compressed_limit).reader()` 读取压缩输入；
-3. 在透明 gzip `BodyReader` 外再包一层 counted reader，发现第 `5 MiB + 1` 个解压字节立即失败并丢弃响应；
-4. 对 identity 响应使用同一个解压后 counted reader；
+2. 用 bounded read loop 读取原始 body，发现第 `compressed_limit + 1` 个字节立即失败；
+3. 仅接受 identity/gzip；gzip 输入交给 `flate2::MultiGzDecoder`，在 decoder 输出外再次执行 bounded read loop；
+4. 对 identity 响应仍执行相同的原始输入上限，不创建无界副本；
 5. 禁止 `read_to_string()`/`read_to_vec()` 的无参默认上限路径，禁止依赖 ureq 默认 10 MiB 读取限制作为 NetHop 5 MiB 策略。
 
 `ureq` 默认最多保留 10 个 idle connections、每 host 3 个，订阅更新是低频任务，fetch Agent 必须将连接池总数和 per-host 数量降到最小，并在一次 source/mirror 事务结束时释放 Agent 或显式清理连接。重定向由 NetHop 逐跳执行并重新创建受审核 request，不能把 ureq 默认的自动重定向当作 SSRF 策略。

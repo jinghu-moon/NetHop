@@ -7,6 +7,8 @@ pub mod capability;
 pub mod clash_yaml;
 pub mod detect;
 pub mod diagnostics;
+#[cfg(feature = "fetch")]
+pub mod fetch;
 pub mod limits;
 pub mod normalize;
 pub mod payload;
@@ -32,6 +34,15 @@ pub use detect::{
 };
 pub use diagnostics::{
     DiagnosticCode, DiagnosticParameter, NodeDiagnostic, Severity, SourceLocation,
+};
+#[cfg(feature = "fetch")]
+pub use fetch::{
+    CandidateAcceptance, ContentEncoding, FetchAgentConfig, FetchClient, FetchDiagnosticCode,
+    FetchEndpoint, FetchEndpointKind, FetchError, FetchOutcome, FetchPolicy, FetchPolicyError,
+    FetchRequest, FetchTimeouts, RequestProfile, SourceCache, UREQ_SECURITY_ADAPTER_VERSION,
+    decode_response_body, is_denied_ssrf_address, next_redirect, validate_peer_address,
+    validate_peer_in_approved_set, validate_resolved_addresses, validate_response_limits,
+    validate_source_url,
 };
 pub use limits::ParserLimits;
 pub use normalize::{

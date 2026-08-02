@@ -1456,7 +1456,7 @@ adb shell /data/local/tmp/nethop-parser-bench
 
 ## 15. K - URL Fetch、SSRF 与缓存输入
 
-- [ ] **K001 - 建立 fetch feature 最小 Agent**
+- [x] **K001 - 建立 fetch feature 最小 Agent**
   - `depends_on`: A004,B001；`parallel_group`: K-fetch-infra
   - `scope`: HTTPS、identity/gzip、显式 timeout/header/body limits，关闭默认自动 redirect/大连接池。
   - `RED`: 默认 Agent 允许 HTTP、自动 redirect、10 idle connections 或无界 body 的 config test 失败。
@@ -1464,7 +1464,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: fetch API 只返回 bounded bytes，不暴露 ureq 类型。
   - `done`: agent config golden 和 feature closure 通过。
 
-- [ ] **K002 - 实现 HTTPS-only 策略**
+- [x] **K002 - 实现 HTTPS-only 策略**
   - `depends_on`: K001；`parallel_group`: K-security
   - `scope`: HTTP、HTTPS 降级、无效 scheme 均稳定拒绝。
   - `RED`: HTTP fixture 被请求或 TLS 验证可关闭。
@@ -1472,7 +1472,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 不用字符串 starts_with 替代 URL parser。
   - `done`: scheme matrix 和 no-network assertion 通过。
 
-- [ ] **K003 - 实现 URL 解析与 host/port 约束**
+- [x] **K003 - 实现 URL 解析与 host/port 约束**
   - `depends_on`: K001；`parallel_group`: K-security
   - `scope`: 完整 `url` crate 仅用于 fetch URL，校验 userinfo、IPv6、host、port 和 IDNA 行为。
   - `RED`: malformed URL、userinfo 或非法 port 被连接。
@@ -1480,7 +1480,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: proxy node URI 不走此路径。
   - `done`: URL parsing golden 与 IDNA/IPv6 tests 通过。
 
-- [ ] **K004 - 实现解析地址 SSRF deny policy**
+- [x] **K004 - 实现解析地址 SSRF deny policy**
   - `depends_on`: K003；`parallel_group`: K-security
   - `scope`: loopback、link-local、metadata、私网及保留地址默认拒绝。
   - `RED`: denylist 地址被允许或公网误拒的测试失败。
@@ -1488,7 +1488,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 地址策略是纯函数，便于 property test。
   - `done`: IPv4/IPv6 SSRF matrix 通过。
 
-- [ ] **K005 - 实现连接时 peer address 校验**
+- [x] **K005 - 实现连接时 peer address 校验**
   - `depends_on`: K004；`parallel_group`: K-security
   - `scope`: 连接实际 peer address 必须仍在已批准解析集合内。
   - `RED`: DNS-to-private rebinding mock 或 peer mismatch 被接受。
@@ -1496,7 +1496,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: `ureq::unversioned` 适配边界集中隔离。
   - `done`: peer mismatch integration test 通过。
 
-- [ ] **K006 - 实现手动逐跳重定向**
+- [x] **K006 - 实现手动逐跳重定向**
   - `depends_on`: K005；`parallel_group`: K-security
   - `scope`: 自动 redirect 关闭，每次 Location 重新解析、SSRF 校验和 TLS/peer 校验。
   - `RED`: HTTPS->HTTP、private redirect、超出跳数被自动跟随。
@@ -1504,7 +1504,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 不跨 redirect 复制 Authorization/Cookie，保存脱敏 history digest。
   - `done`: redirect matrix 和 header redaction tests 通过。
 
-- [ ] **K007 - 实现响应 header/Content-Length 上限**
+- [x] **K007 - 实现响应 header/Content-Length 上限**
   - `depends_on`: K001；`parallel_group`: K-limits
   - `scope`: header <=64 KiB，已知 compressed input >5 MiB 立即拒绝。
   - `RED`: 超大 header/content-length 仍创建 body reader。
@@ -1512,7 +1512,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 上限来源于 `ParserLimits`/FetchLimits，不复制数字。
   - `done`: boundary server tests 通过。
 
-- [ ] **K008 - 实现 identity/gzip 双层 body 限制**
+- [x] **K008 - 实现 identity/gzip 双层 body 限制**
   - `depends_on`: K007；`parallel_group`: K-limits
   - `scope`: compressed input 和解压 output 各自 <=5 MiB。
   - `RED`: gzip bomb 通过单层 `.limit()` 或 `read_to_vec()` 被接受。
@@ -1520,7 +1520,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 禁止无参 read-to-string/vector helper。
   - `done`: truncated/gzip bomb/valid gzip tests 通过。
 
-- [ ] **K009 - 实现 fetch timeout 分阶段限制**
+- [x] **K009 - 实现 fetch timeout 分阶段限制**
   - `depends_on`: K001；`parallel_group`: K-limits
   - `scope`: global/resolve/connect/response/body timeout 均显式且错误码稳定。
   - `RED`: slow DNS/header/body 无界等待。
@@ -1528,7 +1528,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: timeout report 不包含 URL/token。
   - `done`: timeout integration matrix 通过。
 
-- [ ] **K010 - 实现请求 profile 与 parser 分离**
+- [x] **K010 - 实现请求 profile 与 parser 分离**
   - `depends_on`: K003,C012；`parallel_group`: K-request
   - `scope`: UA/Accept 只影响请求，不直接选择 parser；响应仍经过 detector。
   - `RED`: profile 名称强制错误格式或多轮猜测 UA 的测试失败。
@@ -1536,7 +1536,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 不在 fetch 层复制 format registry。
   - `done`: same URL/different response format tests 通过。
 
-- [ ] **K011 - 实现主地址单次请求**
+- [x] **K011 - 实现主地址单次请求**
   - `depends_on`: K006,K008,K009,K010；`parallel_group`: K-request
   - `scope`: 主地址成功或失败只消费一次 body，不因探测失败自动轮换多个 UA。
   - `RED`: 主地址 accepted>0 后仍继续请求或 body 被重复读取。
@@ -1544,7 +1544,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: cache transaction 留给 K013。
   - `done`: request count mock test 通过。
 
-- [ ] **K012 - 限制 mirrors 数量与失败条件**
+- [x] **K012 - 限制 mirrors 数量与失败条件**
   - `depends_on`: K011；`parallel_group`: K-request
   - `scope`: 最多 3 个镜像，仅在 network/http/size/format/accepted-zero 等规定失败时顺序尝试。
   - `RED`: 主成功后仍请求镜像或镜像无限循环。
@@ -1552,7 +1552,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: mirror 与主地址共享 source_id/cached result 类型。
   - `done`: request-count/failover matrix 通过。
 
-- [ ] **K013 - 实现 source cache last-known-good**
+- [x] **K013 - 实现 source cache last-known-good**
   - `depends_on`: K011,K012,H007；`parallel_group`: K-cache
   - `scope`: 下载/解析成功才提交新 cache，失败保留旧 bytes/metadata。
   - `RED`: 截断、零节点或非法格式覆盖旧 cache。
@@ -1560,7 +1560,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 不在 parser core 写盘。
   - `done`: cache outcome integration tests 通过。
 
-- [ ] **K014 - 实现 ETag/Last-Modified 条件请求契约**
+- [x] **K014 - 实现 ETag/Last-Modified 条件请求契约**
   - `depends_on`: K013；`parallel_group`: K-cache
   - `scope`: 仅缓存 metadata 允许条件 GET，304 保留 last-known-good，不改变 parser 语义。
   - `RED`: 304 被当作空 source 或条件 header 泄露 token。
@@ -1568,7 +1568,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: HTTP cache header 与 content digest 分离。
   - `done`: 200/304/error matrix 通过。
 
-- [ ] **K015 - 实现 fetch redacted diagnostics**
+- [x] **K015 - 实现 fetch redacted diagnostics**
   - `depends_on`: K006,K008,K009,K012,K013；`parallel_group`: K-observability
   - `scope`: timeout/redirect/SSRF/gzip/peer error 不含完整 URL、Authorization、Cookie 或 path。
   - `RED`: canary header/token 在 report/error 出现。
@@ -1576,7 +1576,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 与 B007/I002 共用 scanner。
   - `done`: fetch secret scan 为零泄漏。
 
-- [ ] **K016 - 验证 fetch 无嵌套 provider/resource 请求**
+- [x] **K016 - 验证 fetch 无嵌套 provider/resource 请求**
   - `depends_on`: K015,F008,G004；`parallel_group`: K-boundary
   - `scope`: parser/fetch 不递归下载 Clash provider、Quantumult remote、脚本或 resource_parser_url。
   - `RED`: nested URL mock 被请求。
@@ -1584,7 +1584,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 无网络动作进入 parser crate。
   - `done`: request count=0 nested resource tests 通过。
 
-- [ ] **K017 - 验证 fetch 连接池轻量约束**
+- [x] **K017 - 验证 fetch 连接池轻量约束**
   - `depends_on`: K011；`parallel_group`: K-observability
   - `scope`: 总/per-host idle connections 为 0 或明确最小值，source transaction 后可释放。
   - `RED`: 默认 10/3 idle connections 或 Agent 常驻泄露。
@@ -1592,7 +1592,7 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 不引入异步 runtime。
   - `done`: repeated source update FD/connection count stable。
 
-- [ ] **K018 - 验证 fetch 安全适配升级契约**
+- [x] **K018 - 验证 fetch 安全适配升级契约**
   - `depends_on`: K005,K006,K017；`parallel_group`: serial
   - `scope`: 精确 ureq 版本变化时 resolver/connector/redirect/peer/TLS/gzip 测试必须重新执行。
   - `RED`: 修改版本 manifest 后升级 contract 未触发。
@@ -1600,21 +1600,23 @@ adb shell /data/local/tmp/nethop-parser-bench
   - `REFACTOR`: 不依赖 ureq `unversioned` 类型泄漏到公共 API。
   - `done`: intentional version-change fixture 能阻断旧证据。
 
-- [ ] **K019 - 实现 fetch host integration smoke**
+- [x] **K019 - 实现 fetch host integration smoke**
   - `depends_on`: K016,K017,K018；`parallel_group`: serial
   - `scope`: 受控本地 HTTP/TLS fixture 覆盖成功、镜像、压缩、重定向和缓存，不接触真实订阅。
   - `RED`: smoke server 缺任一路径或安全策略未执行。
   - `GREEN`: local fixture server + fetch API integration。
   - `REFACTOR`: server helper 位于 tests/common，不进生产。
-  - `done`: `cargo test --test fetch_integration --locked` 全绿。
+  - `done`: `cargo test --locked --features fetch --test fetch_integration` 全绿；lib 单元测试另含受控本地 TLS、重定向、gzip 和 304 smoke。
 
-- [ ] **K020 - 通过 fetch 安全 gate**
+- [x] **K020 - 通过 fetch 安全 gate**
   - `depends_on`: K019；`parallel_group`: serial
   - `scope`: SSRF、DNS rebinding、peer mismatch、redirect、gzip bomb、timeout、cache 和脱敏证据完整。
   - `RED`: 任一安全 boundary 缺失时 gate 失败。
   - `GREEN`: 汇总 K evidence；不放宽 HTTPS-only 或双层 limit。
   - `REFACTOR`: fetch feature 可在不启用时完全移除。
   - `done`: Phase 2 fetch contract manifest 全绿或明确 `unsupported`。
+
+K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义 resolver/TCP transport 在解析和连接后分别校验地址；Agent 关闭自动重定向和连接池，TLS 验证与 SNI 固定开启，gzip 由独立有界 decoder 处理。`k_contracts`、`fetch_integration` 和 fetch 单元测试覆盖 200/304、镜像停止条件、SSRF 保留地址矩阵、peer mismatch、重定向、gzip bomb、超时、脱敏和版本锁定。经 ADB 连接的 Android 13 arm64 真机实际获取了四种授权样本：Mihomo/Clash 识别为 `clash_yaml`，SFA 识别为 `singbox_json`，Surfboard 识别为 `ini_profile`；稳定样本节点因包含首版明确拒绝的 SIP003 `plugin/plugin-opts` 与 UDP-over-TCP 语义而全部返回 `unsupported_semantics`，未放宽白名单或执行客户端私有字段。
 
 ## 16. L - 兼容扩展格式
 
