@@ -1,0 +1,39 @@
+name: subscription-parser
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/nethop-subscription/**"
+      - "scripts/a-gate.ps1"
+      - ".github/workflows/subscription-parser.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/nethop-subscription/**"
+      - "scripts/a-gate.ps1"
+      - ".github/workflows/subscription-parser.yml"
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - parser,format-uri,format-base64,format-clash-yaml,format-singbox-json
+          - parser,experimental-formats
+          - parser,format-uri,format-base64,format-clash-yaml,format-singbox-json,fetch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check locked metadata
+        run: cargo metadata --locked --format-version 1
+      - name: Check feature tree
+        run: cargo tree --locked -e normal,features --no-default-features --features "${{ matrix.features }}"
+      - name: Compile and test selected feature set
+        run: cargo test --locked --no-default-features --features "${{ matrix.features }}"

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "task_id": "A001",
+  "spec_refs": ["docs/02-subscription-import-and-parser-design.md#31"],
+  "tests": ["crates/nethop-subscription/tests/a_contracts.rs"],
+  "red": {"command": "cargo metadata --format-version 1", "exit_code": 101, "summary": "package missing"},
+  "green": {"command": "cargo metadata --locked --format-version 1", "exit_code": 0, "summary": "package discovered"},
+  "refactor": {"command": "cargo test --locked --no-run", "exit_code": 0, "summary": "targets stable"},
+  "fixture_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "rust_toolchain": "rustc 1.97.1",
+  "features": ["default"],
+  "implementation_files": ["Cargo.toml", "crates/nethop-subscription/Cargo.toml"]
+}

@@ -1,0 +1,54 @@
+[package]
+name = "nethop-subscription"
+description = "Bounded, nodes-only subscription import and parsing library for NetHop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = [
+  "parser",
+  "format-uri",
+  "format-base64",
+  "format-clash-yaml",
+  "format-singbox-json",
+]
+parser = []
+format-uri = ["parser"]
+format-base64 = ["parser", "format-uri"]
+format-clash-yaml = ["parser", "dep:serde-saphyr"]
+format-singbox-json = ["parser"]
+format-stash = ["parser", "format-clash-yaml"]
+format-surge = ["parser"]
+format-surfboard = ["parser", "format-surge"]
+format-shadowrocket = ["parser", "format-uri"]
+format-quantumultx = ["parser"]
+experimental-formats = [
+  "format-stash",
+  "format-surge",
+  "format-surfboard",
+  "format-shadowrocket",
+  "format-quantumultx",
+]
+fetch = ["parser", "dep:ureq", "dep:url"]
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+serde-saphyr = { version = "1", optional = true, default-features = false, features = ["deserialize"] }
+base64 = { version = "0.23", default-features = false, features = ["std"] }
+url = { version = "2", optional = true, default-features = false, features = ["std"] }
+percent-encoding = { version = "2", default-features = false, features = ["std"] }
+sha2 = { version = "0.11", default-features = false }
+uuid = { version = "1", default-features = false }
+thiserror = "2"
+zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "gzip"] }
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+proptest = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3"

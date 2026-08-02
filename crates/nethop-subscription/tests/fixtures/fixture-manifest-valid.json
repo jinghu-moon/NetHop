@@ -1,0 +1,9 @@
+{
+  "fixture_id": "uri-basic-v1",
+  "format": "uri_list",
+  "protocol_counts": {"vless": 1, "trojan": 1},
+  "seed": 42,
+  "bytes": 256,
+  "nodes": 2,
+  "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+}

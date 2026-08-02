@@ -1,0 +1,9 @@
+{
+  "fixture_id": "invalid",
+  "format": "uri_list",
+  "protocol_counts": {},
+  "seed": 0,
+  "bytes": 0,
+  "nodes": -1,
+  "sha256": "not-a-sha256"
+}

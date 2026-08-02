@@ -120,7 +120,7 @@ flowchart LR
 
 ## 5. A - Workspace、测试骨架与依赖门禁
 
-- [ ] **A001 - 建立单 crate workspace 骨架**
+- [x] **A001 - 建立单 crate workspace 骨架**
   - `depends_on`: none；`parallel_group`: serial
   - `scope`: workspace 中存在可被 Cargo 识别的 `nethop-subscription` library crate。
   - `RED`: 添加检查 package name、edition、MSRV 和 library target 的 manifest test，确认因 crate 不存在失败。
@@ -128,7 +128,7 @@ flowchart LR
   - `REFACTOR`: 只统一 workspace metadata，不拆分额外 crate。
   - `done`: `cargo metadata --format-version 1` 和 manifest test 通过。
 
-- [ ] **A002 - 冻结 workspace release profile**
+- [x] **A002 - 冻结 workspace release profile**
   - `depends_on`: A001；`parallel_group`: A-bootstrap
   - `scope`: 根 manifest 精确使用 `opt-level=3`、Thin LTO、单 codegen unit、strip symbols、`incremental=false`，初始 panic 为 unwind。
   - `RED`: profile schema test 对缺失或错误字段失败。
@@ -136,7 +136,7 @@ flowchart LR
   - `REFACTOR`: 把 profile 校验集中到一个测试 helper，不复制字段常量。
   - `done`: profile test 输出规范化 profile SHA-256。
 
-- [ ] **A003 - 建立稳定核心 Cargo feature 图**
+- [x] **A003 - 建立稳定核心 Cargo feature 图**
   - `depends_on`: A001；`parallel_group`: A-bootstrap
   - `scope`: 默认 feature 只包含 parser、URI/Base64、Clash YAML 和 sing-box JSON。
   - `RED`: feature graph test 证明默认构建缺少目标 feature 或出现 fetch/扩展泄漏。
@@ -144,7 +144,7 @@ flowchart LR
   - `REFACTOR`: 只合并重复 feature 边，不添加 dormant feature。
   - `done`: `cargo tree -e features` 中默认闭包无 fetch 和实验方言。
 
-- [ ] **A004 - 建立 fetch 与实验格式 feature 隔离**
+- [x] **A004 - 建立 fetch 与实验格式 feature 隔离**
   - `depends_on`: A001；`parallel_group`: A-bootstrap
   - `scope`: `fetch`、Stash、Surge、Surfboard、Shadowrocket snippet、Quantumult X 均只能显式启用。
   - `RED`: 分别构建纯 parser 和可选 feature，断言当前 feature 隔离失败。
@@ -152,7 +152,7 @@ flowchart LR
   - `REFACTOR`: 保持一个 crate，不为每个格式建立 crate。
   - `done`: 三种冻结构建组合均可解析 feature，纯 parser 不含 `ureq/url`。
 
-- [ ] **A005 - 禁止 Base64 unsafe SIMD feature**
+- [x] **A005 - 禁止 Base64 unsafe SIMD feature**
   - `depends_on`: A003；`parallel_group`: A-policy
   - `scope`: 任意发布 feature 组合都不能激活 `base64/simd-unsafe`，也不存在 `base64-simd` feature。
   - `RED`: 添加 feature-tree contract test，并用故意启用的 fixture manifest 证明它会失败。
@@ -160,7 +160,7 @@ flowchart LR
   - `REFACTOR`: 将禁止 feature 清单集中到供应链测试数据。
   - `done`: stable/fetch/experimental 三种 `cargo tree -e features` 断言通过。
 
-- [ ] **A006 - 建立 unit 与 integration 测试目录契约**
+- [x] **A006 - 建立 unit 与 integration 测试目录契约**
   - `depends_on`: A001；`parallel_group`: A-testinfra
   - `scope`: unit test 位于相邻模块，公共 API 测试位于 `tests/`，共享 helper 位于 `tests/common/mod.rs`。
   - `RED`: 测试布局检查因目录和最小 smoke test 缺失失败。
@@ -168,7 +168,7 @@ flowchart LR
   - `REFACTOR`: helper 不暴露生产 API，不创建空的 `tests/common.rs` target。
   - `done`: `cargo test --locked --no-run` 显示预期 test targets。
 
-- [ ] **A007 - 定义 TDD 证据 manifest schema**
+- [x] **A007 - 定义 TDD 证据 manifest schema**
   - `depends_on`: A006；`parallel_group`: A-testinfra
   - `scope`: 每个任务可以记录 RED/GREEN/REFACTOR 命令和脱敏结果。
   - `RED`: schema golden 对缺少 task ID、命令、退出码或 fixture digest 的样本失败。
@@ -176,7 +176,7 @@ flowchart LR
   - `REFACTOR`: 复用稳定时间、digest 和 toolchain 字段类型。
   - `done`: 合法/非法 manifest golden 全部通过，样本不含秘密字段。
 
-- [ ] **A008 - 建立 fixture manifest schema**
+- [x] **A008 - 建立 fixture manifest schema**
   - `depends_on`: A006；`parallel_group`: A-testinfra
   - `scope`: fixture 可记录格式、协议分布、seed、字节数、节点数、预期计数和 SHA-256。
   - `RED`: 缺字段、错误计数和 digest 不匹配样本失败。
@@ -184,7 +184,7 @@ flowchart LR
   - `REFACTOR`: manifest reader 不进入 release binary。
   - `done`: 固定 manifest round-trip golden 通过。
 
-- [ ] **A009 - 建立 CI 构建矩阵 contract**
+- [x] **A009 - 建立 CI 构建矩阵 contract**
   - `depends_on`: A003,A004,A005,A006；`parallel_group`: serial
   - `scope`: CI 至少覆盖 stable parser、experimental formats、fetch-enabled 三个冻结组合。
   - `RED`: CI schema test 因组合缺失或默认 feature 偷渡失败。
@@ -192,7 +192,7 @@ flowchart LR
   - `REFACTOR`: 复用 feature 字符串常量，避免工作流与脚本漂移。
   - `done`: 本地等价命令全部成功解析，CI 配置 lint 通过。
 
-- [ ] **A010 - 通过基础设施 gate**
+- [x] **A010 - 通过基础设施 gate**
   - `depends_on`: A002,A007,A008,A009；`parallel_group`: serial
   - `scope`: 证明后续每个行为都能独立运行测试并保存证据。
   - `RED`: gate 汇总器在任一构建组合、schema 或禁止 feature 缺失时失败。
@@ -200,9 +200,29 @@ flowchart LR
   - `REFACTOR`: 汇总器只消费机器可读结果。
   - `done`: stable/fetch/experimental `--no-run`、证据 schema、fixture schema 和 feature gate 全绿。
 
+### A 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| 单 crate workspace | `Cargo.toml`、`crates/nethop-subscription/Cargo.toml` | `cargo metadata --locked --format-version 1` 通过；edition 2024、MSRV 1.86、library target 已锁定 |
+| release profile | workspace `Cargo.toml` `[profile.release]` | `opt-level=3`、Thin LTO、单 codegen unit、strip symbols、无初始 `panic=abort` |
+| 稳定/实验/fetch feature 图 | crate `Cargo.toml` | 默认闭包不含 fetch/实验方言；所有可选依赖显式 feature 绑定 |
+| unsafe Base64 禁止门禁 | `tests/a_contracts.rs`、`cargo tree` | stable/fetch/experimental 组合均未激活 `base64-simd` 或 `simd-unsafe` |
+| 测试骨架与 schema | `tests/smoke.rs`、`tests/a_contracts.rs`、`tests/common/mod.rs`、`tests/fixtures/` | 9 个基础契约测试和 1 个公共 API smoke test 全部通过 |
+| CI 矩阵与本地 gate | `.github/workflows/subscription-parser.yml`、`scripts/a-gate.ps1` | stable、experimental、fetch 三组 `cargo test --locked` 全部通过 |
+| 依赖冻结 | `Cargo.lock` | 已生成并由所有 gate 使用 `--locked` 校验 |
+
+本次本地 gate 命令：
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
+```
+
+结果：退出码 `0`。A001-A010 已完成；B001 及后续任务仍保持未开始状态。
+
 ## 6. B - 公共模型、资源限制与诊断
 
-- [ ] **B001 - 冻结 `ParserLimits` 默认值**
+- [x] **B001 - 冻结 `ParserLimits` 默认值**
   - `depends_on`: A010；`parallel_group`: B-model
   - `scope`: 5 MiB body、10,000 nodes、16 KiB line、64 depth、64 KiB string 等限制由一个不可分散的类型提供。
   - `RED`: 默认值 golden 与 `02` 不一致时失败。
@@ -210,7 +230,7 @@ flowchart LR
   - `REFACTOR`: 所有后续模块只依赖该类型，不复制数字。
   - `done`: unit test 和序列化 golden 通过。
 
-- [ ] **B002 - 定义有界 `ImportPayload`**
+- [x] **B002 - 定义有界 `ImportPayload`**
   - `depends_on`: A010；`parallel_group`: B-model
   - `scope`: payload 统一表达 QR raw text、file bytes、text 和 URL fetch bytes，载体不决定格式。
   - `RED`: 超限 bytes 和由 carrier 强制选择 parser 的测试失败。
@@ -218,7 +238,7 @@ flowchart LR
   - `REFACTOR`: 不把文件读取、二维码扫描或 HTTP 放进模型。
   - `done`: 四种 carrier 产生等价 payload content contract。
 
-- [ ] **B003 - 定义脱敏 source metadata**
+- [x] **B003 - 定义脱敏 source metadata**
   - `depends_on`: A010；`parallel_group`: B-model
   - `scope`: source 只暴露 `source_id`、origin kind 和 URL/content digest，不暴露原始 URL/token/path。
   - `RED`: Debug/Serialize 快照含 secret 时失败。
@@ -226,7 +246,7 @@ flowchart LR
   - `REFACTOR`: source digest 统一使用 SHA-256 helper。
   - `done`: snapshot 与 secret scanner 通过。
 
-- [ ] **B004 - 定义凭据专用 secret 类型**
+- [x] **B004 - 定义凭据专用 secret 类型**
   - `depends_on`: A010；`parallel_group`: B-model
   - `scope`: 密码、UUID/private key 原文不能通过 Debug、Display 或普通错误输出。
   - `RED`: 格式化和序列化泄露 canary secret 的测试失败。
@@ -234,7 +254,7 @@ flowchart LR
   - `REFACTOR`: 仅在明确临时缓冲上使用 `zeroize`，不宣称清除所有副本。
   - `done`: Debug/Display/error/diagnostic 泄漏测试通过。
 
-- [ ] **B005 - 定义稳定 `DiagnosticCode` 枚举**
+- [x] **B005 - 定义稳定 `DiagnosticCode` 枚举**
   - `depends_on`: A010；`parallel_group`: B-diagnostic
   - `scope`: `02` 17.2 的错误码具有稳定字符串表示和 unknown-code 兼容行为。
   - `RED`: 缺少必需 code、重复字符串或未知 code 解析崩溃的测试失败。
@@ -242,7 +262,7 @@ flowchart LR
   - `REFACTOR`: message 文本不进入 code 类型。
   - `done`: code list golden 和 backward-read test 通过。
 
-- [ ] **B006 - 定义有界 `SourceLocation`**
+- [x] **B006 - 定义有界 `SourceLocation`**
   - `depends_on`: A010；`parallel_group`: B-diagnostic
   - `scope`: 位置只保存 item index、1-based line/column 和有界字段路径。
   - `RED`: 0-based、超长 path 和原始行保存测试失败。
@@ -250,7 +270,7 @@ flowchart LR
   - `REFACTOR`: YAML/JSON/URI 共用位置类型。
   - `done`: boundary unit tests 通过。
 
-- [ ] **B007 - 定义脱敏 `NodeDiagnostic`**
+- [x] **B007 - 定义脱敏 `NodeDiagnostic`**
   - `depends_on`: B003,B004,B005,B006；`parallel_group`: serial
   - `scope`: 诊断只包含 code、severity、位置和有界脱敏参数。
   - `RED`: URL、token、password、UUID、Reality key canary 出现在 JSON/Debug 时失败。
@@ -258,7 +278,7 @@ flowchart LR
   - `REFACTOR`: 人类 message 留给 CLI/App，不存入核心诊断。
   - `done`: snapshot、secret scanner 和 size boundary 通过。
 
-- [ ] **B008 - 定义七协议枚举**
+- [x] **B008 - 定义七协议枚举**
   - `depends_on`: A010；`parallel_group`: B-proxy-model
   - `scope`: 只表达 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS。
   - `RED`: HTTP/SOCKS/WireGuard 被接受或未知值 panic 的测试失败。
@@ -266,7 +286,7 @@ flowchart LR
   - `REFACTOR`: client dialect 不进入协议枚举。
   - `done`: whitelist/unsupported golden 通过。
 
-- [ ] **B009 - 定义 `Endpoint` 值对象**
+- [x] **B009 - 定义 `Endpoint` 值对象**
   - `depends_on`: A010；`parallel_group`: B-proxy-model
   - `scope`: endpoint 校验 server 与 1..65535 port，不执行 DNS。
   - `RED`: 空 server、控制字符、0/65536 port 或隐式 DNS 测试失败。
@@ -274,7 +294,7 @@ flowchart LR
   - `REFACTOR`: IP literal 与 hostname 保持原始连接语义。
   - `done`: table-driven boundary tests 通过。
 
-- [ ] **B010 - 定义协议专用 credential enum**
+- [x] **B010 - 定义协议专用 credential enum**
   - `depends_on`: B004,B008；`parallel_group`: B-proxy-model
   - `scope`: 每种协议只能携带其允许的凭据形态。
   - `RED`: 协议与 credential 错配仍可构造的 compile/runtime test 失败。
@@ -282,7 +302,7 @@ flowchart LR
   - `REFACTOR`: 不用字符串 map 承载凭据。
   - `done`: valid/invalid pairing tests 通过。
 
-- [ ] **B011 - 定义 TLS/Reality/uTLS 模型**
+- [x] **B011 - 定义 TLS/Reality/uTLS 模型**
   - `depends_on`: B004；`parallel_group`: B-proxy-model
   - `scope`: TLS 身份、验证选项、ALPN、uTLS 和 Reality 字段有界且可组合校验。
   - `RED`: 控制字符、超长 ALPN、缺 Reality key 和非法组合测试失败。
@@ -290,7 +310,7 @@ flowchart LR
   - `REFACTOR`: 安全警告通过 diagnostic code 表达。
   - `done`: model boundary tests 通过。
 
-- [ ] **B012 - 定义 transport 模型**
+- [x] **B012 - 定义 transport 模型**
   - `depends_on`: A010；`parallel_group`: B-proxy-model
   - `scope`: tcp/ws/http/httpupgrade/grpc/quic 及有界 path/header/service name 使用专用类型。
   - `RED`: 未知 transport、header 控制字符和超长 path/service 测试失败。
@@ -298,7 +318,7 @@ flowchart LR
   - `REFACTOR`: adapter 不各自定义 transport 字符串。
   - `done`: transport model golden 通过。
 
-- [ ] **B013 - 定义不可伪造的 validated `ProxyNode`**
+- [x] **B013 - 定义不可伪造的 validated `ProxyNode`**
   - `depends_on`: B008,B009,B010,B011,B012；`parallel_group`: serial
   - `scope`: 只有语义校验器能构造可进入 compose 的 `ProxyNode`。
   - `RED`: integration compile-fail/runtime test 证明未校验 node 可进入 compose。
@@ -306,7 +326,7 @@ flowchart LR
   - `REFACTOR`: 不暴露绕过 capability check 的 public constructor。
   - `done`: public API integration test 通过。
 
-- [ ] **B014 - 定义版本化 `CapabilityMatrix`**
+- [x] **B014 - 定义版本化 `CapabilityMatrix`**
   - `depends_on`: B008,B011,B012；`parallel_group`: serial
   - `scope`: matrix 记录 sing-box 1.13.15、build tags、协议、transport、TLS/Reality/uTLS/UDP/flow/plugin 状态与证据 ID。
   - `RED`: supported 项缺源码/check/connectivity evidence 或未知组合默认放行的测试失败。
@@ -314,13 +334,37 @@ flowchart LR
   - `REFACTOR`: adapter 只查询 matrix，不复制能力判断。
   - `done`: matrix golden 和 deny-default tests 通过。
 
-- [ ] **B015 - 通过公共模型 gate**
+- [x] **B015 - 通过公共模型 gate**
   - `depends_on`: B001,B002,B007,B013,B014；`parallel_group`: serial
   - `scope`: 公共模型能承载后续 parser，同时无法绕过限制、脱敏和能力矩阵。
   - `RED`: gate 在任一关键 constructor、secret snapshot 或 matrix test 缺失时失败。
   - `GREEN`: 仅汇总现有测试结果。
   - `REFACTOR`: gate 不访问私有实现细节。
   - `done`: model unit、public API integration、secret scan 和 capability golden 全绿。
+
+### B 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| 有界资源模型 | `src/limits.rs` | 默认 body 5 MiB、10,000 nodes、16 KiB line、64 depth、64 KiB string 等值冻结；越界构造被拒绝 |
+| 载体与来源模型 | `src/payload.rs` | QR/file/text/HTTP 四种 origin 共用有界 `ImportPayload`；content/source URL 只保留 SHA-256 digest；原始 bytes 不进入 Debug |
+| secret 与诊断 | `src/secret.rs`、`src/diagnostics.rs` | secret 的 Debug/Display/Serialize 脱敏；稳定 code、未知 code 前向兼容、1-based location 和参数 allowlist 已覆盖 |
+| 协议与连接值对象 | `src/protocol.rs` | 七协议白名单、严格 UUID、endpoint、TLS/Reality/uTLS、transport、协议专用 credentials 已类型化 |
+| validated node 边界 | `src/protocol.rs` | `ProxyNode` 字段私有，只能由 `ProxyNode::validate` 从 `UnvalidatedNode` 和能力矩阵构造 |
+| 能力矩阵 | `src/capability.rs` | sing-box `1.13.15` 版本固定；supported 必须有 evidence；未列组合 deny-by-default |
+| B 专项测试 | `tests/b_contracts.rs` | 15 个边界、脱敏、矩阵和 validated-node 测试全部通过 |
+
+本次 B 阶段验证命令：
+
+```text
+cargo test --locked --test b_contracts
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
+```
+
+结果：全部退出码为 `0`。B001-B015 已完成；C001 及后续任务仍保持未开始状态。
 
 ## 7. C - 内容规范化与格式探测
 
