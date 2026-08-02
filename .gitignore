@@ -1,0 +1,79 @@
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.swn
+*~
+.idea/
+.vscode/
+*.iml
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+*.token
+*.tokens
+*.credentials
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Rust / Cargo
+target/
+debug/
+release/
+*.rs.bk
+
+# Android / Gradle
+.gradle/
+build/
+captures/
+*.apk
+*.aab
+*.aar
+*.apks
+*.jks
+*.keystore
+
+# JavaScript / web build output
+node_modules/
+dist/
+coverage/
+.parcel-cache/
+.turbo/
+
+# Generic build and test output
+out/
+tmp/
+temp/
+*.log
+*.tmp
+*.cache
+*.profraw
+*.profdata
+
+# Archives and generated native artifacts
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.dSYM/
+*.so
+*.dll
+*.dylib
+*.exe
+*.bin
+
+# Local reference corpus is intentionally excluded from this repository.
+refer/
+
+# Local specification workflow state.
+.spec-workflow/
