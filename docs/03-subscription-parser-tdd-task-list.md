@@ -485,11 +485,11 @@ cargo build --locked --release
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 ```
 
-结果：全部退出码为 `0`。C001-C012 已完成；D001 及后续任务仍保持未开始状态。
+结果：全部退出码为 `0`。C001-C012 已完成；D001-D012 已完成；E001 及后续任务仍保持未开始状态。
 
 ## 8. D - URI 与 Base64 容器
 
-- [ ] **D001 - 实现有界 URI 行切分**
+- [x] **D001 - 实现有界 URI 行切分**
   - `depends_on`: C012,B001；`parallel_group`: D-uri-core
   - `scope`: 按 CR/LF 切分并保留 1-based 行号，单行最大 16 KiB。
   - `RED`: 超长行、空行、末行无换行和混合换行 fixture 失败。
@@ -497,7 +497,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不为每行预先分配 `String`。
   - `done`: boundary unit tests 与 allocation smoke 通过。
 
-- [ ] **D002 - 实现白名单 URI scheme 分发**
+- [x] **D002 - 实现白名单 URI scheme 分发**
   - `depends_on`: D001,B008；`parallel_group`: D-uri-core
   - `scope`: 七协议 scheme 精确匹配并路由到协议 adapter。
   - `RED`: 大小写、前缀子串或未知 scheme 被错误路由的测试失败。
@@ -505,7 +505,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: detector 与 parser 共享 scheme registry。
   - `done`: scheme dispatch golden 通过。
 
-- [ ] **D003 - 实现严格单次 percent decode**
+- [x] **D003 - 实现严格单次 percent decode**
   - `depends_on`: D001；`parallel_group`: D-uri-core
   - `scope`: 字段级验证 `%HH`、UTF-8、NUL/控制字符并只解码一次。
   - `RED`: 畸形 `%`、双重编码和凭据被二次解码的测试失败。
@@ -513,7 +513,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 协议 adapter 不能直接调用宽松 decode。
   - `done`: malformed/round-trip property tests 通过。
 
-- [ ] **D004 - 限制 URI query 参数数量**
+- [x] **D004 - 限制 URI query 参数数量**
   - `depends_on`: D001；`parallel_group`: D-uri-limits
   - `scope`: 单 URI query 参数最多 64 个，重复关键参数按协议策略诊断。
   - `RED`: 第 65 个参数仍被接受或重复凭据静默覆盖的测试失败。
@@ -521,7 +521,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不引入完整 `url::Url`。
   - `done`: 63/64/65 与 duplicate-key tests 通过。
 
-- [ ] **D005 - 限制 URI fragment display name**
+- [x] **D005 - 限制 URI fragment display name**
   - `depends_on`: D001；`parallel_group`: D-uri-limits
   - `scope`: fragment 只作为最长 256 bytes 的显示名，不影响 credential/fingerprint 字段。
   - `RED`: 超限 fragment 或不同 fragment 改变 canonical node 的测试失败。
@@ -529,7 +529,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: display 清洗与协议字段解析解耦。
   - `done`: boundary 与 metamorphic tests 通过。
 
-- [ ] **D006 - 解码标准 Base64 订阅**
+- [x] **D006 - 解码标准 Base64 订阅**
   - `depends_on`: C012,B001；`parallel_group`: D-base64
   - `scope`: 支持标准 alphabet 的有/无 padding 输入。
   - `RED`: 合法 fixture 失败、非法字符被宽松接受或 unsafe feature 被启用的测试失败。
@@ -537,7 +537,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: engine 配置集中且不可切换 SIMD。
   - `done`: standard Base64 golden 与 feature-tree test 通过。
 
-- [ ] **D007 - 解码 URL-safe Base64 订阅**
+- [x] **D007 - 解码 URL-safe Base64 订阅**
   - `depends_on`: C012,B001；`parallel_group`: D-base64
   - `scope`: 支持 URL-safe alphabet 的有/无 padding 输入且不篡改字符再猜测。
   - `RED`: `-`/`_` fixture 失败或混合 alphabet 被静默修复的测试失败。
@@ -545,7 +545,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 标准与 URL-safe 共享有界 sink。
   - `done`: URL-safe golden 和 mixed-alphabet rejection 通过。
 
-- [ ] **D008 - 限制 Base64 解码输出**
+- [x] **D008 - 限制 Base64 解码输出**
   - `depends_on`: D006,D007；`parallel_group`: serial
   - `scope`: decoded bytes 最大 5 MiB，超限在继续扩容前失败。
   - `RED`: 小输入膨胀到 5 MiB+1 仍成功或发生大额额外分配的测试失败。
@@ -553,7 +553,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 标准/URL-safe 共用上限逻辑。
   - `done`: 5 MiB-1/5 MiB/5 MiB+1 和 peak allocation tests 通过。
 
-- [ ] **D009 - 限制 Base64 重探测深度为 1**
+- [x] **D009 - 限制 Base64 重探测深度为 1**
   - `depends_on`: D008,C012；`parallel_group`: serial
   - `scope`: 原始输入最多解码一次，`Base64 -> Base64` 返回稳定诊断。
   - `RED`: 二层/多层 Base64 被递归接受或超时的测试失败。
@@ -561,7 +561,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: detector 不自行递归。
   - `done`: depth 0/1/2 regression 通过。
 
-- [ ] **D010 - 限制 VMess URI 内嵌 JSON 大小**
+- [x] **D010 - 限制 VMess URI 内嵌 JSON 大小**
   - `depends_on`: D008；`parallel_group`: D-uri-limits
   - `scope`: VMess 内嵌 JSON 最多 64 KiB，超限不进入 JSON parser。
   - `RED`: 64 KiB+1 payload 被解析或分配完整 DOM 的测试失败。
@@ -569,21 +569,46 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: VMess 语义映射留给 E006。
   - `done`: 64 KiB boundary tests 通过。
 
-- [ ] **D011 - URI 列表支持逐节点部分成功**
+- [x] **D011 - URI 列表支持逐节点部分成功**
   - `depends_on`: D002,D003,D004,D005；`parallel_group`: serial
   - `scope`: 单行失败产生一个诊断但不阻断其他合法行，全部失败才判 source failure candidate。
   - `RED`: 一条坏 URI 使整批失败或坏行被吞掉的测试失败。
-  - `GREEN`: 返回有序 `Vec<NodeResult<UnvalidatedNode, NodeDiagnostic>>`。
+  - `GREEN`: 返回有序 `Vec<UriNodeResult>`，其中成功项携带 `UriNodeCandidate`；URI 容器不伪造已验证 `ProxyNode`。
   - `REFACTOR`: source success 最终语义留给 H007。
   - `done`: mixed 90/10 fixture 计数和位置正确。
 
-- [ ] **D012 - 通过 URI/Base64 容器 gate**
+- [x] **D012 - 通过 URI/Base64 容器 gate**
   - `depends_on`: D009,D010,D011；`parallel_group`: serial
   - `scope`: URI/Base64 容器在不做协议语义猜测的前提下有界地产生节点候选。
   - `RED`: gate 对任一 alphabet、depth、line/query/fragment/inner JSON 边界缺失时失败。
   - `GREEN`: 汇总容器 integration tests。
   - `REFACTOR`: 只通过公共 adapter API 执行。
   - `done`: URI/Base64 golden、boundary 与部分成功测试全绿。
+
+### D 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| URI 容器候选 | `src/uri.rs` | 混合换行、1-based 原始行号、16 KiB 行限制、七协议 scheme 精确分发和 IPv4/hostname/括号 IPv6 endpoint 结构处理通过 |
+| URI 字段边界 | `src/uri.rs` | percent decode 只执行一次；畸形 `%HH`、非法 UTF-8/控制字符、65 个 query、257-byte fragment 均被拒绝；重复 query key 显式可读 |
+| Base64 容器 | `src/base64_container.rs` | 标准/URL-safe、有/无 padding 严格解码；混合 alphabet、输出超限和二层 Base64 被拒绝；分配前检查 decoded length |
+| VMess 内层预算 | `src/uri.rs` | Base64 解码后的 VMess JSON 在进入 JSON parser 前执行 64 KiB 上限 |
+| 部分成功模型 | `src/uri.rs` | 合法与非法 URI 按输入顺序返回，错误携带 item index 和原始行号；容器层不构造 validated `ProxyNode` |
+| D 专项测试 | `tests/d_contracts.rs` | 12 个 URI/Base64 容器、边界、深度、部分成功和脱敏测试全部通过 |
+
+本次 D 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test d_contracts
+cargo test --locked
+cargo test --locked --no-default-features --features parser
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
+```
+
+结果：全部退出码为 `0`。D001-D012 已完成；E001 及后续任务仍保持未开始状态。
 
 ## 9. E - 七协议语义与能力矩阵
 

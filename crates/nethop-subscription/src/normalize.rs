@@ -31,6 +31,7 @@ impl NormalizationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NormalizedPayload<'a> {
     text: &'a str,
+    first_line_number: u32,
 }
 
 impl<'a> NormalizedPayload<'a> {
@@ -53,7 +54,7 @@ impl<'a> NormalizedPayload<'a> {
     pub fn lines(&self) -> NormalizedLines<'a> {
         NormalizedLines {
             remaining: self.text,
-            next_number: 1,
+            next_number: self.first_line_number,
         }
     }
 }
@@ -73,7 +74,36 @@ pub fn normalize_bytes<'a>(
         return Err(NormalizationError::NulByte);
     }
     let text = std::str::from_utf8(bytes).map_err(|_| NormalizationError::InvalidUtf8)?;
-    Ok(NormalizedPayload { text: text.trim() })
+    let trimmed = text.trim();
+    let leading_bytes = trimmed.as_ptr() as usize - text.as_ptr() as usize;
+    let first_line_number = count_line_breaks(&text[..leading_bytes])
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u32::MAX);
+    Ok(NormalizedPayload {
+        text: trimmed,
+        first_line_number,
+    })
+}
+
+fn count_line_breaks(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut count = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                count += 1;
+                index += usize::from(bytes.get(index + 1) == Some(&b'\n')) + 1;
+            }
+            b'\n' => {
+                count += 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    count
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

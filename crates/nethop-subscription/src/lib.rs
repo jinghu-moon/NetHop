@@ -1,5 +1,6 @@
 #![doc = "NetHop's bounded, nodes-only subscription parser foundation."]
 
+pub mod base64_container;
 pub mod capability;
 pub mod detect;
 pub mod diagnostics;
@@ -8,7 +9,12 @@ pub mod normalize;
 pub mod payload;
 pub mod protocol;
 pub mod secret;
+pub mod uri;
 
+pub use base64_container::{
+    Base64ContainerError, Base64Variant, DecodedSubscription, decode_base64,
+    decode_base64_and_detect, decode_base64_at_depth,
+};
 pub use capability::{CapabilityEntry, CapabilityEvidence, CapabilityMatrix, CapabilityQuery};
 pub use detect::{
     Base64Alphabet, Base64Details, Base64Padding, DetectionError, DetectionResult,
@@ -31,6 +37,10 @@ pub use protocol::{
     TransportOptions, UnvalidatedNode, UuidValue,
 };
 pub use secret::SecretString;
+pub use uri::{
+    UriContainerError, UriNodeCandidate, UriNodeResult, UriQueryParameter, UriScheme,
+    decode_vmess_inner_json, parse_uri_line, parse_uri_list, percent_decode_field,
+};
 
 /// The package identity used by workspace and integration smoke contracts.
 pub const CRATE_NAME: &str = "nethop-subscription";
