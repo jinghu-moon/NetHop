@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod limits;
 pub mod normalize;
 pub mod payload;
+pub mod pipeline;
 pub mod protocol;
 pub mod secret;
 pub mod semantic;
@@ -39,6 +40,12 @@ pub use normalize::{
 pub use payload::{
     Digest, FetchMetadata, FormatHint, HttpScheme, ImportPayload, PayloadOrigin, PayloadOriginKind,
     ReceivedAt, SourceId, SourceMetadata,
+};
+pub use pipeline::{
+    CompactItemReport, CompactStatus, ConversionReport, ConversionSummary, DedupedNode,
+    NodeDisplayId, NodeFingerprint, SourceBatch, SourceInput, SourceOutcome, StableConversion,
+    canonical_node_bytes, compose_outbound, compose_outbounds_json, convert_stable_sources,
+    dedupe_sources, fingerprint_node, report_from_adapter,
 };
 pub use protocol::{
     BoundedText, Capabilities, Credentials, DisplayName, Endpoint, PluginSpec, ProtocolOptions,

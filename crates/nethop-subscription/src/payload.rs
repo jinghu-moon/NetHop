@@ -38,7 +38,7 @@ pub enum FormatHint {
     QuantumultxSnippet,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SourceId(String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

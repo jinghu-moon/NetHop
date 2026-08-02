@@ -509,6 +509,21 @@ impl ProxyNode {
     pub fn credentials(&self) -> &Credentials {
         &self.inner.credentials
     }
+    pub fn display_name(&self) -> &DisplayName {
+        &self.inner.display_name
+    }
+    pub fn tls(&self) -> &TlsOptions {
+        &self.inner.tls
+    }
+    pub fn transport(&self) -> &TransportOptions {
+        &self.inner.transport
+    }
+    pub fn protocol_options(&self) -> &ProtocolOptions {
+        &self.inner.protocol_options
+    }
+    pub fn capabilities(&self) -> &Capabilities {
+        &self.inner.capabilities
+    }
     pub fn source_refs(&self) -> &[SourceRef] {
         &self.inner.source_refs
     }

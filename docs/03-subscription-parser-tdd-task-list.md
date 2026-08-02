@@ -974,11 +974,11 @@ cargo test --locked --no-default-features --features parser,format-singbox-json
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-结果：全部退出码为 `0`。G001-G009 已完成；H001 及后续任务仍保持未开始状态。
+结果：全部退出码为 `0`。G001-G009 已完成；H 阶段实现证据见下一节。
 
 ## 12. H - Fingerprint、去重、报告与 Compose
 
-- [ ] **H001 - 定义 canonical field encoding v1**
+- [x] **H001 - 定义 canonical field encoding v1**
   - `depends_on`: E015；`parallel_group`: H-identity
   - `scope`: 只编码协议、endpoint、credentials、TLS identity/verification、transport 和连接语义参数，字段顺序与长度编码确定。
   - `RED`: source/name/order/diagnostic 改变 encoding，或字段拼接出现歧义的测试失败。
@@ -986,7 +986,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 每个 protocol 通过单一 visitor 写入字段。
   - `done`: canonical bytes golden 与 ambiguity regression 通过。
 
-- [ ] **H002 - 实现 SHA-256 fingerprint 基线**
+- [x] **H002 - 实现 SHA-256 fingerprint 基线**
   - `depends_on`: H001；`parallel_group`: serial
   - `scope`: 使用 domain `nethop-node-v1\0` 和 SHA-256 计算完整 fingerprint。
   - `RED`: 已知向量、字段变化和跨运行稳定性测试失败。
@@ -994,7 +994,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: source/fixture digest helper 与 domain-specific fingerprint API 分离。
   - `done`: known-answer、metamorphic 和 restart golden 通过。
 
-- [ ] **H003 - 生成带算法/schema 标识的截断 node ID**
+- [x] **H003 - 生成带算法/schema 标识的截断 node ID**
   - `depends_on`: H002；`parallel_group`: serial
   - `scope`: node ID 稳定、可显示、有 algorithm/schema tag，不能输出完整 digest。
   - `RED`: 截断长度变化、算法混淆或日志出现完整 digest 的测试失败。
@@ -1002,7 +1002,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: tag formatter 不接触 credentials。
   - `done`: node ID golden 与 secret/output scanner 通过。
 
-- [ ] **H004 - 实现单 source fingerprint 去重**
+- [x] **H004 - 实现单 source fingerprint 去重**
   - `depends_on`: H003；`parallel_group`: H-dedupe
   - `scope`: 相同 semantic node 合并，名称差异不产生第二个 active node。
   - `RED`: 同凭据不同名称仍生成两个节点或同名不同凭据被合并。
@@ -1010,7 +1010,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: HashMap 遍历顺序不能成为输出顺序。
   - `done`: duplicate/nonduplicate table tests 通过。
 
-- [ ] **H005 - 合并跨 source 引用**
+- [x] **H005 - 合并跨 source 引用**
   - `depends_on`: H004；`parallel_group`: H-dedupe
   - `scope`: 跨 source 重复节点保留全部有界 `source_refs` 和别名。
   - `RED`: 第二 source 被丢失、生成重复 outbound 或 source ref 泄露 URL 的测试失败。
@@ -1018,7 +1018,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: ref cap 与 report cap 共用限制常量。
   - `done`: multi-source duplicate golden 通过。
 
-- [ ] **H006 - 实现稳定节点排序**
+- [x] **H006 - 实现稳定节点排序**
   - `depends_on`: H004,H005；`parallel_group`: serial
   - `scope`: 按 source 配置顺序、首次出现索引和 node ID 排序，输入 HashMap 顺序不影响输出。
   - `RED`: 随机插入顺序导致 serialized output 变化。
@@ -1026,7 +1026,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: sort key 类型化并缓存必要字段。
   - `done`: 100 组 permutation property test 通过。
 
-- [ ] **H007 - 实现 source 部分成功判定**
+- [x] **H007 - 实现 source 部分成功判定**
   - `depends_on`: D012,F013,G009,H005；`parallel_group`: serial
   - `scope`: `accepted + duplicate > 0` 才成功；全是跨 source duplicate 仍成功；零可用节点失败。
   - `RED`: duplicate-only source 被判失败或 rejected-only source 被判成功。
@@ -1034,7 +1034,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 容器 adapter 不自行决定 source success。
   - `done`: outcome truth table 通过。
 
-- [ ] **H008 - 实现 `ConversionReport` summary**
+- [x] **H008 - 实现 `ConversionReport` summary**
   - `depends_on`: H007,B007；`parallel_group`: H-report
   - `scope`: summary 精确记录 detected format、accepted/rejected/duplicate/warnings 和阶段状态。
   - `RED`: 计数与 node results 不守恒或 duplicate 被计入 rejected。
@@ -1042,7 +1042,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: summary 不回看原始 body。
   - `done`: mixed fixture summary golden 通过。
 
-- [ ] **H009 - 实现 compact item report**
+- [x] **H009 - 实现 compact item report**
   - `depends_on`: H008,H003；`parallel_group`: H-report
   - `scope`: 10,000 items 只保存 index、status、protocol、截断 node ID 和 code 列表。
   - `RED`: compact item 保存长 message、凭据或完整 node 副本。
@@ -1050,7 +1050,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: code 列表使用有界 small representation，但不为此新增未证明依赖。
   - `done`: schema golden 与 heap-size smoke 通过。
 
-- [ ] **H010 - 限制详细诊断数量**
+- [x] **H010 - 限制详细诊断数量**
   - `depends_on`: H008,B001；`parallel_group`: H-report
   - `scope`: 最多 1,000 条详细诊断、每节点 16 warnings、每去重节点 64 source refs。
   - `RED`: 10,000 错误输入产生无界详细对象。
@@ -1058,7 +1058,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: cap handling 统一且不改变 source outcome。
   - `done`: cap-1/cap/cap+1 tests 通过。
 
-- [ ] **H011 - 限制 report JSON 为 8 MiB**
+- [x] **H011 - 限制 report JSON 为 8 MiB**
   - `depends_on`: H009,H010；`parallel_group`: serial
   - `scope`: 序列化超过上限时保留 summary/counts 和首批详情，不生成超限 buffer。
   - `RED`: adversarial diagnostics 产生 8 MiB+ 输出或丢失总计数。
@@ -1066,7 +1066,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: message 渲染不进入 daemon report。
   - `done`: 8 MiB boundary 与 count preservation 通过。
 
-- [ ] **H012 - Compose Shadowsocks outbound fragment**
+- [x] **H012 - Compose Shadowsocks outbound fragment**
   - `depends_on`: E005,B013；`parallel_group`: H-compose-protocols
   - `scope`: validated Shadowsocks node 序列化为 sing-box 1.13.15 terminal outbound fragment。
   - `RED`: 最小 golden 与 `sing-box check` fixture 不匹配。
@@ -1074,7 +1074,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 公共 endpoint/tag 写入 helper。
   - `done`: fragment golden 与 check fixture 通过。
 
-- [ ] **H013 - Compose VMess outbound fragment**
+- [x] **H013 - Compose VMess outbound fragment**
   - `depends_on`: E006,B013；`parallel_group`: H-compose-protocols
   - `scope`: validated VMess node 生成唯一 VMess fragment。
   - `RED`: transport/TLS/default golden 失败。
@@ -1082,7 +1082,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不重新校验原始字段。
   - `done`: fragment golden 与 check fixture 通过。
 
-- [ ] **H014 - Compose VLESS outbound fragment**
+- [x] **H014 - Compose VLESS outbound fragment**
   - `depends_on`: E007,B013；`parallel_group`: H-compose-protocols
   - `scope`: validated VLESS/Reality/flow node 生成唯一 fragment。
   - `RED`: Reality/flow golden 失败或 secret 进入诊断。
@@ -1090,7 +1090,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: TLS/transport serializer 共享 typed helper。
   - `done`: fragment golden 与 check fixture 通过。
 
-- [ ] **H015 - Compose Trojan outbound fragment**
+- [x] **H015 - Compose Trojan outbound fragment**
   - `depends_on`: E008,B013；`parallel_group`: H-compose-protocols
   - `scope`: validated Trojan node 生成唯一 fragment。
   - `RED`: password/TLS/transport golden 失败。
@@ -1098,7 +1098,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不暴露 password 到 snapshots。
   - `done`: redacted golden 与 check fixture 通过。
 
-- [ ] **H016 - Compose Hysteria2 outbound fragment**
+- [x] **H016 - Compose Hysteria2 outbound fragment**
   - `depends_on`: E009,B013；`parallel_group`: H-compose-protocols
   - `scope`: validated Hysteria2 node 生成证据覆盖字段的 fragment。
   - `RED`: QUIC/obfs/port hopping golden 失败。
@@ -1106,7 +1106,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 只序列化 capability matrix 支持项。
   - `done`: fragment golden 与 check fixture 通过。
 
-- [ ] **H017 - Compose TUIC outbound fragment**
+- [x] **H017 - Compose TUIC outbound fragment**
   - `depends_on`: E010,B013；`parallel_group`: H-compose-protocols
   - `scope`: validated TUIC node 生成证据覆盖字段的 fragment。
   - `RED`: UUID/password/QUIC golden 失败。
@@ -1114,7 +1114,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 凭据 serializer 不实现 Debug。
   - `done`: fragment golden 与 check fixture 通过。
 
-- [ ] **H018 - Compose AnyTLS outbound fragment**
+- [x] **H018 - Compose AnyTLS outbound fragment**
   - `depends_on`: E011,B013；`parallel_group`: H-compose-protocols
   - `scope`: 只有 evidence-supported AnyTLS node 生成 fragment。
   - `RED`: experimental/unsupported node 仍可 compose 或 golden 失败。
@@ -1122,7 +1122,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不引入 beta 字段。
   - `done`: fragment golden 与固定 1.13.15 check fixture 通过。
 
-- [ ] **H019 - 拒绝 compose 未校验节点**
+- [x] **H019 - 拒绝 compose 未校验节点**
   - `depends_on`: H012,H013,H014,H015,H016,H017,H018；`parallel_group`: serial
   - `scope`: public compose API 只接受 validated `ProxyNode`。
   - `RED`: compile-fail/public API test 构造 `UnvalidatedNode` 并调用 compose 成功。
@@ -1130,7 +1130,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不添加 runtime boolean `validated`。
   - `done`: compile-fail 与 public integration test 通过。
 
-- [ ] **H020 - 保证 fragment 序列化确定性**
+- [x] **H020 - 保证 fragment 序列化确定性**
   - `depends_on`: H006,H019；`parallel_group`: serial
   - `scope`: 相同 validated nodes 在重启、输入重排和 map 插入变化后输出逐字节一致。
   - `RED`: permutation/restart golden digest 变化。
@@ -1138,7 +1138,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不启用 `serde_json/preserve_order`。
   - `done`: deterministic serialization property test 通过。
 
-- [ ] **H021 - 实现稳定三格式端到端转换 API**
+- [x] **H021 - 实现稳定三格式端到端转换 API**
   - `depends_on`: H007,H011,H020；`parallel_group`: serial
   - `scope`: 公共 API 完成 detect -> parse -> normalize -> validate -> dedupe -> compose -> report，不下载、不写盘、不生成完整 sing-box config。
   - `RED`: URI/Base64、YAML、JSON 的公共 API integration fixtures 失败。
@@ -1146,13 +1146,39 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: orchestration 只依赖窄 trait，不复制阶段逻辑。
   - `done`: 三格式 end-to-end golden 全绿。
 
-- [ ] **H022 - 通过稳定核心功能 gate**
+- [x] **H022 - 通过稳定核心功能 gate**
   - `depends_on`: H021；`parallel_group`: serial
   - `scope`: 三格式、七协议、去重、报告和 compose 的功能证据完整，不含性能结论。
   - `RED`: traceability gate 在任一必需 behavior/test/evidence 缺失时失败。
   - `GREEN`: 汇总 A-H 机器可读 manifest。
   - `REFACTOR`: gate 不重新实现断言。
   - `done`: Phase 0-A 功能 traceability 100%，stable feature 全回归通过。
+
+### H 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| canonical encoding 与 SHA-256 fingerprint | `crates/nethop-subscription/src/pipeline.rs::canonical_node_bytes`、`fingerprint_node` | 连接语义字段进入 fingerprint；display/source/diagnostic 不影响 canonical bytes；使用 `nethop-node-v1\0` domain |
+| 截断 node ID | `crates/nethop-subscription/src/pipeline.rs::NodeDisplayId` | 输出 `nh1s-` schema tag 与 16 位十六进制截断 digest，不暴露完整 fingerprint |
+| 去重、跨 source 引用与 source outcome | `crates/nethop-subscription/src/pipeline.rs::dedupe_sources` | 相同 semantic node 合并，别名/source refs 稳定有序；`accepted + duplicate > 0` 作为 source success |
+| compact report 与 8 MiB JSON budget | `crates/nethop-subscription/src/pipeline.rs::ConversionReport` | summary、diagnostic counts、compact item 与 detailed diagnostics cap 保持计数守恒 |
+| 七协议 outbound fragment compose | `crates/nethop-subscription/src/pipeline.rs::compose_outbound` | Shadowsocks、VMess、VLESS、Trojan、Hysteria2、TUIC、AnyTLS 仅从 validated `ProxyNode` 生成 terminal outbound fragment |
+| 三格式端到端稳定转换 | `crates/nethop-subscription/src/pipeline.rs::convert_stable_sources` | URI/Base64、Clash YAML、sing-box JSON 串联 detect/parse/validate/dedupe/compose/report，不下载、不写盘、不生成完整 sing-box config |
+| H 专项合约 | `crates/nethop-subscription/tests/h_contracts.rs` | 7 个测试覆盖 fingerprint、node ID、去重、source outcome、bounded report、七协议 compose 和三格式 e2e |
+
+本次 H 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test h_contracts
+cargo test --locked
+cargo test --locked --no-default-features --features parser
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
+```
+
+结果：全部退出码为 `0`。H001-H022 已完成；I001 及后续安全、性能、fetch 节点仍按后续阶段独立验收。
 
 ## 13. I - Property、Fuzz 与资源攻击
 

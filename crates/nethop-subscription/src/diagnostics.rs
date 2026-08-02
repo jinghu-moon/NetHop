@@ -17,7 +17,7 @@ pub enum Severity {
 #[error("unknown diagnostic code: {0}")]
 pub struct UnknownDiagnosticCode(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DiagnosticCode {
     EmptyInput,
     InputTooLarge,
