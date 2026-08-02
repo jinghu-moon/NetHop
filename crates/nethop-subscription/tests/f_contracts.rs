@@ -1,3 +1,5 @@
+#![cfg(feature = "format-clash-yaml")]
+
 use nethop_subscription::{
     CapabilityMatrix, DiagnosticCode, ParserLimits, ProxyProtocol, parse_clash_yaml, yaml_options,
 };

@@ -881,7 +881,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 ## 11. G - sing-box JSON 稳定适配器
 
-- [ ] **G001 - 接受冻结的 sing-box JSON 顶层形态**
+- [x] **G001 - 接受冻结的 sing-box JSON 顶层形态**
   - `depends_on`: C012；`parallel_group`: G-json-core
   - `scope`: 只接受完整对象中的 `outbounds` 或明确的 outbounds array/fragment。
   - `RED`: 合法三种形态失败或任意 JSON object 被当作节点。
@@ -889,7 +889,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不保留完整 `serde_json::Value` DOM。
   - `done`: top-shape golden 通过。
 
-- [ ] **G002 - 检测 JSON 重复关键字段**
+- [x] **G002 - 检测 JSON 重复关键字段**
   - `depends_on`: C012,B005；`parallel_group`: G-json-core
   - `scope`: 连接/安全关键 key 重复时拒绝节点而非 last-value-wins。
   - `RED`: duplicate credential/type/server fixture 被覆盖接受。
@@ -897,7 +897,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 与 F006 共用字段分类和 diagnostic code。
   - `done`: duplicate-key matrix 通过。
 
-- [ ] **G003 - 只提取终端代理 outbound**
+- [x] **G003 - 只提取终端代理 outbound**
   - `depends_on`: G001,G002,B008；`parallel_group`: serial
   - `scope`: selector/urltest/direct/block/dns/shadowtls 等不生成 `ProxyNode`。
   - `RED`: group 或 direct outbound 进入 accepted nodes 的测试失败。
@@ -905,7 +905,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 跳过计数不生成逐项长消息。
   - `done`: terminal/filter golden 通过。
 
-- [ ] **G004 - 隔离 sing-box 非 outbound 顶层语义**
+- [x] **G004 - 隔离 sing-box 非 outbound 顶层语义**
   - `depends_on`: G001；`parallel_group`: G-json-boundary
   - `scope`: log/dns/inbounds/route/services/experimental/path/certificate 不能影响输出。
   - `RED`: canary inbound/listen/path 被复制或执行的测试失败。
@@ -913,7 +913,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 未知顶层字段不分配完整副本。
   - `done`: nodes-only JSON golden 通过。
 
-- [ ] **G005 - 映射 JSON 公共节点字段**
+- [x] **G005 - 映射 JSON 公共节点字段**
   - `depends_on`: G003,E001,E002,E003,E004；`parallel_group`: G-json-map
   - `scope`: 白名单 outbound 字段转为 `UnvalidatedNode`。
   - `RED`: sing-box 1.13.15 最小 outbound fixture 映射错误。
@@ -921,7 +921,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不接受开发线/beta 字段。
   - `done`: field mapping golden 通过。
 
-- [ ] **G006 - 执行 JSON 未知字段策略**
+- [x] **G006 - 执行 JSON 未知字段策略**
   - `depends_on`: G005,E013；`parallel_group`: serial
   - `scope`: harmless unknown warning、critical unknown rejection 与 YAML 一致。
   - `RED`: 同一未知语义在 YAML/JSON 得到不同结论。
@@ -929,7 +929,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 容器只负责字段位置转换。
   - `done`: cross-format unknown-field tests 通过。
 
-- [ ] **G007 - JSON 七协议 golden 通过公共语义层**
+- [x] **G007 - JSON 七协议 golden 通过公共语义层**
   - `depends_on`: G006,E015；`parallel_group`: serial
   - `scope`: 七协议 outbound 产生与 E014 相同的 validated node 或稳定拒绝。
   - `RED`: 每协议最小官方 fixture 先失败。
@@ -937,7 +937,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 共享默认值表，不复制 validator。
   - `done`: seven-protocol JSON golden 全绿。
 
-- [ ] **G008 - JSON 支持逐 outbound 部分成功**
+- [x] **G008 - JSON 支持逐 outbound 部分成功**
   - `depends_on`: G007,B007；`parallel_group`: serial
   - `scope`: 一个 outbound 失败不阻断其他合法 outbound，位置和计数稳定。
   - `RED`: mixed valid/invalid array 整体失败或吞掉坏节点。
@@ -945,13 +945,36 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 与 URI/YAML 共用 result collector。
   - `done`: 90/10 mixed fixture 通过。
 
-- [ ] **G009 - 通过 JSON 稳定格式 gate**
+- [x] **G009 - 通过 JSON 稳定格式 gate**
   - `depends_on`: G004,G008；`parallel_group`: serial
   - `scope`: JSON adapter 满足顶层范围、nodes-only、重复 key、七协议与部分成功。
   - `RED`: gate 在任一类别 fixture 缺失时失败。
   - `GREEN`: 汇总 JSON test targets。
   - `REFACTOR`: 只使用公共 API。
   - `done`: JSON unit/integration/boundary corpus 全绿。
+
+### G 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| JSON 顶层与 raw outbound 提取 | `src/singbox_json.rs::extract_outbounds` | 接受完整配置、outbound array 和单个 terminal outbound；逐 outbound typed deserialize，不保留完整 `Value` DOM |
+| duplicate/partial-success | `src/singbox_json.rs::parse_singbox_json` | 关键重复字段只拒绝对应 outbound；其他合法 outbound 保持原始顺序和 item index |
+| nodes-only 边界 | `src/singbox_json.rs` | selector/urltest/direct/block/dns/shadowtls 跳过；log/dns/inbounds/route/services/experimental 仅生成一个有界 summary |
+| 七协议与未知字段策略 | `src/singbox_json.rs::singbox_node_spec` | 七协议统一进入 E gate；critical unknown 拒绝、harmless unknown warning 与 YAML 一致 |
+| JSON 结构预算 | `src/singbox_json.rs::check_json_structure` | body 外层限制之外，在 typed mapping 前限制 64 层深度与 64 KiB 字符串 |
+| G 专项合约 | `tests/g_contracts.rs` | 7 个测试覆盖三种顶层、duplicate、nodes-only、七协议、未知字段、部分成功、深度与字符串预算 |
+
+本次 G 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test g_contracts
+cargo test --locked
+cargo test --locked --no-default-features --features parser,format-singbox-json
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+结果：全部退出码为 `0`。G001-G009 已完成；H001 及后续任务仍保持未开始状态。
 
 ## 12. H - Fingerprint、去重、报告与 Compose
 
