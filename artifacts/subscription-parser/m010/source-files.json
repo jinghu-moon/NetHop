@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "5c25ca2744d6e59d4b22f711382e82beb0e9ba292cabd5a084ffb720a4ebf173"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "95b3f9411a031abde98aae26b54551e8df0e6a0b61a704a0497db109b22ac340"
+    },
+    {
+      "path": "crates/nethop-subscription/Cargo.toml",
+      "sha256": "2d5083d2ecc0e0547ff8dfeab0a442377e9969be29da8c595486c318bb6319d4"
+    },
+    {
+      "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+      "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+    },
+    {
+      "path": "crates/nethop-subscription/src/adapter.rs",
+      "sha256": "5e94a93e8ebc4c052f9514dc0fc96a453698b034c3a5920074323deb986ccebf"
+    },
+    {
+      "path": "crates/nethop-subscription/src/base64_container.rs",
+      "sha256": "baf717f2f140acee568d45cdc368a31dc76e1877a187a4ee46958e83d60f0c76"
+    },
+    {
+      "path": "crates/nethop-subscription/src/capability.rs",
+      "sha256": "c774b9d575782d126b38667721d8eb155db20ec29143e38d7cf75d06fbf04665"
+    },
+    {
+      "path": "crates/nethop-subscription/src/clash_yaml.rs",
+      "sha256": "e4d2bd805bc37977674d071cdbafc0ac4e7df645a97d4b018b947f947dc65155"
+    },
+    {
+      "path": "crates/nethop-subscription/src/detect.rs",
+      "sha256": "10db9e319926194641217d23b90ab724395f0ee352b2590e416d974d77ddcbf0"
+    },
+    {
+      "path": "crates/nethop-subscription/src/diagnostics.rs",
+      "sha256": "e0b574339b59b154eae7899dda5eb016416a92b097504eefc2df3d50d7a6c4b1"
+    },
+    {
+      "path": "crates/nethop-subscription/src/fetch.rs",
+      "sha256": "f7747c8edd58e349239ee75577b187608cda6564b47d7264a36921773bb0fd8d"
+    },
+    {
+      "path": "crates/nethop-subscription/src/fetch/ureq_adapter.rs",
+      "sha256": "d08c0f79830738532231baf8efd243763c4006638d4eb6ba745eeda580942e26"
+    },
+    {
+      "path": "crates/nethop-subscription/src/ipc.rs",
+      "sha256": "18ad7361c3fed4d8b0934e19560aff00a53e0384a3a94c26d940dd2e2ec8aefb"
+    },
+    {
+      "path": "crates/nethop-subscription/src/lib.rs",
+      "sha256": "8a92059918831da4c7bcaf7700b19002d154f3f1a988fdc5ba8a01dc9ee92c0f"
+    },
+    {
+      "path": "crates/nethop-subscription/src/limits.rs",
+      "sha256": "b89c468216d277c7850da5d201a8b4a55ee6328f69e4b1cee15846fcc8199c3d"
+    },
+    {
+      "path": "crates/nethop-subscription/src/normalize.rs",
+      "sha256": "225677fc0c7be4d9067d5129759167c1b538e7fab7b2ad0c94b6042d4d10f8c7"
+    },
+    {
+      "path": "crates/nethop-subscription/src/payload.rs",
+      "sha256": "0920943dac5bc570c9e0b9e41da72fae33b7df140679ed398fa5a814701f11b2"
+    },
+    {
+      "path": "crates/nethop-subscription/src/pipeline.rs",
+      "sha256": "65cc9178688dbe29061cf582f0ead999cecd75bf015aee6479859fb830a22c9e"
+    },
+    {
+      "path": "crates/nethop-subscription/src/protocol.rs",
+      "sha256": "01403c7390a1475424b5b3ad16840c70fbcf906b2cb4b1917d2f41a389499528"
+    },
+    {
+      "path": "crates/nethop-subscription/src/secret.rs",
+      "sha256": "02dabade876b051a243e3d1e5e240eb4b61fe60fcf01ec71df91a4ceb60c435f"
+    },
+    {
+      "path": "crates/nethop-subscription/src/semantic.rs",
+      "sha256": "a5da199e65c8ba567f6c622ee5884ce78857b9fda481aa0bc91c6c850864ca72"
+    },
+    {
+      "path": "crates/nethop-subscription/src/singbox_json.rs",
+      "sha256": "ef83970f36ed8c461f77d8b95c1ad52d4cc8aa24f10b2f3e4bbd19a4e3796902"
+    },
+    {
+      "path": "crates/nethop-subscription/src/surfboard.rs",
+      "sha256": "88eb4634b580d949534dc1833ce2b41ea4d84f4cd7af9a90fa4eb871b2cfbe59"
+    },
+    {
+      "path": "crates/nethop-subscription/src/uri.rs",
+      "sha256": "fbbaa3fe10d879e9ce1c87d7eeb57df0dcdff1b91f250f870642ec5c58507e1a"
+    },
+    {
+      "path": "deny.toml",
+      "sha256": "ece5ad071aaca1d9bd1610abcf3875d4ce0b0646629ff83622e76192fe275315"
+    },
+    {
+      "path": "scripts/generate-subscription-parser-release-evidence.ps1",
+      "sha256": "bfe67020a5ec3ef70e847387441e54fbb313abc414e0119e7f343173e1678076"
+    }
+  ]
+}

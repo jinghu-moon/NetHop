@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "status": "dry_run_passed",
+  "runner": {
+    "pr_smoke_seconds": 60,
+    "nightly_seconds_per_target": 1800,
+    "release_candidate_seconds_per_target": 3600,
+    "rss_limit_mb": 512,
+    "parser_release_rss_budget_mb": 110
+  },
+  "corpora": [
+    {
+      "target": "detect_inputs",
+      "path": "crates/nethop-subscription/fuzz/seeds/detect_inputs",
+      "files": 1,
+      "sha256": "9fc39396779321ea6a7fc620bfd523416ec7a150b80498e539e7c754fdd9f26e"
+    },
+    {
+      "target": "uri_base64_inputs",
+      "path": "crates/nethop-subscription/fuzz/seeds/uri_base64_inputs",
+      "files": 1,
+      "sha256": "a88fbdc3d67a63dd981f0d1e9e52001bcb8cbb4b0dd28d4ef1da0e212b148c49"
+    },
+    {
+      "target": "clash_yaml_inputs",
+      "path": "crates/nethop-subscription/fuzz/seeds/clash_yaml_inputs",
+      "files": 1,
+      "sha256": "a6763ddc264d79dee88dbdefc507f23df47d36b59c85b224444dcde346d2fb6e"
+    },
+    {
+      "target": "singbox_json_inputs",
+      "path": "crates/nethop-subscription/fuzz/seeds/singbox_json_inputs",
+      "files": 1,
+      "sha256": "86ca864d330ea1e6b577ab023c59f548096d918509e6ef7d933a169498ca9b51"
+    },
+    {
+      "target": "surfboard_inputs",
+      "path": "crates/nethop-subscription/fuzz/seeds/surfboard_inputs",
+      "files": 1,
+      "sha256": "a12d91cf1b404d60a218ff999221fcf80336580685b237ebbdbbcedbe8be0f47"
+    }
+  ],
+  "failure_artifact_schema": "artifacts/subscription-parser/m011/failure-artifact-schema.json"
+}

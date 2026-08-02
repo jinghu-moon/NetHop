@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "type": "object",
+  "required": [
+    "target",
+    "exit_code",
+    "corpus_sha256",
+    "artifact_sha256",
+    "max_total_time_seconds",
+    "rss_limit_mb",
+    "toolchain"
+  ],
+  "additional_properties": false
+}

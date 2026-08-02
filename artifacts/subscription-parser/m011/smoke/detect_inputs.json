@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "target": "detect_inputs",
+  "budget": "Smoke",
+  "seed_corpus_sha256": "9fc39396779321ea6a7fc620bfd523416ec7a150b80498e539e7c754fdd9f26e",
+  "max_total_time_seconds": 60,
+  "rss_limit_mb": 512,
+  "sanitizer": "address",
+  "toolchain": "rustc 1.99.0-nightly (008fa22ce 2026-07-25)\nbinary: rustc\ncommit-hash: 008fa22ce3f8d3c8dfaca2e6486043c2b21851eb\ncommit-date: 2026-07-25\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8"
+}

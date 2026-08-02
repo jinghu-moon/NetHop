@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "status": "passed_with_tooling_disclosure",
+  "generator": "scripts/generate-subscription-parser-release-evidence.ps1",
+  "inputs": {
+    "cargo_lock_sha256": "5c25ca2744d6e59d4b22f711382e82beb0e9ba292cabd5a084ffb720a4ebf173",
+    "workspace_manifest_sha256": "95b3f9411a031abde98aae26b54551e8df0e6a0b61a704a0497db109b22ac340",
+    "crate_manifest_sha256": "2d5083d2ecc0e0547ff8dfeab0a442377e9969be29da8c595486c318bb6319d4",
+    "mapping_manifest_sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6",
+    "workspace_source_sha256": "10270dd797ae1fd2cf35f96e0ab9d3e15394cafd918b1446e1cba3363ae67b25"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26100 (Windows 11 IoTEnterpriseS) [64-bit]"
+  },
+  "source_control": {
+    "git_head": "1efcefe530bae9ec0c61011cc88078de655e3267",
+    "working_tree": "dirty"
+  },
+  "gates": {
+    "cargo_metadata_locked": "passed",
+    "unknown_license": "passed",
+    "license_allowlist": "passed",
+    "feature_leakage": "passed"
+  },
+  "dependency_profiles": {
+    "parser-only": {
+      "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json",
+      "package_count": 40,
+      "feature_leakage": false,
+      "bom_sha256": "1741123ff466d005d072c168c6dd837db6a8007dbb4038fe2c9ef736c332cda5"
+    },
+    "fetch": {
+      "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json,fetch",
+      "package_count": 102,
+      "feature_leakage": false,
+      "bom_sha256": "d37676cf65f4cd0e3cf0fb3ee4fca983417282d11120d8471aa8ffc8373150b2"
+    },
+    "dev-test": {
+      "features": "all",
+      "package_count": 153,
+      "feature_leakage": false,
+      "bom_sha256": "46c72e0ef9732431870fc8e5a71ac4285d5b0566215f40d0d506843247081ce7"
+    }
+  },
+  "tools": {
+    "cargo_deny": {
+      "status": "passed",
+      "version": "cargo-deny 0.20.2",
+      "report_sha256": "8f83748a0138c14f79cbc238ff6789bb18a038828347172d7396ad6504eb374f",
+      "required_for_runtime": false
+    },
+    "cargo_cyclonedx": {
+      "status": "not_available",
+      "required_for_runtime": false
+    },
+    "repository_generator": {
+      "status": "passed",
+      "format": "CycloneDX-1.6"
+    }
+  }
+}

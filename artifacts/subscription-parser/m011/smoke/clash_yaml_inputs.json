@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "target": "clash_yaml_inputs",
+  "budget": "Smoke",
+  "seed_corpus_sha256": "a6763ddc264d79dee88dbdefc507f23df47d36b59c85b224444dcde346d2fb6e",
+  "max_total_time_seconds": 60,
+  "rss_limit_mb": 512,
+  "sanitizer": "address",
+  "toolchain": "rustc 1.99.0-nightly (008fa22ce 2026-07-25)\nbinary: rustc\ncommit-hash: 008fa22ce3f8d3c8dfaca2e6486043c2b21851eb\ncommit-date: 2026-07-25\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8"
+}

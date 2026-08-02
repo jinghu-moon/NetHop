@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "status": "frozen",
+  "package": "nethop-subscription",
+  "version": "0.1.0",
+  "release_candidate_status": "passed",
+  "target": "aarch64-linux-android",
+  "enabled_features": [
+    "parser",
+    "format-uri",
+    "format-base64",
+    "format-clash-yaml",
+    "format-singbox-json",
+    "fetch"
+  ],
+  "disabled_features": [
+    "format-surfboard",
+    "experimental-formats"
+  ],
+  "checks": {
+    "workspace_tests": "passed",
+    "all_features_tests": "passed",
+    "fuzz_smoke": "passed",
+    "performance_evidence": "passed",
+    "sbom_and_licenses": "passed",
+    "support_matrix": "passed",
+    "git_diff_check": "passed"
+  },
+  "invariants": [
+    {
+      "id": "bounded-input-and-report",
+      "status": "passed",
+      "evidence": "tests/b_contracts.rs"
+    },
+    {
+      "id": "parser-no-network-or-script",
+      "status": "passed",
+      "evidence": "tests/c_contracts.rs;tests/k_contracts.rs"
+    },
+    {
+      "id": "fetch-ssrf-and-peer-policy",
+      "status": "passed",
+      "evidence": "tests/k_contracts.rs"
+    },
+    {
+      "id": "nodes-only-composition",
+      "status": "passed",
+      "evidence": "tests/f_contracts.rs;tests/g_contracts.rs"
+    },
+    {
+      "id": "unsupported-semantics-rejected",
+      "status": "passed",
+      "evidence": "tests/e_contracts.rs"
+    },
+    {
+      "id": "fingerprint-dedupe-deterministic",
+      "status": "passed",
+      "evidence": "tests/h_contracts.rs;i_contracts.rs"
+    },
+    {
+      "id": "last-known-good-and-active-limits",
+      "status": "passed",
+      "evidence": "tests/m_contracts.rs"
+    },
+    {
+      "id": "diagnostic-and-artifact-redaction",
+      "status": "passed",
+      "evidence": "tests/i_contracts.rs;m_release_contracts.rs"
+    },
+    {
+      "id": "feature-and-dependency-isolation",
+      "status": "passed",
+      "evidence": "artifacts/subscription-parser/m010/provenance.json"
+    },
+    {
+      "id": "provenance-and-support-level-traceability",
+      "status": "passed",
+      "evidence": "artifacts/subscription-parser/m013/artifact-index.json"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
+      "sha256": "1741123ff466d005d072c168c6dd837db6a8007dbb4038fe2c9ef736c332cda5"
+    },
+    {
+      "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
+      "sha256": "d37676cf65f4cd0e3cf0fb3ee4fca983417282d11120d8471aa8ffc8373150b2"
+    },
+    {
+      "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
+      "sha256": "46c72e0ef9732431870fc8e5a71ac4285d5b0566215f40d0d506843247081ce7"
+    },
+    {
+      "path": "artifacts/subscription-parser/m010/licenses.json",
+      "sha256": "e766144e59e82b54d4060104e58ee0a406a1622065d8e0c77be3c7e6a3cb6f45"
+    },
+    {
+      "path": "artifacts/subscription-parser/m010/provenance.json",
+      "sha256": "47cae7daf6adaed222b3e3741481cb72e53e363b777a467e08fdbfafbd718d7a"
+    },
+    {
+      "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
+      "sha256": "8f83748a0138c14f79cbc238ff6789bb18a038828347172d7396ad6504eb374f"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/schedule-report.json",
+      "sha256": "31cba9c281e8debdee4fab2d22c56cda5ba58d2f484efb905edc503e406a55ff"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/failure-artifact-schema.json",
+      "sha256": "65307eb469053b5c1a2dd41405b786ee12c9692ad5b812e43e8901c9972a09c0"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/smoke/detect_inputs.json",
+      "sha256": "9c9c183ed9b4a30985f26b889d70b8387d62676d011119ebc209c17479d9f335"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/smoke/uri_base64_inputs.json",
+      "sha256": "c5b62ab642fcebc5cc853d116651876967b68690f2b2a1fe2b95e218c85aee59"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/smoke/clash_yaml_inputs.json",
+      "sha256": "14f2a0300d05f6b85c0e838779c8e980f12ddf82454b884b7afa801daecf726b"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/smoke/singbox_json_inputs.json",
+      "sha256": "411e12a585b168c7869b62f93f92611c4f7ede7363f72132898e6aae793368af"
+    },
+    {
+      "path": "artifacts/subscription-parser/m011/smoke/surfboard_inputs.json",
+      "sha256": "87b19345621e66b109626a62b0f136034731840b424f726e8c248710bee65ef4"
+    },
+    {
+      "path": "artifacts/subscription-parser/m012/support-matrix.json",
+      "sha256": "263fdc275ad2dfc9616285f1d7692968721dfe33e80c87e4856ec52b29e2bee0"
+    },
+    {
+      "path": "artifacts/subscription-parser/m012/release-manifest.json",
+      "sha256": "b5d7135982fe56e2016c3383e345b547294d96b83b7d4f12086d7fb935b906b0"
+    },
+    {
+      "path": "artifacts/subscription-parser/m013/release-candidate-checklist.json",
+      "sha256": "728a951fd75aee0f3a384b2c0a589e5f2f04addb1b88640e3d968d68376350dc"
+    },
+    {
+      "path": "artifacts/subscription-parser/m013/artifact-index.json",
+      "sha256": "ca5a54bc457d1309e2c72a86e8959f52745d42b88003ec7db1ca3c16e406630c"
+    },
+    {
+      "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+      "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+    },
+    {
+      "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+      "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+    },
+    {
+      "path": "crates/nethop-subscription/tests/fixtures/device/cross-environment-compatibility.json",
+      "sha256": "4fba0e5ef42db3c88328c65b74e8daa5c49e67449aedf7ae7dac08a145f25350"
+    },
+    {
+      "path": "docs/04-subscription-parser-phase0b-performance-report.md",
+      "sha256": "4eb560d4e92f60e25e169086d5a9c8276a8a7aae7d4308e4b3f48199addf33e6"
+    },
+    {
+      "path": "docs/05-subscription-parser-android-scope.md",
+      "sha256": "4c056888b6ba9cd214c2c9950a4866b7130f2f07101172f148a2d294b67e5f0a"
+    }
+  ]
+}

@@ -559,6 +559,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nethop-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "nethop-subscription"
 version = "0.1.0"
 dependencies = [

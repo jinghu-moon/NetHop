@@ -89,5 +89,3 @@ refer/
 
 # Local specification workflow state.
 .spec-workflow/
-
-artifacts/

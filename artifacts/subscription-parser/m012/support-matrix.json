@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "scope": "android_subscription_parser",
+  "runtime_core_claims": false,
+  "support_levels": [
+    "reference_verified",
+    "community_verified",
+    "experimental",
+    "best_effort",
+    "unsupported"
+  ],
+  "formats": [
+    {
+      "format": "uri_list",
+      "adapter": "uri",
+      "support_level": "reference_verified",
+      "default_enabled": true,
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        },
+        {
+          "path": "docs/04-subscription-parser-phase0b-performance-report.md",
+          "sha256": "4eb560d4e92f60e25e169086d5a9c8276a8a7aae7d4308e4b3f48199addf33e6"
+        }
+      ]
+    },
+    {
+      "format": "base64_list",
+      "adapter": "base64",
+      "support_level": "reference_verified",
+      "default_enabled": true,
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        },
+        {
+          "path": "docs/04-subscription-parser-phase0b-performance-report.md",
+          "sha256": "4eb560d4e92f60e25e169086d5a9c8276a8a7aae7d4308e4b3f48199addf33e6"
+        }
+      ]
+    },
+    {
+      "format": "clash_yaml",
+      "adapter": "clash_yaml",
+      "support_level": "reference_verified",
+      "default_enabled": true,
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        },
+        {
+          "path": "docs/04-subscription-parser-phase0b-performance-report.md",
+          "sha256": "4eb560d4e92f60e25e169086d5a9c8276a8a7aae7d4308e4b3f48199addf33e6"
+        }
+      ]
+    },
+    {
+      "format": "singbox_json",
+      "adapter": "singbox_json",
+      "support_level": "reference_verified",
+      "default_enabled": true,
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        },
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        }
+      ]
+    },
+    {
+      "format": "surfboard_ini",
+      "adapter": "surfboard",
+      "support_level": "experimental",
+      "default_enabled": false,
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/surfboard/manifest.json",
+          "sha256": "9bb8fd43f0dc6a09a93f7cfe3f80aa1a88b64fd0d33da0977d1da95647ab1189"
+        },
+        {
+          "path": "docs/05-subscription-parser-android-scope.md",
+          "sha256": "4c056888b6ba9cd214c2c9950a4866b7130f2f07101172f148a2d294b67e5f0a"
+        }
+      ]
+    }
+  ],
+  "protocols": [
+    {
+      "protocol": "vless",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "uuid",
+        "flow",
+        "tls",
+        "transport"
+      ],
+      "capability_variants": 9,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    },
+    {
+      "protocol": "vmess",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "uuid",
+        "security",
+        "alter_id",
+        "tls",
+        "transport"
+      ],
+      "capability_variants": 6,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    },
+    {
+      "protocol": "shadowsocks",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "method",
+        "password",
+        "plugin",
+        "plugin_opts"
+      ],
+      "capability_variants": 2,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    },
+    {
+      "protocol": "trojan",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "password",
+        "tls",
+        "transport"
+      ],
+      "capability_variants": 3,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    },
+    {
+      "protocol": "hysteria2",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "password",
+        "obfs",
+        "tls"
+      ],
+      "capability_variants": 1,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    },
+    {
+      "protocol": "tuic",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "uuid",
+        "password",
+        "congestion_control",
+        "tls"
+      ],
+      "capability_variants": 1,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    },
+    {
+      "protocol": "anytls",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "password",
+        "tls"
+      ],
+      "capability_variants": 1,
+      "sing_box_version": "1.13.15",
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+        }
+      ]
+    }
+  ],
+  "unsupported_protocols": [
+    {
+      "protocol": "http",
+      "support_level": "unsupported",
+      "reason": "outside_alpha_protocol_whitelist"
+    },
+    {
+      "protocol": "socks5",
+      "support_level": "unsupported",
+      "reason": "outside_alpha_protocol_whitelist"
+    },
+    {
+      "protocol": "wireguard",
+      "support_level": "unsupported",
+      "reason": "outside_alpha_protocol_whitelist"
+    },
+    {
+      "protocol": "naive",
+      "support_level": "unsupported",
+      "reason": "outside_alpha_protocol_whitelist"
+    },
+    {
+      "protocol": "mieru",
+      "support_level": "unsupported",
+      "reason": "outside_alpha_protocol_whitelist"
+    },
+    {
+      "protocol": "shadowsocksr",
+      "support_level": "unsupported",
+      "reason": "outside_alpha_protocol_whitelist"
+    }
+  ],
+  "features": [
+    {
+      "feature": "stable-parser",
+      "support_level": "reference_verified",
+      "default_enabled": true
+    },
+    {
+      "feature": "fetch",
+      "support_level": "best_effort",
+      "default_enabled": false
+    },
+    {
+      "feature": "format-surfboard",
+      "support_level": "experimental",
+      "default_enabled": false
+    }
+  ],
+  "environments": [
+    {
+      "id": "host-windows",
+      "support_level": "test_verified",
+      "evidence": "scripts/a-gate.ps1",
+      "status": "passed"
+    },
+    {
+      "id": "fake-magisk-kernelsu",
+      "support_level": "test_verified",
+      "evidence": "tests/support/fake_module_host.rs",
+      "status": "passed"
+    },
+    {
+      "id": "alioth-android13-arm64",
+      "support_level": "reference_verified",
+      "evidence": "tests/fixtures/device/alioth-parser-integration.json",
+      "status": "passed"
+    }
+  ],
+  "reference_device": {
+    "product": "alioth",
+    "model": "M2012K11AC",
+    "abi": "arm64-v8a",
+    "android": 13,
+    "api_level": 33,
+    "build_fingerprint": "Redmi/alioth/alioth:13/TKQ1.220829.002/V14.0.8.0.TKHCNXM:user/release-keys",
+    "root_manager": "Magisk 30.6"
+  },
+  "generated_from": [
+    {
+      "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+      "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+    },
+    {
+      "path": "crates/nethop-subscription/tests/fixtures/device/cross-environment-compatibility.json",
+      "sha256": "4fba0e5ef42db3c88328c65b74e8daa5c49e67449aedf7ae7dac08a145f25350"
+    },
+    {
+      "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+      "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+    },
+    {
+      "path": "docs/04-subscription-parser-phase0b-performance-report.md",
+      "sha256": "4eb560d4e92f60e25e169086d5a9c8276a8a7aae7d4308e4b3f48199addf33e6"
+    },
+    {
+      "path": "docs/05-subscription-parser-android-scope.md",
+      "sha256": "4c056888b6ba9cd214c2c9950a4866b7130f2f07101172f148a2d294b67e5f0a"
+    },
+    {
+      "path": "crates/nethop-subscription/tests/fixtures/surfboard/manifest.json",
+      "sha256": "9bb8fd43f0dc6a09a93f7cfe3f80aa1a88b64fd0d33da0977d1da95647ab1189"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "target": "aarch64-linux-android",
+  "release_features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json,fetch",
+  "gates": [
+    {
+      "id": "cargo-deny",
+      "status": "passed",
+      "evidence": "artifacts/subscription-parser/m010/cargo-deny-report.json"
+    },
+    {
+      "id": "format",
+      "status": "passed",
+      "evidence": "cargo fmt --all -- --check"
+    },
+    {
+      "id": "locked-metadata",
+      "status": "passed",
+      "evidence": "Cargo.lock"
+    },
+    {
+      "id": "workspace-tests",
+      "status": "passed",
+      "evidence": "cargo test --workspace --locked"
+    },
+    {
+      "id": "all-features-tests",
+      "status": "passed",
+      "evidence": "cargo test --locked --all-features"
+    },
+    {
+      "id": "release-tests",
+      "status": "passed",
+      "evidence": "release stable parser plus fetch"
+    },
+    {
+      "id": "clippy",
+      "status": "passed",
+      "evidence": "all targets and all features"
+    },
+    {
+      "id": "performance-evidence",
+      "status": "passed",
+      "evidence": "docs/04-subscription-parser-phase0b-performance-report.md"
+    },
+    {
+      "id": "fuzz-smoke",
+      "status": "passed",
+      "evidence": "artifacts/subscription-parser/m011/smoke"
+    },
+    {
+      "id": "android-evidence",
+      "status": "passed",
+      "evidence": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json"
+    },
+    {
+      "id": "support-matrix",
+      "status": "passed",
+      "evidence": "artifacts/subscription-parser/m012/support-matrix.json"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "version": "cargo-deny 0.20.2",
+  "config_sha256": "ece5ad071aaca1d9bd1610abcf3875d4ce0b0646629ff83622e76192fe275315",
+  "checks": [
+    "advisories",
+    "bans",
+    "licenses",
+    "sources"
+  ],
+  "warnings": [
+    {
+      "code": "duplicate",
+      "count": 2
+    }
+  ]
+}
