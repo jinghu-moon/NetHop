@@ -3,11 +3,11 @@
   "files": [
     {
       "path": "Cargo.lock",
-      "sha256": "b4981b397f2761f0e1f650b323d0f1971192ef9366dfbb7834d031ef9048a417"
+      "sha256": "2375496ab17c8a3dcac85195b7a16fe0f33dbdf84a6509290a3817c7938a1b3b"
     },
     {
       "path": "Cargo.toml",
-      "sha256": "105d6dfd33262edf2eb6d1c2d67a99f68a33e46ebb83428f6d8619f699cdd344"
+      "sha256": "270dde2af318d5b3653e95e5a5418342c21571608ca5128b37e97a8470609223"
     },
     {
       "path": "crates/nethop-core/Cargo.toml",
@@ -59,7 +59,7 @@
     },
     {
       "path": "crates/nethop-subscription/src/clash_yaml.rs",
-      "sha256": "e4d2bd805bc37977674d071cdbafc0ac4e7df645a97d4b018b947f947dc65155"
+      "sha256": "85fae56dd9dd3ad45736a3583fc89a13748022a15b83ab9deb97f92054f0e7f0"
     },
     {
       "path": "crates/nethop-subscription/src/core_adapter.rs",

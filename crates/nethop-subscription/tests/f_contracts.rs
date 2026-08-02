@@ -165,6 +165,43 @@ fn yaml_alias_and_document_limits_fail_before_node_mapping() {
 }
 
 #[test]
+fn yaml_pathological_nesting_is_rejected_before_recursive_deserialization() {
+    let nested = "[".repeat(65) + &"]".repeat(65);
+    let input = format!("proxies: {nested}\n");
+    let error = parse_clash_yaml(
+        input.as_bytes(),
+        None,
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::YamlNodeLimitExceeded);
+
+    let multiline = format!(
+        "proxies: {}\n",
+        std::iter::repeat_n("[", 65).collect::<Vec<_>>().join("\n")
+    );
+    let error = parse_clash_yaml(
+        multiline.as_bytes(),
+        None,
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::YamlNodeLimitExceeded);
+
+    let tagged = "proxies: !include remote.yaml\n";
+    let error = parse_clash_yaml(
+        tagged.as_bytes(),
+        None,
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, DiagnosticCode::InvalidYaml);
+}
+
+#[test]
 fn harmless_unknown_yaml_fields_are_bounded_warnings() {
     let output = parse(
         r#"

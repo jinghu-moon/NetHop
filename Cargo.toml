@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/nethop-core", "crates/nethop-subscription", "crates/nethopd"]
+members = [
+    "crates/nethop-android",
+    "crates/nethop-core",
+    "crates/nethop-subscription",
+    "crates/nethopd",
+]
 exclude = ["crates/nethop-subscription/fuzz"]
 
 [workspace.package]

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, thread};
 
 use serde::Deserialize;
 use serde_saphyr::{DuplicateKeyPolicy, Error as YamlError, MergeKeyPolicy, Options};
@@ -13,6 +13,8 @@ use crate::{
     protocol::SourceRef,
     semantic::{NodeSpec, semantic_diagnostic, validate_node_spec},
 };
+
+const YAML_PARSE_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClashYamlError {
@@ -60,8 +62,42 @@ pub fn parse_clash_yaml(
 ) -> Result<AdapterOutput, ClashYamlError> {
     let payload =
         normalize_bytes(bytes, limits).map_err(|error| ClashYamlError { code: error.code() })?;
+    if yaml_contains_unsupported_tag(payload.as_str()) {
+        return Err(ClashYamlError {
+            code: DiagnosticCode::InvalidYaml,
+        });
+    }
+    if yaml_depth_exceeds_budget(payload.as_str(), limits.max_depth()) {
+        return Err(ClashYamlError {
+            code: DiagnosticCode::YamlNodeLimitExceeded,
+        });
+    }
+    thread::scope(|scope| {
+        let worker = thread::Builder::new()
+            .name("nethop-yaml-parser".to_owned())
+            .stack_size(YAML_PARSE_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                parse_clash_payload(payload.as_str(), source_id, limits, matrix)
+            })
+            .map_err(|_| ClashYamlError {
+                code: DiagnosticCode::InvalidYaml,
+            })?;
+        worker.join().unwrap_or_else(|_| {
+            Err(ClashYamlError {
+                code: DiagnosticCode::InvalidYaml,
+            })
+        })
+    })
+}
+
+fn parse_clash_payload(
+    payload: &str,
+    source_id: Option<&SourceId>,
+    limits: &ParserLimits,
+    matrix: &CapabilityMatrix,
+) -> Result<AdapterOutput, ClashYamlError> {
     let documents: Vec<ClashDocument> =
-        serde_saphyr::from_multiple_with_options(payload.as_str(), yaml_options(limits)).map_err(
+        serde_saphyr::from_multiple_with_options(payload, yaml_options(limits)).map_err(
             |error| ClashYamlError {
                 code: yaml_error_code(&error),
             },
@@ -125,6 +161,105 @@ pub fn parse_clash_yaml(
         ));
     }
     Ok(output)
+}
+
+/// Reject pathological nesting before the YAML library can recurse through a
+/// hostile scalar/container stream. This is deliberately conservative: it
+/// only counts structural indentation and flow delimiters, never rewrites YAML.
+fn yaml_depth_exceeds_budget(text: &str, max_depth: usize) -> bool {
+    let mut flow_depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for line in text.lines() {
+        let content = line.trim_end();
+        if content.is_empty() || content.trim_start().starts_with('#') {
+            continue;
+        }
+        let indent = content.len() - content.trim_start().len();
+        let mut sequence_offset = 0usize;
+        let mut sequence_text = content.trim_start();
+        while sequence_text.starts_with('-')
+            && sequence_text
+                .as_bytes()
+                .get(1)
+                .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            sequence_offset = sequence_offset.saturating_add(1);
+            sequence_text = sequence_text[1..].trim_start();
+        }
+        let block_depth = indent.saturating_add(sequence_offset);
+        if block_depth > max_depth.saturating_mul(2) {
+            return true;
+        }
+        for character in content.chars() {
+            if let Some(delimiter) = quote {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' && delimiter == '"' {
+                    escaped = true;
+                } else if character == delimiter {
+                    quote = None;
+                }
+                continue;
+            }
+            if matches!(character, '\'' | '"') {
+                quote = Some(character);
+            } else if matches!(character, '[' | '{') {
+                flow_depth = flow_depth.saturating_add(1);
+            } else if matches!(character, ']' | '}') {
+                flow_depth = flow_depth.saturating_sub(1);
+            }
+            if block_depth.saturating_add(flow_depth) > max_depth {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn yaml_contains_unsupported_tag(text: &str) -> bool {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut line_start = true;
+    let mut previous: Option<char> = None;
+    let mut comment = false;
+    for character in text.chars() {
+        if character == '\n' {
+            line_start = true;
+            previous = None;
+            comment = false;
+            continue;
+        }
+        if comment {
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' && delimiter == '"' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+        } else if matches!(character, '\'' | '"') {
+            quote = Some(character);
+        } else if character == '#'
+            && (line_start || previous.is_some_and(|value| value.is_ascii_whitespace()))
+        {
+            comment = true;
+        } else if character == '!'
+            && (line_start
+                || previous.is_none_or(|value| value.is_ascii_whitespace())
+                || previous.is_some_and(|value| matches!(value, ':' | ',' | '[' | '{')))
+        {
+            return true;
+        }
+        if !character.is_ascii_whitespace() {
+            line_start = false;
+        }
+        previous = Some(character);
+    }
+    false
 }
 
 #[derive(Debug, Deserialize)]
