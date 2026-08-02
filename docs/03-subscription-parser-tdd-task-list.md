@@ -1303,7 +1303,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 ## 14. J - 性能、内存、体积与依赖验收
 
-- [ ] **J001 - 固定性能 fixture 生成器**
+- [x] **J001 - 固定性能 fixture 生成器**
   - `depends_on`: H022；`parallel_group`: J-fixtures
   - `scope`: 生成接近 5 MiB、最多 10,000 节点的 URI/Base64/JSON/YAML 和多 source fixture，覆盖七协议、重复节点和 10% 非法节点。
   - `RED`: manifest 缺 seed、格式分布、节点数、字节数或 SHA-256 时失败。
@@ -1311,7 +1311,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: fixture 生成器与 parser 生产代码隔离。
   - `done`: 同 seed 重生成逐字节一致。
 
-- [ ] **J002 - 固定性能测量 profile**
+- [x] **J002 - 固定性能测量 profile**
   - `depends_on`: A002,J001；`parallel_group`: J-fixtures
   - `scope`: release profile、toolchain、warmup、重复次数和计时 span 与 `01` 14.2 一致。
   - `RED`: 缺 profile digest、warmup 或阶段计时字段的 report schema test 失败。
@@ -1319,7 +1319,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: runner 不读取真实订阅 URL。
   - `done`: host runner 输出 machine-readable samples/summary。
 
-- [ ] **J003 - 测量 URI/Base64 300 ms 基线**
+- [x] **J003 - 测量 URI/Base64 300 ms 基线**
   - `depends_on`: J002,D012,E015；`parallel_group`: J-host-bench
   - `scope`: 标准 URI 和 Base64 fixture 完成 detect..serialize 阶段测量，不下结论外推 Android。
   - `RED`: benchmark schema/phase totals 缺失或超出初始预算时产生失败报告。
@@ -1327,7 +1327,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 输出 p50/p95、阶段占比和分配信息。
   - `done`: host diagnostic report 生成，作为 Android 前基线。
 
-- [ ] **J004 - 测量 JSON 300 ms 基线**
+- [x] **J004 - 测量 JSON 300 ms 基线**
   - `depends_on`: J002,G009,E015；`parallel_group`: J-host-bench
   - `scope`: 标准 sing-box JSON fixture 完成完整 span 测量。
   - `RED`: JSON 标准 fixture 不满足 schema 或资源约束时失败。
@@ -1335,7 +1335,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 记录 typed parse 与 report/serialize 分项。
   - `done`: JSON host diagnostic report。
 
-- [ ] **J005 - 测量 YAML 300 ms 基线**
+- [x] **J005 - 测量 YAML 300 ms 基线**
   - `depends_on`: J002,F013,E015；`parallel_group`: J-host-bench
   - `scope`: 标准 Clash/Mihomo YAML fixture 不获得 400 ms 宽限。
   - `RED`: 真实复杂 YAML 超时、RSS 超预算或拒绝时延无界时失败报告。
@@ -1343,7 +1343,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 标准与真实复杂 fixture 分开报告。
   - `done`: YAML host diagnostic report 与 parser workspace 估算。
 
-- [ ] **J006 - 测量多 source 合并 300 ms 基线**
+- [x] **J006 - 测量多 source 合并 300 ms 基线**
   - `depends_on`: J002,H021；`parallel_group`: J-host-bench
   - `scope`: 多 source detect/parse/normalize/dedupe/compose 全 span 单独测量。
   - `RED`: 去重、report 或 compose 被移出计时 span 的测试失败。
@@ -1351,7 +1351,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不把 fetch、check、写盘混入 parser span。
   - `done`: multi-source report 与 direct format reports 可比较。
 
-- [ ] **J007 - 验证 parser workspace 45 MiB 子预算**
+- [x] **J007 - 验证 parser workspace 45 MiB 子预算**
   - `depends_on`: J003,J004,J005,J006；`parallel_group`: J-memory
   - `scope`: body/normalized/decode/parse/IR/serialize/report 的峰值按 `02` 20.5 记录，合计不超过 45 MiB 设计预算。
   - `RED`: 10,000 fixture 产生无界 AST/report 或子预算超标。
@@ -1359,7 +1359,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 把 allocator samples 写入 report，不提高预算。
   - `done`: host peak report 和 10,000 node memory artifact。
 
-- [ ] **J008 - 实现 release profile digest 记录**
+- [x] **J008 - 实现 release profile digest 记录**
   - `depends_on`: A002,J002；`parallel_group`: J-build
   - `scope`: 每个性能样本绑定 Rust/Cargo、target、profile 字段和 profile SHA-256。
   - `RED`: 修改 profile 后旧样本仍被接受为同一 baseline。
@@ -1367,7 +1367,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 复用 A007 evidence schema。
   - `done`: intentional profile change test 能阻断混比。
 
-- [ ] **J009 - 验证 parser-only 依赖闭包**
+- [x] **J009 - 验证 parser-only 依赖闭包**
   - `depends_on`: A003,A004,F001；`parallel_group`: J-build
   - `scope`: parser-only 不含 ureq、rustls、gzip、url/idna/ICU、实验格式依赖。
   - `RED`: 故意 feature 泄漏时 cargo tree gate 失败。
@@ -1375,7 +1375,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 依赖 allow/deny 清单集中维护。
   - `done`: `cargo tree --locked -e normal,features` 机器报告通过。
 
-- [ ] **J010 - 验证 fetch-enabled 依赖增量**
+- [x] **J010 - 验证 fetch-enabled 依赖增量**
   - `depends_on`: J009；`parallel_group`: J-build
   - `scope`: fetch 增量只包含明确定义的 ureq/rustls/gzip/url 闭包，记录 ring/NDK 事实。
   - `RED`: fetch 关闭仍包含网络闭包或 native-tls 偷渡。
@@ -1383,7 +1383,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 生产、fetch、dev/test 报告分开。
   - `done`: closure count/license/build artifact report。
 
-- [ ] **J011 - 建立 BLAKE3 条件 benchmark**
+- [x] **J011 - 建立 BLAKE3 条件 benchmark**
   - `depends_on`: J003,J004,J005,J006,H002；`parallel_group`: J-conditional
   - `scope`: 只有 fingerprint 阶段超过 30 ms 或占总时延 10% 时才运行 BLAKE3 对比；否则生成 `not_triggered` 证据。
   - `RED`: benchmark 仅比较 hash microseconds、没有端到端/依赖/体积报告时 gate 失败。
@@ -1391,7 +1391,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 选择一个算法后删除落选实现与 feature，不能双栈发布。
   - `done`: decision artifact 含触发原因、p50/p95、端到端变化、RSS、体积、unsafe/build script、许可证和最终算法。
 
-- [ ] **J012 - 验证 release binary 体积预算**
+- [x] **J012 - 验证 release binary 体积预算**
   - `depends_on`: J008,J009,J010；`parallel_group`: J-build
   - `scope`: parser-only/fetch/扩展格式 arm64 strip 产物及模块总包符合当前预算。
   - `RED`: 超预算或报告缺 cargo bloat/tree 差异时失败。
@@ -1399,7 +1399,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: profile/依赖差异可追溯到 manifest。
   - `done`: compressed/uncompressed bytes、SHA-256、主要 crate/symbol 报告。
 
-- [ ] **J013 - 验证 profile 优化不破坏测试诊断**
+- [x] **J013 - 验证 profile 优化不破坏测试诊断**
   - `depends_on`: J008；`parallel_group`: J-build
   - `scope`: release strip/Thin LTO 与 test/fuzz/Miri/ASan profile 分离，错误位置和 panic diagnostic 仍可用。
   - `RED`: test profile 被 strip 或 release 参数污染的构建检查失败。
@@ -1407,7 +1407,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: profile 断言使用单一配置源。
   - `done`: release 与 diagnostics profile artifact manifest 全绿。
 
-- [ ] **J014 - 在参考 arm64 真机运行三格式性能**
+- [x] **J014 - 在参考 arm64 真机运行三格式性能**
   - `depends_on`: I012,J003,J004,J005,J006,J007,J008,J012,J013；`parallel_group`: J-device
   - `scope`: 当前实际可用 `reference_verified` 设备上运行 stable formats 的 release build 测量。
   - `RED`: 设备 manifest、温度/网络条件或样本 digest 缺失时失败；不以 host 结果冒充真机 gate。
@@ -1415,7 +1415,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 只修复实际 profile 发现的瓶颈。
   - `done`: 三轮独立 baseline、p50/p95、RSS、CPU、profile digest 和 invalid 原因。
 
-- [ ] **J015 - 验证参考设备 110 MiB 更新峰值**
+- [x] **J015 - 验证参考设备 110 MiB 更新峰值**
   - `depends_on`: J014；`parallel_group`: J-device
   - `scope`: 5 MiB/10,000 节点从读取到候选/回滚窗口的模块进程合计 VmRSS <=110 MiB。
   - `RED`: 10 Hz 以上采样缺失或峰值超标时失败。
@@ -1423,13 +1423,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 把 core 与 parser 峰值归因分开报告。
   - `done`: reference-device peak report 和 fixture digest。
 
-- [ ] **J016 - 通过 Phase 0-B parser 性能 gate**
+- [x] **J016 - 通过 Phase 0-B parser 性能 gate**
   - `depends_on`: J014,J015,J011,J012；`parallel_group`: serial
   - `scope`: stable formats 300 ms、parser 45 MiB、模块 110 MiB、profile/依赖/体积证据完整；可选 BLAKE3、扩展方言不阻断未启用 Alpha。
   - `RED`: gate 把 host 或简单 URI 当作完整证据时失败。
   - `GREEN`: 汇总参考设备三轮结果并关闭未通过可选能力。
   - `REFACTOR`: support manifest 明确只对精确设备/版本组合成立。
   - `done`: Phase 0-B parser performance manifest 为 `measured` 或明确 `experimental/unsupported`。
+
+### J 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| 确定性 10,000 项 fixture 与 runner | `crates/nethop-subscription/examples/subscription_parser_bench.rs` | URI/Base64、sing-box JSON、Clash YAML、multi-source 均为 4.31-4.41MiB；七协议混合、10% 非法项；5 warmup + 20 samples |
+| host/profile/feature 合约 | `crates/nethop-subscription/tests/j_contracts.rs` | fixture digest、测量次数、release profile、SHA-256、禁止 Base64 SIMD 与 fetch feature 隔离通过 |
+| 所有权峰值优化 | `crates/nethop-subscription/src/pipeline.rs::convert_stable_sources` | AdapterOutput 到 dedupe 改为所有权转移并同步聚合 compact report；完整 runner HWM 从约 65MiB 降至约 56MiB |
+| 真机性能与内存报告 | [`04-subscription-parser-phase0b-performance-report.md`](./04-subscription-parser-phase0b-performance-report.md) | alioth/Android 13/arm64 三轮最差 p95 245.54ms；workspace 最大 39.69MiB；总进程 HWM 最大 57,648KiB |
+| 依赖与体积 | `cargo tree`、arm64 runner artifact | parser-only 无网络闭包；fetch 增量无 native-tls；runner 1,624,136 bytes，gzip 829,968 bytes |
+| BLAKE3 条件判定 | 设备 fingerprint pass | SHA-256 单 pass 最大 4.21ms 且占 p95 小于 4%，结论 `not_triggered`，不引入 BLAKE3 |
+
+本次 J 阶段主要验证命令：
+
+```text
+cargo test --locked --test j_contracts
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo ndk -t arm64-v8a -P 23 build --locked --release --example subscription_parser_bench
+adb push target/aarch64-linux-android/release/examples/subscription_parser_bench /data/local/tmp/nethop-parser-bench
+adb shell /data/local/tmp/nethop-parser-bench
+```
+
+结果：J001-J016 全部完成。本结果仅把当前 `alioth / Android 13 / arm64 / Rust 1.97.1` 标记为 `reference_verified`，不外推中端设备或多厂商矩阵。
 
 ## 15. K - URL Fetch、SSRF 与缓存输入
 

@@ -398,28 +398,73 @@ pub fn convert_stable_sources(
 ) -> StableConversion {
     let started = Instant::now();
     let mut batches = Vec::new();
-    let mut combined_output = AdapterOutput::default();
     let mut detected = FormatHint::Auto;
+    let mut report = ConversionReport {
+        summary: ConversionSummary::default(),
+        items: Vec::new(),
+        diagnostics: Vec::new(),
+        diagnostic_counts: BTreeMap::new(),
+    };
     for input in inputs {
-        let output = parse_source(&input, limits, matrix);
+        let mut output = parse_source(&input, limits, matrix);
         detected = input.format_hint;
-        let nodes = output
-            .nodes
-            .iter()
-            .filter_map(|item| item.node.clone())
-            .collect::<Vec<_>>();
+        let rejected = output.rejected_count();
+        let source_warnings = output.diagnostics.len();
+        let mut nodes = Vec::with_capacity(output.accepted_count());
+        for mut item in output.nodes.drain(..) {
+            if let Some(node) = item.node.take() {
+                let fingerprint = fingerprint_node(&node);
+                let codes = item
+                    .warnings
+                    .iter()
+                    .take(limits.max_warnings_per_node())
+                    .map(|warning| warning.code.clone())
+                    .collect();
+                report.items.push(CompactItemReport {
+                    index: item.item_index,
+                    status: CompactStatus::Accepted,
+                    protocol: Some(node.protocol()),
+                    node_id: Some(fingerprint.display_id().to_string()),
+                    codes,
+                });
+                for warning in item
+                    .warnings
+                    .into_iter()
+                    .take(limits.max_warnings_per_node())
+                {
+                    report.summary.warnings += 1;
+                    push_diagnostic(&mut report, warning, limits);
+                }
+                nodes.push(node);
+            } else if let Some(diagnostic) = item.diagnostic.take() {
+                report.items.push(CompactItemReport {
+                    index: item.item_index,
+                    status: CompactStatus::Rejected,
+                    protocol: diagnostic.protocol,
+                    node_id: None,
+                    codes: vec![diagnostic.code.clone()],
+                });
+                push_diagnostic(&mut report, diagnostic, limits);
+            }
+        }
+        for diagnostic in output.diagnostics.drain(..) {
+            report.summary.warnings += 1;
+            push_diagnostic(&mut report, diagnostic, limits);
+        }
         batches.push(SourceBatch {
             source_id: input.source_id,
             nodes,
-            rejected: output.rejected_count(),
-            warnings: output.diagnostics.len(),
+            rejected,
+            warnings: source_warnings,
         });
-        combined_output.nodes.extend(output.nodes);
-        combined_output.diagnostics.extend(output.diagnostics);
     }
     let (nodes, outcomes) = dedupe_sources(batches, limits);
     let duplicate_count = outcomes.values().map(|outcome| outcome.duplicate).sum();
-    let report = report_from_adapter(detected, &combined_output, &nodes, duplicate_count, limits);
+    report.summary.detected_format = detected;
+    report.summary.accepted = nodes.len();
+    report.summary.rejected = outcomes.values().map(|outcome| outcome.rejected).sum();
+    report.summary.duplicate = duplicate_count;
+    report.summary.source_success = nodes.len() + duplicate_count > 0;
     let outbounds_json = compose_outbounds_json(&nodes);
     StableConversion {
         nodes,
