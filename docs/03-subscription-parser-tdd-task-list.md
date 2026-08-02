@@ -754,7 +754,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 ## 10. F - Clash/Mihomo YAML 稳定适配器
 
-- [ ] **F001 - 以最小 feature 配置 `serde-saphyr`**
+- [x] **F001 - 以最小 feature 配置 `serde-saphyr`**
   - `depends_on`: A010；`parallel_group`: F-yaml-infra
   - `scope`: 只启用 `deserialize`，禁止 serialize/include/property/validation 扩展。
   - `RED`: feature-tree contract 对默认 feature 或禁止依赖出现时失败。
@@ -762,7 +762,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: feature 检查并入 A005 的供应链 helper。
   - `done`: parser-only feature tree 与 offline build 通过。
 
-- [ ] **F002 - 显式配置 YAML `Budget` 数值**
+- [x] **F002 - 显式配置 YAML `Budget` 数值**
   - `depends_on`: F001,B001；`parallel_group`: F-yaml-limits
   - `scope`: reader/events/nodes/documents/scalar/depth/anchor/alias 等值与 `02` 10.2 一致，不依赖上游默认值。
   - `RED`: 每个上限的 value-1/value/value+1 fixture 暴露当前默认过宽行为。
@@ -770,7 +770,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 上限只在一个转换函数映射。
   - `done`: budget mapping golden 与 boundary tests 通过。
 
-- [ ] **F003 - 限制 alias replay**
+- [x] **F003 - 限制 alias replay**
   - `depends_on`: F001,B001；`parallel_group`: F-yaml-limits
   - `scope`: total replay events、stack depth、per-anchor expansion 使用冻结值。
   - `RED`: alias bomb 未在预算内失败或 panic 的测试失败。
@@ -778,7 +778,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 绝对上限与 ratio 检查共享计数证据。
   - `done`: alias bomb corpus 在超时/内存限制内拒绝。
 
-- [ ] **F004 - 拒绝 merge key**
+- [x] **F004 - 拒绝 merge key**
   - `depends_on`: F001；`parallel_group`: F-yaml-policy
   - `scope`: 稳定核心遇到 `<<` 返回 `yaml_merge_key_unsupported`。
   - `RED`: merge replay 改变凭据或 duplicate key 结果的 fixture 被接受。
@@ -786,7 +786,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不手写递归 merge。
   - `done`: direct/nested/alias merge fixtures 全部稳定拒绝。
 
-- [ ] **F005 - 拒绝 YAML 自定义 tag/include**
+- [x] **F005 - 拒绝 YAML 自定义 tag/include**
   - `depends_on`: F001；`parallel_group`: F-yaml-policy
   - `scope`: tag 不能触发对象、文件、网络或外部解释语义。
   - `RED`: `!include`/自定义 tag 被构造或忽略后接受的测试失败。
@@ -794,7 +794,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 不引入 tag handler 扩展点。
   - `done`: tag attack corpus 通过。
 
-- [ ] **F006 - 检测 YAML 重复关键字段**
+- [x] **F006 - 检测 YAML 重复关键字段**
   - `depends_on`: F001,B005；`parallel_group`: F-yaml-policy
   - `scope`: type/server/port/credential/TLS/transport 等重复字段拒绝节点。
   - `RED`: last-value-wins 覆盖安全字段的 fixture 被接受。
@@ -802,7 +802,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: seen-key 逻辑与 JSON 共享策略而非 parser 实现。
   - `done`: duplicate critical/noncritical matrix 通过。
 
-- [ ] **F007 - 只读取顶层 inline `proxies`**
+- [x] **F007 - 只读取顶层 inline `proxies`**
   - `depends_on`: F002,F003,F004,F005,F006；`parallel_group`: serial
   - `scope`: adapter 只产生 `proxies` 数组中的终端候选。
   - `RED`: rules/groups/providers/script 生成节点或改变 parser 配置的测试失败。
@@ -810,7 +810,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 跳过区只做有界汇总，不保留 DOM。
   - `done`: nodes-only boundary golden 通过。
 
-- [ ] **F008 - 诊断 provider-only Clash 订阅**
+- [x] **F008 - 诊断 provider-only Clash 订阅**
   - `depends_on`: F007,B007；`parallel_group`: F-yaml-boundary
   - `scope`: 无 inline proxies 但有 proxy-providers 时返回两个冻结诊断码。
   - `RED`: accepted=0 但原因模糊或递归下载 provider 的测试失败。
@@ -818,7 +818,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: provider URL 不进入诊断参数。
   - `done`: provider-only golden 与 secret scan 通过。
 
-- [ ] **F009 - 汇总非节点 Clash 区域警告**
+- [x] **F009 - 汇总非节点 Clash 区域警告**
   - `depends_on`: F007,B007；`parallel_group`: F-yaml-boundary
   - `scope`: inline proxies 可用时，对 groups/rules/providers/script 每类最多产生一个 boundary warning。
   - `RED`: 10,000 个条目制造 10,000 条长 warning 或策略被执行的测试失败。
@@ -826,7 +826,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 使用 report diagnostic counts。
   - `done`: large boundary fixture warning 数有界。
 
-- [ ] **F010 - 映射 YAML 公共节点字段**
+- [x] **F010 - 映射 YAML 公共节点字段**
   - `depends_on`: F007,E001,E002,E003,E004；`parallel_group`: F-yaml-map
   - `scope`: name/type/server/port/credential/TLS/transport 别名转为 `UnvalidatedNode`。
   - `RED`: 官方结构 fixture 缺字段、类型错误或别名映射错误。
@@ -834,7 +834,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 协议约束仍由 E 层执行。
   - `done`: field mapping golden 通过。
 
-- [ ] **F011 - 执行 YAML 未知字段策略**
+- [x] **F011 - 执行 YAML 未知字段策略**
   - `depends_on`: F010,E013；`parallel_group`: serial
   - `scope`: harmless unknown 仅 warning，critical unknown 拒绝节点。
   - `RED`: 关键未知字段被静默丢失或普通 UI 字段导致整源失败。
@@ -842,7 +842,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: Stash 扩展可增加分类但不能覆盖稳定语义。
   - `done`: unknown-field golden 通过。
 
-- [ ] **F012 - YAML 七协议 golden 通过公共语义层**
+- [x] **F012 - YAML 七协议 golden 通过公共语义层**
   - `depends_on`: F011,E015；`parallel_group`: serial
   - `scope`: YAML adapter 对七协议产生与 E014 相同的 validated node 或稳定拒绝。
   - `RED`: 每个协议至少一个官方结构 fixture 先因 adapter 未实现失败。
@@ -850,13 +850,34 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 共享字段 alias table 数据化。
   - `done`: valid/reject/partial YAML golden 全绿。
 
-- [ ] **F013 - 通过 YAML 稳定格式 gate**
+- [x] **F013 - 通过 YAML 稳定格式 gate**
   - `depends_on`: F008,F009,F012；`parallel_group`: serial
   - `scope`: YAML adapter 满足 nodes-only、资源限制、重复 key、诊断和七协议映射。
   - `RED`: gate 在任一安全类别或 golden 缺失时失败。
   - `GREEN`: 汇总 YAML tests，不执行性能 gate。
   - `REFACTOR`: gate 只调用公共 parse API。
   - `done`: YAML unit/integration/attack corpus 全绿。
+
+### F 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| YAML resource policy | `src/clash_yaml.rs::yaml_options` | `serde-saphyr` 仅反序列化 feature；Budget、AliasLimits、duplicate/merge、snippet 策略均显式冻结 |
+| nodes-only YAML adapter | `src/clash_yaml.rs::parse_clash_yaml` | 仅读取顶层 inline `proxies`；rules、groups、providers、script 只产生有界 summary，不执行、不下载、不透传 |
+| source-level YAML 攻击防护 | `src/clash_yaml.rs` | 重复 key、merge key、tag/include、alias replay、文档数量和节点数量返回稳定拒绝码 |
+| 字段映射与语义交接 | `src/clash_yaml.rs::clash_node_spec` | 公共字段映射到 `NodeSpec`，再统一经 E 阶段 capability gate；critical unknown 拒绝，harmless unknown 仅一次 warning |
+| F 专项合约 | `tests/f_contracts.rs` | 7 个测试覆盖预算、七协议、provider-only、非节点区域、duplicate/merge/tag、alias/doc、部分成功与未知字段 |
+
+本次 F 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test f_contracts
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+结果：全部退出码为 `0`。F001-F013 已完成；G001 及后续任务仍保持未开始状态。
 
 ## 11. G - sing-box JSON 稳定适配器
 

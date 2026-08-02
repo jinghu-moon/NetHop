@@ -1,7 +1,10 @@
 #![doc = "NetHop's bounded, nodes-only subscription parser foundation."]
 
+pub mod adapter;
 pub mod base64_container;
 pub mod capability;
+#[cfg(feature = "format-clash-yaml")]
+pub mod clash_yaml;
 pub mod detect;
 pub mod diagnostics;
 pub mod limits;
@@ -12,11 +15,14 @@ pub mod secret;
 pub mod semantic;
 pub mod uri;
 
+pub use adapter::{AdapterNodeResult, AdapterOutput};
 pub use base64_container::{
     Base64ContainerError, Base64Variant, DecodedSubscription, decode_base64,
     decode_base64_and_detect, decode_base64_at_depth,
 };
 pub use capability::{CapabilityEntry, CapabilityEvidence, CapabilityMatrix, CapabilityQuery};
+#[cfg(feature = "format-clash-yaml")]
+pub use clash_yaml::{ClashYamlError, parse_clash_yaml, yaml_options};
 pub use detect::{
     Base64Alphabet, Base64Details, Base64Padding, DetectionError, DetectionResult,
     EvidenceStrength, FormatEvidence, detect_bytes, detect_format, detect_normalized,

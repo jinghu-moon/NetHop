@@ -45,6 +45,7 @@ pub struct NodeSpec {
     pub source_ref: Option<SourceRef>,
     pub location: Option<SourceLocation>,
     pub unknown_critical_field: Option<String>,
+    pub unknown_harmless_fields: usize,
 }
 
 impl NodeSpec {
@@ -78,6 +79,7 @@ impl NodeSpec {
             source_ref: None,
             location: None,
             unknown_critical_field: None,
+            unknown_harmless_fields: 0,
         }
     }
 }
@@ -181,16 +183,27 @@ pub fn validate_node_spec(
         source_refs: spec.source_ref.into_iter().collect(),
     };
     let proxy = ProxyNode::validate(node, matrix).map_err(map_validation_error)?;
-    let warnings = if spec.insecure {
+    let mut warnings = if spec.insecure {
         vec![diagnostic(
             DiagnosticCode::InsecureTls,
             Severity::Warning,
-            spec.location,
+            spec.location.clone(),
             Some(protocol),
         )]
     } else {
         Vec::new()
     };
+    if spec.unknown_harmless_fields > 0 {
+        warnings.push(
+            diagnostic(
+                DiagnosticCode::UnknownField,
+                Severity::Warning,
+                spec.location,
+                Some(protocol),
+            )
+            .with_parameter("count", spec.unknown_harmless_fields.to_string()),
+        );
+    }
     Ok(SemanticOutcome {
         node: proxy,
         warnings,
@@ -269,7 +282,7 @@ pub fn node_spec_from_uri(candidate: &UriNodeCandidate<'_>) -> Result<NodeSpec, 
             "congestion_control" => spec.congestion_control = Some(value),
             "plugin" => spec.plugin = Some(value),
             "allowInsecure" | "insecure" => spec.insecure = matches!(value.as_str(), "1" | "true"),
-            _ => {}
+            _ => spec.unknown_harmless_fields = spec.unknown_harmless_fields.saturating_add(1),
         }
     }
     if matches!(
