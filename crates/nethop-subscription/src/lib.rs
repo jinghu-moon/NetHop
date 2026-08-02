@@ -5,6 +5,7 @@ pub mod base64_container;
 pub mod capability;
 #[cfg(feature = "format-clash-yaml")]
 pub mod clash_yaml;
+pub mod core_adapter;
 pub mod detect;
 pub mod diagnostics;
 #[cfg(feature = "fetch")]
@@ -31,6 +32,9 @@ pub use base64_container::{
 pub use capability::{CapabilityEntry, CapabilityEvidence, CapabilityMatrix, CapabilityQuery};
 #[cfg(feature = "format-clash-yaml")]
 pub use clash_yaml::{ClashYamlError, parse_clash_yaml, yaml_options};
+pub use core_adapter::{
+    TerminalOutboundAdapterError, adapt_terminal_outbound, adapt_terminal_outbounds,
+};
 pub use detect::{
     Base64Alphabet, Base64Details, Base64Padding, DetectionError, DetectionResult,
     EvidenceStrength, FormatEvidence, detect_bytes, detect_format, detect_normalized,

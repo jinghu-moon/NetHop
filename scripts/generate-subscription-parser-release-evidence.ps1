@@ -229,12 +229,15 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $sourcePaths = @(
     "Cargo.toml",
     "Cargo.lock",
+    "crates/nethop-core/Cargo.toml",
     "crates/nethop-subscription/Cargo.toml",
     "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
     "deny.toml",
     "scripts/generate-subscription-parser-release-evidence.ps1"
 )
 $sourcePaths += Get-ChildItem -LiteralPath "crates/nethop-subscription/src" -Recurse -File -Filter "*.rs" |
+    ForEach-Object { [System.IO.Path]::GetRelativePath($WorkspaceRoot, $_.FullName).Replace("\", "/") }
+$sourcePaths += Get-ChildItem -LiteralPath "crates/nethop-core/src" -Recurse -File -Filter "*.rs" |
     ForEach-Object { [System.IO.Path]::GetRelativePath($WorkspaceRoot, $_.FullName).Replace("\", "/") }
 $sourcePaths = @($sourcePaths | Sort-Object -Unique)
 $sourceFiles = @()

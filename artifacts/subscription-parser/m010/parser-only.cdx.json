@@ -2,7 +2,7 @@
   "$schema": "https://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:10270dd7-97ae-1fd2-cf35-f96e0ab9d3e1",
+  "serialNumber": "urn:uuid:ec30deb5-f712-4fde-ba30-0cb09efe0707",
   "version": 1,
   "metadata": {
     "component": {
@@ -27,23 +27,23 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/annotate-snippets@0.12.16",
-      "name": "annotate-snippets",
-      "version": "0.12.16",
-      "purl": "pkg:cargo/annotate-snippets@0.12.16",
+      "bom-ref": "pkg:cargo/nethop-core@0.1.0",
+      "name": "nethop-core",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/nethop-core@0.1.0",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "AGPL-3.0-only"
         }
       ],
       "properties": [
         {
           "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#annotate-snippets@0.12.16"
+          "value": "path+file:///D:/100_Projects/110_Daily/NetHop/crates/nethop-core#0.1.0"
         },
         {
           "name": "nethop:cargo-license-original",
-          "value": "MIT OR Apache-2.0"
+          "value": "AGPL-3.0-only"
         }
       ]
     },
@@ -423,28 +423,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/zeroize@1.9.0",
-      "name": "zeroize",
-      "version": "1.9.0",
-      "purl": "pkg:cargo/zeroize@1.9.0",
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.0"
-        },
-        {
-          "name": "nethop:cargo-license-original",
-          "value": "Apache-2.0 OR MIT"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:cargo/proc-macro2@1.0.107",
       "name": "proc-macro2",
       "version": "1.0.107",
@@ -467,6 +445,28 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/percent-encoding@2.3.2",
+      "name": "percent-encoding",
+      "version": "2.3.2",
+      "purl": "pkg:cargo/percent-encoding@2.3.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#percent-encoding@2.3.2"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/num-traits@0.2.19",
       "name": "num-traits",
       "version": "0.2.19",
@@ -480,6 +480,28 @@
         {
           "name": "nethop:cargo-id",
           "value": "registry+https://github.com/rust-lang/crates.io-index#num-traits@0.2.19"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/annotate-snippets@0.12.16",
+      "name": "annotate-snippets",
+      "version": "0.12.16",
+      "purl": "pkg:cargo/annotate-snippets@0.12.16",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#annotate-snippets@0.12.16"
         },
         {
           "name": "nethop:cargo-license-original",
@@ -643,28 +665,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/percent-encoding@2.3.2",
-      "name": "percent-encoding",
-      "version": "2.3.2",
-      "purl": "pkg:cargo/percent-encoding@2.3.2",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "properties": [
-        {
-          "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#percent-encoding@2.3.2"
-        },
-        {
-          "name": "nethop:cargo-license-original",
-          "value": "MIT OR Apache-2.0"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:cargo/crypto-common@0.2.2",
       "name": "crypto-common",
       "version": "0.2.2",
@@ -678,6 +678,28 @@
         {
           "name": "nethop:cargo-id",
           "value": "registry+https://github.com/rust-lang/crates.io-index#crypto-common@0.2.2"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/digest@0.11.3",
+      "name": "digest",
+      "version": "0.11.3",
+      "purl": "pkg:cargo/digest@0.11.3",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#digest@0.11.3"
         },
         {
           "name": "nethop:cargo-license-original",
@@ -841,23 +863,23 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/digest@0.11.3",
-      "name": "digest",
-      "version": "0.11.3",
-      "purl": "pkg:cargo/digest@0.11.3",
+      "bom-ref": "pkg:cargo/zeroize@1.9.0",
+      "name": "zeroize",
+      "version": "1.9.0",
+      "purl": "pkg:cargo/zeroize@1.9.0",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "Apache-2.0 OR MIT"
         }
       ],
       "properties": [
         {
           "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#digest@0.11.3"
+          "value": "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.0"
         },
         {
           "name": "nethop:cargo-license-original",
-          "value": "MIT OR Apache-2.0"
+          "value": "Apache-2.0 OR MIT"
         }
       ]
     },
@@ -886,17 +908,18 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:cargo/nethop-subscription@0.1.0",
+      "ref": "pkg:cargo/nethop-core@0.1.0",
       "dependsOn": [
-        "pkg:cargo/base64@0.23.0",
-        "pkg:cargo/percent-encoding@2.3.2",
         "pkg:cargo/serde_json@1.0.151",
-        "pkg:cargo/serde-saphyr@1.0.0",
         "pkg:cargo/serde@1.0.229",
         "pkg:cargo/sha2@0.11.0",
-        "pkg:cargo/thiserror@2.0.19",
-        "pkg:cargo/uuid@1.24.0",
-        "pkg:cargo/zeroize@1.9.0"
+        "pkg:cargo/thiserror@2.0.19"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/quote@1.0.47",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107"
       ]
     },
     {
@@ -954,13 +977,15 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/quote@1.0.47",
+      "ref": "pkg:cargo/syn@2.0.119",
       "dependsOn": [
-        "pkg:cargo/proc-macro2@1.0.107"
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/unicode-ident@1.0.24"
       ]
     },
     {
-      "ref": "pkg:cargo/syn@2.0.119",
+      "ref": "pkg:cargo/syn@3.0.3",
       "dependsOn": [
         "pkg:cargo/proc-macro2@1.0.107",
         "pkg:cargo/quote@1.0.47",
@@ -1006,17 +1031,15 @@
       ]
     },
     {
-      "ref": "pkg:cargo/syn@3.0.3",
+      "ref": "pkg:cargo/proc-macro2@1.0.107",
       "dependsOn": [
-        "pkg:cargo/proc-macro2@1.0.107",
-        "pkg:cargo/quote@1.0.47",
         "pkg:cargo/unicode-ident@1.0.24"
       ]
     },
     {
-      "ref": "pkg:cargo/proc-macro2@1.0.107",
+      "ref": "pkg:cargo/zeroize@1.9.0",
       "dependsOn": [
-        "pkg:cargo/unicode-ident@1.0.24"
+        "pkg:cargo/zeroize_derive@1.5.0"
       ]
     },
     {
@@ -1024,9 +1047,22 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/num-traits@0.2.19",
+      "ref": "pkg:cargo/memchr@2.8.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/nethop-subscription@0.1.0",
       "dependsOn": [
-        "pkg:cargo/autocfg@1.5.1"
+        "pkg:cargo/base64@0.23.0",
+        "pkg:cargo/nethop-core@0.1.0",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/serde_json@1.0.151",
+        "pkg:cargo/serde-saphyr@1.0.0",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha2@0.11.0",
+        "pkg:cargo/thiserror@2.0.19",
+        "pkg:cargo/uuid@1.24.0",
+        "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
@@ -1116,13 +1152,9 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/memchr@2.8.3",
-      "dependsOn": []
-    },
-    {
-      "ref": "pkg:cargo/zeroize@1.9.0",
+      "ref": "pkg:cargo/num-traits@0.2.19",
       "dependsOn": [
-        "pkg:cargo/zeroize_derive@1.5.0"
+        "pkg:cargo/autocfg@1.5.1"
       ]
     },
     {

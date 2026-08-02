@@ -576,6 +576,7 @@ dependencies = [
  "base64 0.23.0",
  "criterion",
  "flate2",
+ "nethop-core",
  "percent-encoding",
  "proptest",
  "rustls",
@@ -589,6 +590,16 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "nethopd"
+version = "0.1.0"
+dependencies = [
+ "nethop-core",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

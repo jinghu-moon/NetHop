@@ -5,7 +5,7 @@
   "disallowed_licenses": [],
   "packages": [
     {
-      "name": "nethop-subscription",
+      "name": "nethop-core",
       "version": "0.1.0",
       "license": "AGPL-3.0-only",
       "cargo_license_original": "AGPL-3.0-only",
@@ -530,17 +530,17 @@
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
-      "name": "zerovec",
-      "version": "0.11.6",
-      "license": "Unicode-3.0",
-      "cargo_license_original": "Unicode-3.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index"
-    },
-    {
       "name": "rand_chacha",
       "version": "0.9.0",
       "license": "MIT OR Apache-2.0",
       "cargo_license_original": "MIT OR Apache-2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    {
+      "name": "r-efi",
+      "version": "6.0.0",
+      "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "cargo_license_original": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
@@ -663,14 +663,14 @@
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
-      "name": "fastrand",
-      "version": "2.5.0",
-      "license": "Apache-2.0 OR MIT",
-      "cargo_license_original": "Apache-2.0 OR MIT",
+      "name": "ciborium-ll",
+      "version": "0.2.2",
+      "license": "Apache-2.0",
+      "cargo_license_original": "Apache-2.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
-      "name": "ciborium-ll",
+      "name": "ciborium-io",
       "version": "0.2.2",
       "license": "Apache-2.0",
       "cargo_license_original": "Apache-2.0",
@@ -682,6 +682,13 @@
       "license": "MIT OR Apache-2.0",
       "cargo_license_original": "MIT OR Apache-2.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    {
+      "name": "nethop-subscription",
+      "version": "0.1.0",
+      "license": "AGPL-3.0-only",
+      "cargo_license_original": "AGPL-3.0-only",
+      "source": ""
     },
     {
       "name": "adler2",
@@ -726,17 +733,17 @@
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
+      "name": "fastrand",
+      "version": "2.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "cargo_license_original": "Apache-2.0 OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    {
       "name": "arraydeque",
       "version": "0.5.1",
       "license": "MIT OR Apache-2.0",
       "cargo_license_original": "MIT/Apache-2.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index"
-    },
-    {
-      "name": "autocfg",
-      "version": "1.5.1",
-      "license": "Apache-2.0 OR MIT",
-      "cargo_license_original": "Apache-2.0 OR MIT",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
@@ -789,22 +796,22 @@
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
-      "name": "ciborium-io",
-      "version": "0.2.2",
-      "license": "Apache-2.0",
-      "cargo_license_original": "Apache-2.0",
+      "name": "autocfg",
+      "version": "1.5.1",
+      "license": "Apache-2.0 OR MIT",
+      "cargo_license_original": "Apache-2.0 OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    {
+      "name": "zerovec",
+      "version": "0.11.6",
+      "license": "Unicode-3.0",
+      "cargo_license_original": "Unicode-3.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
       "name": "find-msvc-tools",
       "version": "0.1.9",
-      "license": "MIT OR Apache-2.0",
-      "cargo_license_original": "MIT OR Apache-2.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index"
-    },
-    {
-      "name": "flate2",
-      "version": "1.1.9",
       "license": "MIT OR Apache-2.0",
       "cargo_license_original": "MIT OR Apache-2.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
@@ -999,10 +1006,10 @@
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {
-      "name": "r-efi",
-      "version": "6.0.0",
-      "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
-      "cargo_license_original": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "name": "flate2",
+      "version": "1.1.9",
+      "license": "MIT OR Apache-2.0",
+      "cargo_license_original": "MIT OR Apache-2.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },
     {

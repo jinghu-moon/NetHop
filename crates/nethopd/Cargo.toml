@@ -1,0 +1,17 @@
+[package]
+name = "nethopd"
+description = "Controlled daemon process boundaries for NetHop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+nethop-core = { version = "0.1.0", path = "../nethop-core" }
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3"

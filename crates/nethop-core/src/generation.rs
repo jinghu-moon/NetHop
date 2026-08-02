@@ -102,6 +102,13 @@ impl GenerationStore {
     where
         F: FnOnce(&[u8]) -> Result<(), CoreError>,
     {
+        self.publish_with_path(candidate, |_, bytes| validate(bytes))
+    }
+
+    pub fn publish_with_path<F>(&self, candidate: &Candidate, validate: F) -> Result<(), CoreError>
+    where
+        F: FnOnce(&Path, &[u8]) -> Result<(), CoreError>,
+    {
         let generations = self.root.join("generations");
         let final_dir = generations.join(candidate.generation.get().to_string());
         if final_dir.exists() {
@@ -135,7 +142,7 @@ impl GenerationStore {
         validate: F,
     ) -> Result<(), CoreError>
     where
-        F: FnOnce(&[u8]) -> Result<(), CoreError>,
+        F: FnOnce(&Path, &[u8]) -> Result<(), CoreError>,
     {
         let config_path = temp_dir.join("config.json");
         let manifest_path = temp_dir.join("manifest.json");
@@ -145,7 +152,7 @@ impl GenerationStore {
             .map_err(|error| CoreError::SerializationFailure(error.to_string()))?;
         write_sync(&manifest_path, &manifest).map_err(|error| io_error("write_manifest", error))?;
         sync_directory(temp_dir).map_err(|error| io_error("sync_candidate", error))?;
-        validate(candidate.config.bytes())?;
+        validate(&config_path, candidate.config.bytes())?;
         fs::rename(temp_dir, final_dir).map_err(|error| io_error("publish_generation", error))?;
         sync_directory(final_dir.parent().expect("generation directory has parent"))
             .map_err(|error| io_error("sync_generations", error))?;

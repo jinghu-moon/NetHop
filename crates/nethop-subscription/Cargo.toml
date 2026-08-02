@@ -26,6 +26,7 @@ experimental-formats = ["format-surfboard"]
 fetch = ["parser", "dep:flate2", "dep:ureq", "dep:url"]
 
 [dependencies]
+nethop-core = { version = "0.1.0", path = "../nethop-core" }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std", "raw_value"] }
 serde-saphyr = { version = "1", optional = true, default-features = false, features = ["deserialize"] }

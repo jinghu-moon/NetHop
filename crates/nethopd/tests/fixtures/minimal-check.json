@@ -1,0 +1,15 @@
+{
+  "outbounds": [
+    {
+      "type": "trojan",
+      "tag": "nh1s-runner-smoke",
+      "server": "example.com",
+      "server_port": 443,
+      "password": "fixture-only",
+      "tls": {
+        "enabled": true,
+        "server_name": "example.com"
+      }
+    }
+  ]
+}
