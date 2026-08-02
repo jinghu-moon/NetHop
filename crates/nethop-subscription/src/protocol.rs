@@ -382,6 +382,10 @@ pub enum NodeValidationError {
     UnsupportedCapability(String),
     #[error("credential is empty")]
     EmptyCredential,
+    #[error("transport is not valid for this protocol")]
+    UnsupportedTransport,
+    #[error("protocol semantics are not supported")]
+    UnsupportedSemantics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -435,6 +439,46 @@ impl ProxyNode {
         }
         if matches!(node.transport.kind(), TransportKind::Quic) && !node.tls.enabled {
             return Err(NodeValidationError::InvalidTlsCombination);
+        }
+        if matches!(
+            node.protocol,
+            ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic
+        ) && node.transport.kind() != TransportKind::Quic
+        {
+            return Err(NodeValidationError::UnsupportedTransport);
+        }
+        if matches!(node.protocol, ProxyProtocol::Trojan | ProxyProtocol::AnyTls)
+            && !node.tls.enabled
+        {
+            return Err(NodeValidationError::InvalidTlsCombination);
+        }
+        if node.tls.reality.is_some()
+            && (node.protocol != ProxyProtocol::Vless || !node.tls.enabled)
+        {
+            return Err(NodeValidationError::InvalidTlsCombination);
+        }
+        if let Credentials::Shadowsocks { method, plugin, .. } = &node.credentials {
+            if plugin.is_some()
+                || !matches!(
+                    method.as_str(),
+                    "aes-128-gcm"
+                        | "aes-256-gcm"
+                        | "chacha20-ietf-poly1305"
+                        | "2022-blake3-aes-128-gcm"
+                        | "2022-blake3-aes-256-gcm"
+                        | "2022-blake3-chacha20-poly1305"
+                )
+            {
+                return Err(NodeValidationError::UnsupportedSemantics);
+            }
+        }
+        if let Credentials::Vmess { security, .. } = &node.credentials
+            && !matches!(
+                security.as_str(),
+                "auto" | "none" | "aes-128-gcm" | "chacha20-poly1305" | "zero"
+            )
+        {
+            return Err(NodeValidationError::UnsupportedSemantics);
         }
         let query = CapabilityQuery::from_node(&node);
         if !matrix.supports(&query) {

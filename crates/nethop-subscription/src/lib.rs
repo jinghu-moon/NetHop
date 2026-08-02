@@ -9,6 +9,7 @@ pub mod normalize;
 pub mod payload;
 pub mod protocol;
 pub mod secret;
+pub mod semantic;
 pub mod uri;
 
 pub use base64_container::{
@@ -37,6 +38,10 @@ pub use protocol::{
     TransportOptions, UnvalidatedNode, UuidValue,
 };
 pub use secret::SecretString;
+pub use semantic::{
+    NodeSpec, SemanticError, SemanticOutcome, node_spec_from_uri, semantic_diagnostic,
+    validate_node_spec,
+};
 pub use uri::{
     UriContainerError, UriNodeCandidate, UriNodeResult, UriQueryParameter, UriScheme,
     decode_vmess_inner_json, parse_uri_line, parse_uri_list, percent_decode_field,

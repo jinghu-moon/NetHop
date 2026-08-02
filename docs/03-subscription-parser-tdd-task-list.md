@@ -612,7 +612,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 ## 9. E - 七协议语义与能力矩阵
 
-- [ ] **E001 - 校验 endpoint 公共语义**
+- [x] **E001 - 校验 endpoint 公共语义**
   - `depends_on`: B015；`parallel_group`: E-shared
   - `scope`: 所有 adapter 对 server/port 使用同一个 validator。
   - `RED`: URI/YAML/JSON 对同一非法 endpoint 给出不同接受结果的测试失败。
@@ -620,7 +620,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 删除容器内重复校验。
   - `done`: cross-format endpoint matrix 通过。
 
-- [ ] **E002 - 校验 UUID 凭据公共语义**
+- [x] **E002 - 校验 UUID 凭据公共语义**
   - `depends_on`: B010；`parallel_group`: E-shared
   - `scope`: VLESS/VMess/TUIC UUID 解析一致且不启用 UUID 生成/RNG。
   - `RED`: 非规范/非法 UUID 在不同格式结果不一致的测试失败。
@@ -628,7 +628,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 原始 UUID 不进入诊断。
   - `done`: cross-format UUID golden 通过。
 
-- [ ] **E003 - 校验 TLS/Reality/uTLS 公共语义**
+- [x] **E003 - 校验 TLS/Reality/uTLS 公共语义**
   - `depends_on`: B011,B014；`parallel_group`: E-shared
   - `scope`: 组合只按 capability matrix 接受，`insecure` 产生稳定安全 warning。
   - `RED`: 不支持组合被接受、SNI/ALPN 控制字符漏过或 warning 缺失的测试失败。
@@ -636,7 +636,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 容器 adapter 只负责字段别名映射。
   - `done`: supported/rejected combination matrix 通过。
 
-- [ ] **E004 - 校验 transport 公共语义**
+- [x] **E004 - 校验 transport 公共语义**
   - `depends_on`: B012,B014；`parallel_group`: E-shared
   - `scope`: tcp/ws/http/httpupgrade/grpc/quic 只在协议允许时接受。
   - `RED`: 未验证 transport、非法 header/path/service 被接受的测试失败。
@@ -644,7 +644,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: adapter 不根据客户端名称放宽能力。
   - `done`: protocol x transport matrix 通过。
 
-- [ ] **E005 - 实现 Shadowsocks 语义校验**
+- [x] **E005 - 实现 Shadowsocks 语义校验**
   - `depends_on`: E001,B010,B014；`parallel_group`: E-protocols
   - `scope`: method 在 sing-box 1.13.15 允许集合、密码非空、首版拒绝 SIP003 plugin。
   - `RED`: 无效 method、空密码和任意 plugin 被接受的测试失败。
@@ -652,7 +652,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: method 集合来自版本化 capability fixture。
   - `done`: valid/reject golden 与 `sing-box check` fixture ID 对齐。
 
-- [ ] **E006 - 实现 VMess 语义校验**
+- [x] **E006 - 实现 VMess 语义校验**
   - `depends_on`: E001,E002,E003,E004；`parallel_group`: E-protocols
   - `scope`: VMess UUID、security、TLS 与 transport 组合按矩阵验证。
   - `RED`: 缺 UUID、未知 security 或非法组合被接受的测试失败。
@@ -660,7 +660,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: VMess URI 内嵌 JSON 与其他容器共用语义层。
   - `done`: URI/YAML/JSON 等价 golden 通过。
 
-- [ ] **E007 - 实现 VLESS 语义校验**
+- [x] **E007 - 实现 VLESS 语义校验**
   - `depends_on`: E001,E002,E003,E004；`parallel_group`: E-protocols
   - `scope`: VLESS UUID、flow、Reality/TLS 和 transport 按矩阵验证。
   - `RED`: 未支持 flow、Reality 缺 key 或冲突 TLS 被接受的测试失败。
@@ -668,7 +668,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: Reality key 只存在 secret model。
   - `done`: URI/YAML/JSON 等价与 rejection golden 通过。
 
-- [ ] **E008 - 实现 Trojan 语义校验**
+- [x] **E008 - 实现 Trojan 语义校验**
   - `depends_on`: E001,E003,E004；`parallel_group`: E-protocols
   - `scope`: Trojan 密码非空并验证 TLS/transport 组合。
   - `RED`: 空密码或非法无 TLS 组合被接受的测试失败。
@@ -676,7 +676,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 密码只通过 secret accessor 使用。
   - `done`: cross-format Trojan golden 通过。
 
-- [ ] **E009 - 实现 Hysteria2 语义校验**
+- [x] **E009 - 实现 Hysteria2 语义校验**
   - `depends_on`: E001,E003,E004；`parallel_group`: E-protocols
   - `scope`: Hysteria2 密码、QUIC/TLS、obfs、端口跳跃和带宽字段按已验证矩阵处理。
   - `RED`: 非 QUIC transport、非法端口范围或未知 obfs 被接受的测试失败。
@@ -684,7 +684,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 端口范围使用共享有界类型。
   - `done`: valid/reject golden 与 capability evidence 对齐。
 
-- [ ] **E010 - 实现 TUIC 语义校验**
+- [x] **E010 - 实现 TUIC 语义校验**
   - `depends_on`: E001,E002,E003,E004；`parallel_group`: E-protocols
   - `scope`: TUIC 同时要求 UUID/password，并校验 QUIC/TLS 和拥塞/UDP 字段。
   - `RED`: 缺任一凭据、未知 congestion controller 或非 QUIC 组合被接受的测试失败。
@@ -692,7 +692,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: UUID/password 组合由 TUIC credential variant 保证。
   - `done`: cross-format TUIC golden 通过。
 
-- [ ] **E011 - 实现 AnyTLS 语义校验**
+- [x] **E011 - 实现 AnyTLS 语义校验**
   - `depends_on`: E001,E003,E004；`parallel_group`: E-protocols
   - `scope`: 只接受 sing-box 1.13.15 证据包覆盖的 AnyTLS 字段组合。
   - `RED`: 仅因 parser 认识字段就把未验证组合标为 supported 的测试失败。
@@ -700,7 +700,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 版本证据通过 matrix 注入，不硬编码开发线字段。
   - `done`: source/build/check/mapping evidence fixture 与 golden 通过。
 
-- [ ] **E012 - 对未知协议返回稳定拒绝码**
+- [x] **E012 - 对未知协议返回稳定拒绝码**
   - `depends_on`: B008,B014；`parallel_group`: E-policy
   - `scope`: HTTP/SOCKS/WireGuard/未知协议可识别但不生成 `ProxyNode`。
   - `RED`: 任一非白名单协议成为 validated node 的测试失败。
@@ -708,7 +708,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 所有 adapter 共用拒绝路径。
   - `done`: cross-format unsupported protocol matrix 通过。
 
-- [ ] **E013 - 对未知关键语义返回稳定拒绝码**
+- [x] **E013 - 对未知关键语义返回稳定拒绝码**
   - `depends_on`: B014,E003,E004；`parallel_group`: E-policy
   - `scope`: 未知 TLS mode、transport、flow、plugin 和影响连接字段不得静默忽略。
   - `RED`: canary semantic 字段被丢弃后仍生成 node 的测试失败。
@@ -716,7 +716,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 字段分类进入 capability/mapping fixture。
   - `done`: unknown-field policy golden 通过。
 
-- [ ] **E014 - 建立七协议跨格式等价 fixture**
+- [x] **E014 - 建立七协议跨格式等价 fixture**
   - `depends_on`: E005,E006,E007,E008,E009,E010,E011,E012,E013；`parallel_group`: serial
   - `scope`: 同一节点的 URI/YAML/JSON 表示产生相同 normalized semantic fields。
   - `RED`: 等价 fixture 因字段默认值或别名产生差异。
@@ -724,13 +724,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: fixture generator 使用一种 canonical seed 描述。
   - `done`: 七协议 equivalence golden 全绿。
 
-- [ ] **E015 - 通过协议语义 gate**
+- [x] **E015 - 通过协议语义 gate**
   - `depends_on`: E014；`parallel_group`: serial
   - `scope`: 七协议只有 capability matrix 证明的组合能成为 validated node。
   - `RED`: gate 在任一协议缺 valid/reject/evidence fixture 时失败。
   - `GREEN`: 汇总协议测试与 matrix completeness。
   - `REFACTOR`: gate 不执行公网连通。
   - `done`: protocol unit、cross-format golden、matrix completeness 全绿。
+
+### E 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| 容器无关语义层 | `src/semantic.rs` | `NodeSpec` 集中处理 endpoint、UUID、TLS/Reality/uTLS、transport、凭据和未知关键语义；adapter 无法绕过 capability matrix |
+| 协议与矩阵约束 | `src/protocol.rs`、`src/capability.rs` | 七协议最小已验证组合、VLESS Reality、HTTP-family transport 与 QUIC 组合按 `1.13.15` matrix deny-by-default 校验 |
+| 稳定诊断 | `src/diagnostics.rs` | 新增 `insecure_tls`；不安全 TLS 只产生脱敏 warning，不放宽下载 TLS 或 capability check |
+| E 专项合约 | `tests/e_contracts.rs` | 8 个测试覆盖七协议、endpoint/UUID/TLS/transport、插件、flow、obfs、congestion、URI 交接和 canonical seed 跨格式等价 |
+
+本次 E 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test e_contracts
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+结果：全部退出码为 `0`。E001-E015 已完成；F001 及后续任务仍保持未开始状态。
 
 ## 10. F - Clash/Mihomo YAML 稳定适配器
 
