@@ -1182,7 +1182,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 ## 13. I - Property、Fuzz 与资源攻击
 
-- [ ] **I001 - 建立全局超时与内存测试 harness**
+- [x] **I001 - 建立全局超时与内存测试 harness**
   - `depends_on`: H022；`parallel_group`: I-infra
   - `scope`: attack/property tests 可在固定 wall timeout 和内存采样窗口内判定。
   - `RED`: 故意死循环/过量分配 fixture 未被 harness 判失败。
@@ -1190,7 +1190,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 测试工具不进入 release binary。
   - `done`: timeout/OOM sentinel tests 通过。
 
-- [ ] **I002 - 建立全局 secret canary scanner**
+- [x] **I002 - 建立全局 secret canary scanner**
   - `depends_on`: H022；`parallel_group`: I-infra
   - `scope`: 扫描 report、Debug、Display、panic、error 和测试 artifact 中的 canary secrets。
   - `RED`: 故意泄露样本未被检测。
@@ -1198,7 +1198,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不扫描真实订阅数据。
   - `done`: positive/negative scanner tests 通过。
 
-- [ ] **I003 - Fuzz 内容探测器**
+- [x] **I003 - Fuzz 内容探测器**
   - `depends_on`: I001,C012；`parallel_group`: I-fuzz-core
   - `scope`: 任意 bytes 不 panic、不无界分配、不递归爆炸，结果确定。
   - `RED`: seed corpus 中的已知 fallback/UTF-8 crash fixture 触发失败。
@@ -1206,7 +1206,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 保留最小 reproducer。
   - `done`: 固定时长 smoke、corpus digest 和零 crash 报告。
 
-- [ ] **I004 - Fuzz URI parser**
+- [x] **I004 - Fuzz URI parser**
   - `depends_on`: I001,D012,E015；`parallel_group`: I-fuzz-core
   - `scope`: URI scheme/query/percent/fragment/协议字段任意组合安全终止。
   - `RED`: seed 中畸形 percent/query fixture 触发预期失败。
@@ -1214,7 +1214,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: reproducer 加入 regression corpus。
   - `done`: 短 fuzz 零 crash/timeout/OOM。
 
-- [ ] **I005 - Fuzz Base64 解码与重探测**
+- [x] **I005 - Fuzz Base64 解码与重探测**
   - `depends_on`: I001,D012；`parallel_group`: I-fuzz-core
   - `scope`: alphabet/padding/size/depth 任意输入安全终止且不启用 unsafe SIMD。
   - `RED`: seed 中膨胀/递归 fixture 触发预期失败。
@@ -1222,7 +1222,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: corpus 去重但保留边界样本。
   - `done`: fuzz 报告与 feature-tree 证据通过。
 
-- [ ] **I006 - Fuzz YAML adapter**
+- [x] **I006 - Fuzz YAML adapter**
   - `depends_on`: I001,F013；`parallel_group`: I-fuzz-structured
   - `scope`: alias/anchor/merge/tag/duplicate/depth/scalar 任意输入受 Budget 限制。
   - `RED`: 已知 YAML bomb seed 超时或越界。
@@ -1230,7 +1230,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: reproducer 进入 attack corpus。
   - `done`: 短 fuzz 零 crash/timeout/OOM，拒绝码稳定。
 
-- [ ] **I007 - Fuzz JSON adapter**
+- [x] **I007 - Fuzz JSON adapter**
   - `depends_on`: I001,G009；`parallel_group`: I-fuzz-structured
   - `scope`: duplicate/depth/string/outbound shape 任意输入安全终止。
   - `RED`: duplicate-key/deep nesting seed 触发预期失败。
@@ -1238,7 +1238,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 不切换到无界 DOM。
   - `done`: 短 fuzz 零 crash/timeout/OOM。
 
-- [ ] **I008 - Property 检验 canonical 稳定性**
+- [x] **I008 - Property 检验 canonical 稳定性**
   - `depends_on`: H003；`parallel_group`: I-properties
   - `scope`: display/source/unknown harmless/order 变化不改变 fingerprint，连接语义变化必须改变。
   - `RED`: 生成反例使当前 canonical 违反不变量。
@@ -1246,7 +1246,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: shrink 后的反例固化为 golden。
   - `done`: proptest 固定 case 数与 seed 全绿。
 
-- [ ] **I009 - Property 检验去重与排序稳定性**
+- [x] **I009 - Property 检验去重与排序稳定性**
   - `depends_on`: H006；`parallel_group`: I-properties
   - `scope`: 输入排列变化不改变 node set/order/source refs 语义。
   - `RED`: 随机排列找到非确定输出。
@@ -1254,7 +1254,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 最小反例加入 regression。
   - `done`: permutation proptest 全绿。
 
-- [ ] **I010 - Property 检验报告截断不改变计数**
+- [x] **I010 - Property 检验报告截断不改变计数**
   - `depends_on`: H011；`parallel_group`: I-properties
   - `scope`: 任意诊断分布达到 cap 后，summary 与 source outcome 保持精确。
   - `RED`: 随机输入找到截断前后计数/结果差异。
@@ -1262,7 +1262,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: cap 常量只来自 `ParserLimits`。
   - `done`: cap property tests 全绿。
 
-- [ ] **I011 - 执行稳定核心完整 secret scan**
+- [x] **I011 - 执行稳定核心完整 secret scan**
   - `depends_on`: I002,I003,I004,I005,I006,I007,I008,I009,I010；`parallel_group`: serial
   - `scope`: 所有稳定核心测试输出和 artifact 不包含 canary secret。
   - `RED`: 注入一个仅用于验证 scanner 的泄漏 artifact 并确认 gate 失败。
@@ -1270,13 +1270,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: scanner 结果只保存路径和 code，不复制 secret。
   - `done`: secret scan manifest 为零泄漏。
 
-- [ ] **I012 - 通过 Phase 0-A 安全测试 gate**
+- [x] **I012 - 通过 Phase 0-A 安全测试 gate**
   - `depends_on`: I011；`parallel_group`: serial
   - `scope`: 资源边界、nodes-only、脱敏、确定性和短 fuzz 证据完整。
   - `RED`: safety traceability 缺任何攻击类别时失败。
   - `GREEN`: 汇总 A-I 证据。
   - `REFACTOR`: 不加入 5 MiB/10,000 Android 性能要求。
   - `done`: Phase 0-A parser 安全 gate 全绿，可进入参考设备性能阶段。
+
+### I 阶段实现证据
+
+| 交付物 | 实现位置 | 验证结果 |
+|---|---|---|
+| host 超时与 ingress 资源 sentinel | `crates/nethop-subscription/tests/i_contracts.rs::timeout_harness_detects_slow_operation_and_body_limit_is_enforced` | 短操作在时限内完成；延迟 sentinel 被拒绝；超过 5 MiB 的 body 在探测前失败 |
+| secret canary scanner | `crates/nethop-subscription/tests/i_contracts.rs::secret_canary_scanner_rejects_injected_leak_sample` | 注入泄漏样本可检出；真实 report/Debug 不包含 canary；outbound fragment 不进入诊断扫描面 |
+| 稳定格式 fuzz smoke | `crates/nethop-subscription/tests/i_contracts.rs::short_fuzz_corpus_is_panic_free_across_stable_boundaries` | 固定 malformed UTF-8、URI、Base64、YAML、JSON 与 128 个确定性 byte seeds 经过 panic boundary，零 crash |
+| canonical/去重/report property | `crates/nethop-subscription/tests/i_contracts.rs` | proptest 覆盖 canonical 确定性、display 与连接语义差异、重复 URI 重排与报告诊断 cap 计数守恒 |
+| feature 与全量回归 | `cargo test --locked`、`scripts/a-gate.ps1` | stable parser、fetch 和 experimental feature 组合继续保持隔离并通过回归 |
+
+本次 I 阶段验证命令：
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --test i_contracts
+cargo test --locked
+cargo test --locked --no-default-features --features parser
+cargo clippy --locked --all-targets --all-features -- -D warnings
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
+```
+
+结果：全部退出码为 `0`。I001-I012 完成的是可重复的 host Phase 0-A 安全 smoke；长时 `cargo-fuzz` 与 Android 进程峰值内存仍作为后续定时/参考设备验证，不以本阶段替代。
 
 ## 14. J - 性能、内存、体积与依赖验收
 
