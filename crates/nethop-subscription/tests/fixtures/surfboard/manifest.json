@@ -1,0 +1,9 @@
+{
+  "fixture_id": "surfboard-basic-v1",
+  "format": "surfboard_ini",
+  "protocol_counts": {"vmess": 1, "shadowsocks": 1, "trojan": 1, "http": 1},
+  "seed": 20260802,
+  "bytes": 654,
+  "nodes": 5,
+  "sha256": "be0a7d5d1784d7b80fc8a22d7ce9f908d98aa06d3c8463559b8331ba741d5880"
+}

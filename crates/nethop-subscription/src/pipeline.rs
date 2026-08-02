@@ -7,6 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as ShaDigest, Sha256};
+use thiserror::Error;
 
 use crate::{
     adapter::{AdapterNodeResult, AdapterOutput},
@@ -21,6 +22,8 @@ use crate::{
 };
 
 const FINGERPRINT_DOMAIN: &[u8] = b"nethop-node-v1\0";
+pub const CURRENT_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_FINGERPRINT_SCHEMA: &str = "nh-fp-sha256-v1";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct NodeFingerprint([u8; 32]);
@@ -243,6 +246,89 @@ pub struct ConversionReport {
     pub diagnostic_counts: BTreeMap<DiagnosticCode, usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportCompatibility {
+    Current,
+    LegacyRebuildRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ReportReadError {
+    #[error("report JSON is invalid")]
+    InvalidJson,
+    #[error("report schema version is unsupported")]
+    UnsupportedSchema,
+    #[error("report fingerprint schema does not match the current algorithm")]
+    FingerprintSchemaMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionedReport {
+    pub schema_version: u32,
+    pub fingerprint_schema: String,
+    pub compatibility: ReportCompatibilityWire,
+    pub report: ConversionReport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportCompatibilityWire {
+    Current,
+    LegacyRebuildRequired,
+}
+
+impl VersionedReport {
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn fingerprint_schema(&self) -> &str {
+        &self.fingerprint_schema
+    }
+
+    pub const fn compatibility(&self) -> ReportCompatibility {
+        match self.compatibility {
+            ReportCompatibilityWire::Current => ReportCompatibility::Current,
+            ReportCompatibilityWire::LegacyRebuildRequired => {
+                ReportCompatibility::LegacyRebuildRequired
+            }
+        }
+    }
+}
+
+pub fn write_versioned_report(report: &ConversionReport) -> Result<Vec<u8>, ReportReadError> {
+    serde_json::to_vec(&VersionedReport {
+        schema_version: CURRENT_REPORT_SCHEMA_VERSION,
+        fingerprint_schema: CURRENT_FINGERPRINT_SCHEMA.to_owned(),
+        compatibility: ReportCompatibilityWire::Current,
+        report: report.clone(),
+    })
+    .map_err(|_| ReportReadError::InvalidJson)
+}
+
+pub fn read_versioned_report(input: &[u8]) -> Result<VersionedReport, ReportReadError> {
+    let value: serde_json::Value =
+        serde_json::from_slice(input).map_err(|_| ReportReadError::InvalidJson)?;
+    if value.get("schema_version").is_none() {
+        let report = serde_json::from_value(value).map_err(|_| ReportReadError::InvalidJson)?;
+        return Ok(VersionedReport {
+            schema_version: 0,
+            fingerprint_schema: "legacy-unknown".to_owned(),
+            compatibility: ReportCompatibilityWire::LegacyRebuildRequired,
+            report,
+        });
+    }
+    let report: VersionedReport =
+        serde_json::from_value(value).map_err(|_| ReportReadError::InvalidJson)?;
+    if report.schema_version != CURRENT_REPORT_SCHEMA_VERSION {
+        return Err(ReportReadError::UnsupportedSchema);
+    }
+    if report.fingerprint_schema != CURRENT_FINGERPRINT_SCHEMA {
+        return Err(ReportReadError::FingerprintSchemaMismatch);
+    }
+    Ok(report)
+}
+
 impl ConversionReport {
     pub fn bounded_json(&self, limits: &ParserLimits) -> String {
         let mut copy = self.clone();
@@ -340,10 +426,16 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
             object.insert("security".into(), json!(security.as_str()));
         }
         Credentials::Shadowsocks {
-            method, password, ..
+            method,
+            password,
+            plugin,
         } => {
             object.insert("method".into(), json!(method.as_str()));
             object.insert("password".into(), json!(password.expose()));
+            if let Some(plugin) = plugin {
+                object.insert("plugin".into(), json!(plugin.name.as_str()));
+                object.insert("plugin_opts".into(), json!(plugin_options(plugin)));
+            }
         }
         Credentials::Trojan { password } | Credentials::AnyTls { password } => {
             object.insert("password".into(), json!(password.expose()));
@@ -351,7 +443,10 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
         Credentials::Hysteria2 { password, obfs } => {
             object.insert("password".into(), json!(password.expose()));
             if let Some(obfs) = obfs {
-                object.insert("obfs".into(), json!({"type": obfs.as_str()}));
+                object.insert(
+                    "obfs".into(),
+                    json!({"type": obfs.kind.as_str(), "password": obfs.password.expose()}),
+                );
             }
         }
         Credentials::Tuic { uuid, password } => {
@@ -367,6 +462,15 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
     }
     if let ProtocolOptions::Vless { flow: Some(flow) } = node.node.protocol_options() {
         object.insert("flow".into(), json!(flow.as_str()));
+    }
+    if let ProtocolOptions::Tuic {
+        congestion_control: Some(congestion_control),
+    } = node.node.protocol_options()
+    {
+        object.insert(
+            "congestion_control".into(),
+            json!(congestion_control.as_str()),
+        );
     }
     serde_json::to_value(object).expect("outbound object must serialize")
 }
@@ -503,6 +607,11 @@ fn parse_source(
             crate::parse_singbox_json(&input.bytes, Some(&input.source_id), limits, matrix)
                 .unwrap_or_else(|error| source_error(error.code))
         }
+        #[cfg(feature = "format-surfboard")]
+        FormatHint::IniProfile | FormatHint::SurfboardIni => {
+            crate::parse_surfboard_ini(&input.bytes, Some(&input.source_id), limits, matrix)
+                .unwrap_or_else(|error| source_error(error.code))
+        }
         _ => single_error(DiagnosticCode::UnsupportedSemantics),
     }
 }
@@ -590,17 +699,19 @@ fn encode_credentials(out: &mut Vec<u8>, credentials: &Credentials) {
                 "plugin",
                 plugin.as_ref().map_or("", |plugin| plugin.name.as_str()),
             );
+            if let Some(plugin) = plugin {
+                field(out, "plugin_opts", &plugin_options(plugin));
+            }
         }
         Credentials::Trojan { password } | Credentials::AnyTls { password } => {
             field(out, "password", password.expose())
         }
         Credentials::Hysteria2 { password, obfs } => {
             field(out, "password", password.expose());
-            field(
-                out,
-                "obfs",
-                obfs.as_ref().map_or("", |value| value.as_str()),
-            );
+            if let Some(obfs) = obfs {
+                field(out, "obfs", obfs.kind.as_str());
+                field(out, "obfs_password", obfs.password.expose());
+            }
         }
         Credentials::Tuic { uuid, password } => {
             field(out, "uuid", uuid.expose());
@@ -667,12 +778,20 @@ fn encode_transport(out: &mut Vec<u8>, transport: &TransportOptions) {
 }
 
 fn encode_protocol_options(out: &mut Vec<u8>, options: &ProtocolOptions) {
-    if let ProtocolOptions::Vless { flow } = options {
-        field(
+    match options {
+        ProtocolOptions::Vless { flow } => field(
             out,
             "flow",
             flow.as_ref().map_or("", |value| value.as_str()),
-        );
+        ),
+        ProtocolOptions::Tuic { congestion_control } => field(
+            out,
+            "congestion_control",
+            congestion_control
+                .as_ref()
+                .map_or("", |value| value.as_str()),
+        ),
+        _ => {}
     }
 }
 
@@ -697,10 +816,13 @@ fn tls_json(tls: &crate::protocol::TlsOptions) -> Value {
         );
     }
     if let Some(fingerprint) = &tls.client_fingerprint {
-        object.insert("utls".into(), json!({"fingerprint": fingerprint.as_str()}));
+        object.insert(
+            "utls".into(),
+            json!({"enabled": true, "fingerprint": fingerprint.as_str()}),
+        );
     }
     if let Some(reality) = &tls.reality {
-        object.insert("reality".into(), json!({"public_key": reality.public_key.expose(), "short_id": reality.short_id.as_ref().map(|value| value.expose())}));
+        object.insert("reality".into(), json!({"enabled": true, "public_key": reality.public_key.expose(), "short_id": reality.short_id.as_ref().map(|value| value.expose())}));
     }
     serde_json::to_value(object).expect("tls object must serialize")
 }
@@ -729,6 +851,15 @@ fn field(out: &mut Vec<u8>, name: &str, value: &str) {
     out.extend_from_slice(name.as_bytes());
     out.extend_from_slice(&(value.len() as u32).to_be_bytes());
     out.extend_from_slice(value.as_bytes());
+}
+
+fn plugin_options(plugin: &crate::protocol::PluginSpec) -> String {
+    plugin
+        .options
+        .iter()
+        .map(|(key, value)| format!("{}={}", key.as_str(), value.as_str()))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn merge_refs(target: &mut Vec<SourceRef>, refs: &[SourceRef], cap: usize) {

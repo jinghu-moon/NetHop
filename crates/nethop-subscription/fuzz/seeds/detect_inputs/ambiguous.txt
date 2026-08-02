@@ -1,0 +1,2 @@
+proxies: []
+[{"type":"trojan"}]

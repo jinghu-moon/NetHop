@@ -1,0 +1,71 @@
+{
+  "log": {"disabled": true},
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "fixture-vless",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "uuid": "550e8400-e29b-41d4-a716-446655440000",
+      "flow": "xtls-rprx-vision",
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true, "utls": {"enabled": true, "fingerprint": "chrome"}}
+    },
+    {
+      "type": "vmess",
+      "tag": "fixture-vmess",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "uuid": "550e8400-e29b-41d4-a716-446655440000",
+      "security": "auto",
+      "alter_id": 0,
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true},
+      "transport": {"type": "ws", "path": "/fixture"}
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "fixture-shadowsocks",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "method": "aes-128-gcm",
+      "password": "fixture-password",
+      "plugin": "obfs-local",
+      "plugin_opts": "obfs=tls;obfs-host=example.com"
+    },
+    {
+      "type": "trojan",
+      "tag": "fixture-trojan",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "password": "fixture-password",
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true},
+      "transport": {"type": "grpc", "service_name": "fixture"}
+    },
+    {
+      "type": "hysteria2",
+      "tag": "fixture-hysteria2",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "password": "fixture-password",
+      "obfs": {"type": "salamander", "password": "fixture-obfs-password"},
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true}
+    },
+    {
+      "type": "tuic",
+      "tag": "fixture-tuic",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "uuid": "550e8400-e29b-41d4-a716-446655440000",
+      "password": "fixture-password",
+      "congestion_control": "bbr",
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true}
+    },
+    {
+      "type": "anytls",
+      "tag": "fixture-anytls",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "password": "fixture-password",
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true}
+    }
+  ]
+}

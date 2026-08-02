@@ -189,6 +189,12 @@ pub struct PluginSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hysteria2Obfs {
+    pub kind: BoundedText,
+    pub password: SecretString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Credentials {
     Vless {
         uuid: UuidValue,
@@ -208,7 +214,7 @@ pub enum Credentials {
     },
     Hysteria2 {
         password: SecretString,
-        obfs: Option<BoundedText>,
+        obfs: Option<Hysteria2Obfs>,
     },
     Tuic {
         uuid: UuidValue,
@@ -310,12 +316,16 @@ impl FromStr for TransportKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolOptions {
     None,
-    Vless { flow: Option<BoundedText> },
+    Vless {
+        flow: Option<BoundedText>,
+    },
     Vmess,
     Shadowsocks,
     Trojan,
     Hysteria2,
-    Tuic,
+    Tuic {
+        congestion_control: Option<BoundedText>,
+    },
     AnyTls,
 }
 
@@ -458,17 +468,25 @@ impl ProxyNode {
             return Err(NodeValidationError::InvalidTlsCombination);
         }
         if let Credentials::Shadowsocks { method, plugin, .. } = &node.credentials {
-            if plugin.is_some()
-                || !matches!(
-                    method.as_str(),
-                    "aes-128-gcm"
-                        | "aes-256-gcm"
-                        | "chacha20-ietf-poly1305"
-                        | "2022-blake3-aes-128-gcm"
-                        | "2022-blake3-aes-256-gcm"
-                        | "2022-blake3-chacha20-poly1305"
-                )
-            {
+            if !matches!(
+                method.as_str(),
+                "aes-128-gcm"
+                    | "aes-256-gcm"
+                    | "chacha20-ietf-poly1305"
+                    | "2022-blake3-aes-128-gcm"
+                    | "2022-blake3-aes-256-gcm"
+                    | "2022-blake3-chacha20-poly1305"
+            ) || plugin.as_ref().is_some_and(|plugin| {
+                plugin.name.as_str() != "obfs-local"
+                    || plugin
+                        .options
+                        .keys()
+                        .any(|key| !matches!(key.as_str(), "obfs" | "obfs-host"))
+                    || !matches!(
+                        plugin.options.get("obfs").map(BoundedText::as_str),
+                        Some("http" | "tls")
+                    )
+            }) {
                 return Err(NodeValidationError::UnsupportedSemantics);
             }
         }

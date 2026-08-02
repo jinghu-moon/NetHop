@@ -1,0 +1,57 @@
+[package]
+name = "nethop-subscription-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[workspace]
+members = ["."]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+nethop-subscription = { path = "..", default-features = false, features = [
+  "parser",
+  "format-uri",
+  "format-base64",
+  "format-clash-yaml",
+  "format-singbox-json",
+  "format-surfboard",
+] }
+
+[[bin]]
+name = "detect_inputs"
+path = "fuzz_targets/detect_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "uri_base64_inputs"
+path = "fuzz_targets/uri_base64_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "clash_yaml_inputs"
+path = "fuzz_targets/clash_yaml_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "singbox_json_inputs"
+path = "fuzz_targets/singbox_json_inputs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "surfboard_inputs"
+path = "fuzz_targets/surfboard_inputs.rs"
+test = false
+doc = false
+bench = false

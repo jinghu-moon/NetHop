@@ -1,6 +1,6 @@
 # NetHop 订阅导入与解析库设计
 
-> 状态：Draft v0.6  
+> 状态：Draft v0.7
 > 日期：2026-08-02  
 > 适用范围：NetHop Phase 0-A 至首个稳定版  
 > 上位文档：[`00-nethop-system-design.md`](./00-nethop-system-design.md)  
@@ -24,7 +24,8 @@ NetHop 是 Android 13+ 的 root 透明代理模块。订阅解析库负责把二
 
 非目标：
 
-- 不实现完整 Mihomo、Surge、Stash、Surfboard、Shadowrocket 或 Quantumult X 运行时；
+- 不实现完整 Mihomo、Surfboard 或 sing-box 运行时；
+- 不适配只服务于 iOS/macOS 客户端的 Stash、Surge、Shadowrocket、Quantumult X 专用配置方言；其中通用 URI/Base64 节点仍按稳定容器导入；
 - 不把客户端的完整策略配置迁移为 NetHop 路由配置；
 - 不在 parser 中下载嵌套订阅、执行脚本或访问本地文件；
 - 不为了“格式支持数量”伪造无法映射到 sing-box 的协议；
@@ -52,8 +53,8 @@ NetHop 是 Android 13+ 的 root 透明代理模块。订阅解析库负责把二
 | 输入载体 | 二维码解码结果、文件字节、用户粘贴文本或 HTTP 响应 |
 | payload | 带来源元数据和有界字节的待解析输入 |
 | 容器格式 | URI 列表、Base64 URI 列表、YAML、JSON、INI/snippet 等包装形式 |
-| 客户端方言 | Mihomo/Clash、Stash、Surge、Surfboard、Shadowrocket、sing-box、Quantumult X 的字段和语法变体 |
-| 协议 | VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS 等实际代理协议 |
+| 客户端方言 | Android 相关的 Mihomo/Clash、Surfboard、sing-box 字段和语法变体 |
+| 协议 | Android sing-box 数据面可验证的代理协议；首版导入白名单为 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS |
 | `UnvalidatedNode` | 格式适配器提取但尚未完成语义校验的节点 |
 | `ProxyNode` | 通过统一语义校验、可生成 sing-box outbound 的可信节点 |
 | source | 用户配置的一条订阅来源，拥有独立缓存和状态 |
@@ -134,18 +135,8 @@ format-uri = ["parser"]
 format-base64 = ["parser", "format-uri"]
 format-clash-yaml = ["parser", "dep:serde-saphyr"]
 format-singbox-json = ["parser"]
-format-stash = ["parser", "format-clash-yaml"]
-format-surge = ["parser"]
-format-surfboard = ["parser", "format-surge"]
-format-shadowrocket = ["parser", "format-uri"]
-format-quantumultx = ["parser"]
-experimental-formats = [
-  "format-stash",
-  "format-surge",
-  "format-surfboard",
-  "format-shadowrocket",
-  "format-quantumultx",
-]
+format-surfboard = ["parser"]
+experimental-formats = ["format-surfboard"]
 fetch = ["parser", "dep:flate2", "dep:ureq", "dep:url"]
 
 [dependencies]
@@ -218,7 +209,7 @@ incremental = false
 
 #### 为什么使用 `serde-saphyr`
 
-Clash/Mihomo/Stash YAML 是不可信输入，解析器必须能限制：
+Clash/Mihomo YAML 是不可信输入，解析器必须能限制：
 
 - reader bytes、events、nodes、documents 和 scalar bytes；
 - nesting depth；
@@ -229,7 +220,7 @@ Clash/Mihomo/Stash YAML 是不可信输入，解析器必须能限制：
 
 `deserialize` 本身仍固定引入 `granit-parser`、`smallvec`、`encoding_rs_io`、`num-traits` 和 `annotate-snippets`。即使运行时关闭 snippet 渲染，当前版本也不能通过 feature 移除 `annotate-snippets`，所以不得把它描述为零成本依赖。Phase 0-A 先完成源码、feature tree 与 Host 安全行为审计；Phase 0-B 再以 Android arm64 产物和 peak RSS 判断是否接受。当前选型基线为 `1.x`，两个阶段合计必须验证：
 
-1. Clash/Mihomo/Stash 的实际 YAML 语法、merge key 和重复 key 行为；
+1. Clash/Mihomo 的实际 YAML 语法、merge key 和重复 key 行为；
 2. 行列位置是否足够支持 `NodeDiagnostic`；
 3. 5 MiB/10,000 节点的转换时间和 peak RSS；
 4. alias bomb、深度和超长 scalar 的拒绝时间；
@@ -261,10 +252,10 @@ parser-only 依赖树出现 `url`、`idna` 或 ICU4X 即视为 feature 泄漏并
 
 #### 不引入通用 INI/正则/二维码库
 
-- Surge、Surfboard、Shadowrocket、Quantumult X 需要保留行号、逗号边界、转义和方言语义；使用小型本地 tokenizer 比通用 INI crate 更可控；
+- Surfboard 需要保留行号、逗号边界、转义和方言语义；使用小型本地 tokenizer 比通用 INI crate 更可控；
 - 首版不使用 `regex` 处理不可信用户表达式，避免 ReDoS 和额外代码体积；过滤和节点名称策略由受审核的简单匹配实现；
 - 二维码由未来 Kotlin App 的 ML Kit/平台能力完成，Rust 只接收 barcode raw value；
-- 不引入完整 Clash/Surge/Quantumult X 配置框架，因为它们会把策略、脚本、provider 和外部资源带入 root 控制面。
+- 不引入完整 Clash/Surfboard 配置框架，因为它们会把策略、脚本、provider 和外部资源带入 root 控制面。
 
 #### 纯 parser 不应携带的依赖
 
@@ -514,17 +505,12 @@ RequestProfile =
   NetHopGeneric
   | Mihomo
   | ClashStandard
-  | Stash
-  | Surge
   | Surfboard
-  | Shadowrocket
   | SingBox
   | SingBoxAndroid
-  | SingBoxTvOS
-  | QuantumultX
 ```
 
-请求 profile 只决定内建的 User-Agent/Accept 组合，不决定 parser，也不证明响应格式正确。SFA、SFT 和普通 sing-box 可以共享 `SingBoxJsonAdapter`，但使用不同 request profile。自动模式默认只请求一次 `NetHopGeneric`；不通过轮换多个客户端 UA 猜测内容，以免重复请求或触发供应商风控。
+请求 profile 只决定内建的 User-Agent/Accept 组合，不决定 parser，也不证明响应格式正确。`Mihomo` 与 `ClashStandard` 都返回 Clash YAML，但保留独立 UA/Accept 以适配机场的 Android 客户端分发策略；两者共享 `ClashYamlAdapter`。`SingBox` 是通用 sing-box 请求，`SingBoxAndroid` 对应 SFA/Android 请求，二者共享 `SingBoxJsonAdapter`。自动模式默认只请求一次 `NetHopGeneric`；不通过轮换多个客户端 UA 猜测内容，以免重复请求或触发供应商风控。
 
 用户自定义 header 采用 allowlist。`Authorization`/Cookie 作为 secret 字段独立存储；禁止覆盖 `Host`、`Connection`、`Content-Length`、`Transfer-Encoding`、`Proxy-Authorization` 等 hop-by-hop 或安全敏感 header。
 
@@ -551,10 +537,9 @@ RequestProfile =
 3. URI scheme 行首证据；
 4. JSON 顶层结构证据；
 5. YAML/Clash `proxies` 结构证据；
-6. INI section/header 证据；
-7. Quantumult X server line 证据；
-8. 最后尝试有界 Base64 解码，并对解码结果重新探测；
-9. 仍无法确定时返回 `unknown_format`，不静默尝试所有 parser。
+6. Surfboard INI section/header 证据；
+7. 最后尝试有界 Base64 解码，并对解码结果重新探测；
+8. 仍无法确定时返回 `unknown_format`，不静默尝试所有 parser。
 
 ### 6.3 证据规则
 
@@ -563,14 +548,13 @@ RequestProfile =
 | 第一条有效内容以 `ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://`、`hy2://`、`tuic://`、`anytls://` 开始 | URI list |
 | 顶层 JSON object 且存在 `outbounds` 数组 | sing-box JSON |
 | 顶层 JSON array 且元素具有 `type`/`tag` 等 outbound 字段 | sing-box outbound array |
-| YAML map 的 `proxies` 为 sequence | Clash/Mihomo/Stash YAML |
-| `[Proxy]`、`[General]`、`[Proxy Group]` 等 section | Surge/Surfboard/Shadowrocket INI 方言 |
-| 行首出现 `scheme=host:port` 或 Quantumult X server key/value 结构 | Quantumult X snippet |
+| YAML map 的 `proxies` 为 sequence | Clash/Mihomo YAML |
+| `[Proxy]` 与 Surfboard profile section 结构 | Surfboard INI |
 | Base64 解码后可重复识别为 URI list/JSON/YAML | Base64 wrapped format |
 
 包含 `proxies:` 的字符串但 YAML 解析失败，必须返回 YAML 诊断；不能退回 Base64。JSON 解析失败但首字符为 `{` 时，也必须报告 JSON 结构错误。这样可以避免恶意输入通过失败回退消耗大量 CPU。
 
-多个候选同时拥有强结构证据时返回 `ambiguous_format`。Surge/Surfboard/Shadowrocket 同属 INI 家族且没有足够方言证据时，只允许解析已经证明语义一致的公共子集，并将方言记为 `surge_family_unknown`；遇到方言相关关键字段则返回 `ambiguous_dialect`，要求用户提供 format hint。
+多个候选同时拥有强结构证据时返回 `ambiguous_format`。INI 自动探测只面向 Surfboard；仅出现通用 `[Proxy]` 而没有足够 Surfboard 证据时，保持 `ini_profile` 候选并要求 `surfboard_ini` hint，不尝试猜测 iOS/macOS 方言。
 
 ### 6.4 强制格式 hint
 
@@ -581,10 +565,7 @@ uri_list
 base64_list
 clash_yaml
 singbox_json
-surge_ini
 surfboard_ini
-shadowrocket_servers
-quantumultx_snippet
 ```
 
 强制 hint 只减少歧义，不绕过安全限制。内容与 hint 不匹配时返回 `format_hint_mismatch`，不自动切换其他 parser，除非 CLI 明确使用 `--format auto`。
@@ -596,13 +577,10 @@ quantumultx_snippet
 | 展示名称 | 真实容器/方言 | 适配器 | 节点提取范围 |
 |---|---|---|---|
 | Mihomo / Clash Meta | Clash YAML | `ClashYamlAdapter` | 顶层 `proxies` |
-| Clash Standard / Backup | Clash YAML | `ClashYamlAdapter` | 顶层 `proxies` |
-| Stash | Clash-compatible YAML 方言 | `StashYamlAdapter` | 顶层 `proxies` |
-| Surge | Surge INI profile | `SurgeIniAdapter` | `[Proxy]` |
-| Surfboard | Surge-compatible INI profile | `SurfboardIniAdapter` | `[Proxy]` |
-| Shadowrocket servers-only | URI list 或 servers snippet | `UriListAdapter`/`ShadowrocketSnippetAdapter` | server entries |
-| sing-box / SFA / SFT | sing-box JSON | `SingBoxJsonAdapter` | 白名单终端 outbounds |
-| Quantumult X | server URI/snippet | `QuantumultXAdapter` | `[server_local]` 或 server snippet |
+| Clash Standard / Backup / CFA | Clash YAML | `ClashYamlAdapter` | 顶层 `proxies` |
+| Surfboard | Surfboard INI profile | `SurfboardIniAdapter` | `[Proxy]` |
+| sing-box / SFA | sing-box JSON | `SingBoxJsonAdapter` | 白名单终端 outbounds |
+| 任意客户端导出的通用节点 | URI list 或 Base64 URI list | `UriListAdapter` | 白名单 URI entries |
 
 适配器共享 tokenizer、Base64、URI query、TLS、transport 和诊断工具，但不共享未经验证的字段语义。
 
@@ -613,9 +591,9 @@ quantumultx_snippet
 | 分类 | 格式/方言 | 发布要求 |
 |---|---|---|
 | 稳定核心 | URI/Base64 URI、Clash/Mihomo YAML、sing-box outbounds JSON | 默认构建；每种标准 5 MiB/10,000 节点 fixture 都必须满足 300 ms 和 110 MiB 总峰值门槛 |
-| 兼容扩展 | Stash YAML、Surge、Surfboard、Shadowrocket snippet、Quantumult X snippet | 独立 Cargo feature 和 fixture；默认不扩大核心依赖；完成能力矩阵、fuzz、脱敏 golden、Android arm64 报告后才能在发布包启用 |
+| Android 兼容扩展 | Surfboard INI | 独立 Cargo feature 和 fixture；默认不扩大核心依赖；完成能力矩阵、fuzz、脱敏 golden、Android arm64 报告后才能在发布包启用 |
 
-这不是删除用户需要的机场类型：Shadowrocket 通常先走稳定 URI/Base64 路径，Stash 通常复用受限 YAML 路径。兼容扩展的目的仅是隔离 INI/snippet 方言长尾，避免在稳定核心尚未达到性能门槛时拖慢首版交付。启用扩展后同样不得放宽 nodes-only、协议白名单、资源限制、SSRF、脱敏、active limit 或事务发布规则。
+不为 Stash、Surge、Shadowrocket、Quantumult X 增加专用 adapter、format hint、request profile、fixture gate 或发布承诺。它们若输出标准 URI/Base64，仍由客户端无关的稳定容器解析；若只输出专用配置，返回 `unsupported_format`/`unknown_format`。兼容扩展的目的仅是覆盖 Android 上实际使用的 Surfboard，同时隔离 INI 方言长尾。启用扩展后同样不得放宽 nodes-only、协议白名单、资源限制、SSRF、脱敏、active limit 或事务发布规则。
 
 ### 7.2 `FormatAdapter` 与共享能力矩阵
 
@@ -646,8 +624,7 @@ NetHop 只导入可作为终端代理 outbound 的节点。以下字段永远不
 
 - inbound/listen/address/port；
 - Clash/Mihomo `rules`、`proxy-groups`、`proxy-providers`、`rule-providers`；
-- Surge/Surfboard `[General]`、`[Proxy Group]`、`[Rule]`、`[Script]`、`[MITM]`、`[URL Rewrite]`；
-- Quantumult X `[general]`、`[filter]`、`[rewrite]`、`[task]`、`[server_remote]` 的嵌套远程资源；
+- Surfboard `[General]`、`[Proxy Group]`、`[Rule]`、`[Script]`、`[MITM]`、`[URL Rewrite]`；
 - sing-box `route`、`dns`、`inbounds`、`services`、`experimental`、`certificate`、本地 path；
 - 脚本、正则执行体、模板、外部 include、provider URL 和文件路径；
 - 客户端 UI、图标、测速 URL、更新周期和策略组成员。
@@ -666,7 +643,7 @@ NetHop 只导入可作为终端代理 outbound 的节点。以下字段永远不
 
 ### 9.1 支持的 URI scheme
 
-首版协议白名单：
+Android sing-box 数据面可能还支持 Naive、WireGuard、HTTP/SOCKS、Mieru 等其他 outbound；这些能力不自动进入 NetHop parser。首版协议白名单：
 
 | Scheme | 协议 |
 |---|---|
@@ -678,7 +655,7 @@ NetHop 只导入可作为终端代理 outbound 的节点。以下字段永远不
 | `tuic://` | TUIC |
 | `anytls://` | AnyTLS |
 
-`socks://`、`socks5://`、`http://`、`wireguard://` 等可作为诊断识别，但如果未纳入首版协议白名单，不得生成活动 outbound。是否把 SOCKS/HTTP/WireGuard 加入首版必须通过独立协议 ADR，不能因为某个客户端能导入就默认支持。
+`socks://`、`socks5://`、`http://`、`wireguard://`、`naive+https://`、`mieru://` 等可作为诊断识别，但如果未纳入首版协议白名单，不得生成活动 outbound。是否加入首版必须通过独立协议 ADR，至少证明 sing-box 版本能力、Android arm64 连通性、统计归因、资源预算和安全边界；不能因为 SFA 或其他客户端能导入就默认支持。
 
 ### 9.2 行处理
 
@@ -708,11 +685,11 @@ ASCII candidate
 
 URI fast path 还必须限制：query 参数最多 64 个、fragment 最多 256 bytes、VMess 内嵌 JSON 最多 64 KiB。行切分和 scheme 分发优先使用 byte slice；不得为了方便给每行构造完整 `url::Url`。完整 `url` crate 保留给 HTTPS source URL 和确实需要通用 URL 语义的字段。
 
-## 10. Clash/Mihomo/Stash YAML
+## 10. Clash/Mihomo YAML
 
 ### 10.1 解析范围
 
-Mihomo 使用 YAML；Clash-compatible/Stash 配置也通常将终端节点放在顶层 `proxies`。适配器只接受：
+Mihomo 与 Clash Standard 使用 YAML，并通常将终端节点放在顶层 `proxies`。适配器只接受：
 
 ```yaml
 proxies:
@@ -768,17 +745,6 @@ YAML tag 不触发对象构造、命令、网络或文件读取；`!include`/自
 
 未知字段本身不失败；未知但会改变连接语义的 `type`、transport、TLS mode 或协议枚举必须拒绝节点。
 
-### 10.4 Stash 方言
-
-Stash 的 `proxies` 结构与 Clash-compatible YAML 有较大共性，但不能将所有 Stash 字段声明为 Mihomo 字段。`StashYamlAdapter` 只在以下条件下复用 Clash 映射：
-
-1. YAML 结构通过有界解析；
-2. `type` 在协议白名单内；
-3. 字段映射已在 Stash fixture 中验证；
-4. Stash 专用字段没有被错误当作 Clash 同名字段。
-
-例如 Stash 的端口跳跃、UDP DNS 和证书指纹字段应单独映射或报告 unsupported，不能静默忽略后生成错误连接。
-
 ## 11. sing-box JSON
 
 ### 11.1 接受的顶层形态
@@ -809,11 +775,11 @@ JSON object 不能依赖 `serde_json::Value` 的重复 key 覆盖行为。typed 
 
 sing-box 官方配置本身包含 `log`、`dns`、`inbounds`、`outbounds`、`route`、`services` 和 `experimental` 等顶层区域；NetHop 只读取经过白名单审计的终端 outbounds。
 
-## 12. Surge、Surfboard 与 Shadowrocket INI
+## 12. Surfboard INI
 
-### 12.1 共同语法层
+### 12.1 语法层
 
-Surge、Surfboard 和部分 Shadowrocket 配置使用 section-based INI 风格，但字段分隔符、转义和协议参数存在差异。实现分两层：
+Surfboard 配置使用 section-based INI 风格。实现分两层：
 
 ```text
 INI tokenizer
@@ -833,62 +799,23 @@ Tokenizer 负责：
 
 它不决定 `https` 是 HTTP over TLS 还是一个订阅 URL，也不把任意逗号字段自动当密码。
 
-### 12.2 Surge `[Proxy]`
+### 12.2 Surfboard `[Proxy]`
 
-Surge profile 的 `[Proxy]` 是代理策略定义区。首版只读取该 section 的节点行，支持与 sing-box 1.13.15 白名单相交的协议和字段。
-
-示意：
-
-```ini
-[Proxy]
-ProxyHTTPS = https, example.com, 443, username, password
-ProxyVMess = vmess, example.com, 443, username=uuid, ws=true, tls=true, ws-path=/v2
-```
-
-以下内容不导入：
-
-- `[General]`；
-- `[Proxy Group]`；
-- `[Rule]`；
-- `#!MANAGED-CONFIG` 的更新语义；
-- `include`、脚本、模块和外部路径。
-
-Surge 的 `underlying-proxy`、interface、policy group 和客户端专有参数只有在独立 mapping fixture 证明不改变 NetHop 安全边界时才考虑。否则保留 warning 并拒绝需要该字段才能连接的节点。
-
-### 12.3 Surfboard `[Proxy]`
-
-Surfboard 使用与 Surge 相近的 profile 模板，但其 `ProxyVMess`、`ProxySS`、`ProxyTrojan` 等参数名和布尔字段存在自己的约定。`SurfboardIniAdapter` 不直接复用 Surge 的语义转换，只复用 tokenizer 和公共协议解析器。
+Surfboard 的 `ProxyVMess`、`ProxySS`、`ProxyTrojan` 等参数名和布尔字段有自己的约定。`SurfboardIniAdapter` 只复用本地 tokenizer 和公共协议语义校验器，不引入或复用其他客户端方言映射。
 
 首版 tokenizer 应能识别机场常见的 `http`/`https`、`socks5`/`socks5-tls`、`ss`、`vmess`、`trojan` 等行式类型，但只把七协议白名单的交集转换为 `ProxyNode`。因此首版实际映射重点是 Shadowsocks、VMess、Trojan 以及经 fixture 验证的 Hysteria2、TUIC、AnyTLS；HTTP/SOCKS 节点返回 `unsupported_protocol`，不能因为 Surfboard 能运行就绕开 NetHop 的协议范围。
 
+Surfboard 的 Shadowsocks `obfs`/`obfs-host` 只允许窄映射为 sing-box 内置 `obfs-local`：`obfs` 必须为 `http` 或 `tls`，`obfs-host` 可选且有界，composer 生成 `plugin="obfs-local"` 与确定性的 `plugin_opts`。任意其他 plugin、plugin option 或缺少 `obfs` 的组合继续返回 `unsupported_semantics`。此白名单由 sing-box 1.13.15 的 `transport/sip003/obfs.go`、`test/ss_plugin_test.go` 和官方 Shadowsocks outbound 文档共同证明，不代表开放任意 SIP003 透传。
+
+`[Proxy]` 中的 `direct` 是客户端内置策略，不是终端代理节点；adapter 只生成一次 `non_node_section_ignored` 汇总 warning，不把它计入 accepted/rejected，也不生成 direct outbound。
+
 `[Proxy Group]`、`[Rule]`、`#!MANAGED-CONFIG`、`policy-path` 和远程策略资源一律不导入。
 
-### 12.4 Shadowrocket servers-only
+## 13. Android-only 方言范围
 
-Shadowrocket 的 servers-only 订阅可能是 URI list、Base64 URI list 或服务器片段。探测顺序应优先走通用 URI/Base64，再在明确的 section/snippet 证据下走 `ShadowrocketSnippetAdapter`。
+NetHop 只面向 Android。客户端专用配置适配范围冻结为 Mihomo/Clash YAML、Clash Standard YAML、sing-box Android JSON 和 Surfboard INI；URI/Base64 是客户端无关的稳定容器。Stash、Surge、Shadowrocket、Quantumult X 的专用配置语法属于 `out_of_scope`，不会获得 tokenizer、adapter、format hint、request profile 或 release fixture。
 
-Shadowrocket 配置文件中的 `[Proxy]`、`[Proxy Group]`、`[Rule]`、`[URL Rewrite]`、`[Script]`、`[MITM]` 等策略区域不进入 NetHop。WireGuard INI 可被识别并返回 `unsupported_protocol`，除非未来 ADR 将 WireGuard 纳入协议白名单。
-
-## 13. Quantumult X
-
-Quantumult X 的服务器资源可以是单节点 URI、server snippet 或完整配置中的 `[server_local]`/`[server_remote]`。首版只处理本地内容中的终端节点：
-
-- `[server_local]` 节点行；
-- 直接提供的 server snippet；
-- 已识别的 URI list/Base64 list。
-
-`[server_remote]` 中的 URL 不递归下载。`tag`、`enabled`、`update-interval`、`opt-parser` 是客户端资源管理字段，不进入 `ProxyNode`；可以写入 source warning 或 provenance，但不能控制 NetHop 调度。
-
-Quantumult X 的 `server=...`、`shadowsocks=...`、`vmess=...`、`trojan=...` 等行式语法需要专用 tokenizer：
-
-- 以协议 key 识别行类型；
-- 仅按协议定义拆分第一个地址/端口和后续 key/value；
-- 支持有界 quoted value 与转义；
-- `tag` 作为 display name；
-- 未知 key 记录 warning；
-- 影响连接的未知 obfs、TLS 或 transport 参数拒绝节点。
-
-不得把 Quantumult X 的 `resource_parser_url`、JavaScript、rewrite、filter 或 remote task 作为解析器扩展点。
+此范围限制不等于按客户端来源拒绝内容：只要输入本身是稳定 URI/Base64、Clash/Mihomo YAML 或 sing-box JSON，就按内容结构解析。解析器不读取 URL 路径或客户端品牌名称来绕过格式与协议白名单。
 
 ## 14. 统一 `ProxyNode` IR
 
@@ -996,7 +923,7 @@ TransportOptions =
 4. parser 与 composer golden 一致；
 5. TCP/UDP/QUIC、统计归因和资源闸门中适用项已验证。
 
-任何 adapter 遇到矩阵未列出的组合都返回 `unsupported_transport` 或 `unsupported_semantics`，不得根据客户端名称猜测。首版 Shadowsocks 默认不接受 SIP003 plugin；只有被矩阵逐项列出的 plugin name、options 语法和 sing-box 映射才可启用，不能透传任意 `plugin` 字符串。
+任何 adapter 遇到矩阵未列出的组合都返回 `unsupported_transport` 或 `unsupported_semantics`，不得根据客户端名称猜测。首版 Shadowsocks 只接受矩阵明确列出的 `obfs-local` 组合；其余 SIP003 plugin 默认拒绝。每个启用项必须冻结 plugin name、options 语法和 sing-box 映射，不能透传任意 `plugin` 字符串。
 
 ## 15. 校验与规范化
 
@@ -1024,7 +951,7 @@ syntax validation
 - WebSocket path 必须是有界 UTF-8 路径，headers 名和值不能含控制字符；
 - gRPC service name、SNI、ALPN 和 host 数量有界；
 - Hysteria2/TUIC 的端口跳跃、obfs 和带宽字段按协议类型校验；
-- SIP003 plugin 默认拒绝；只有 `CapabilityMatrix` 明确列出的受审核组合才能转换，XHTTP、ShadowTLS 或客户端私有 transport 返回稳定拒绝码；
+- SIP003 plugin 默认拒绝；首版仅 `CapabilityMatrix` 明确列出的 `obfs-local` 受审核组合可以转换，XHTTP、ShadowTLS 或客户端私有 transport 返回稳定拒绝码；
 - server 是 IP literal 时仍保留原始 endpoint 语义，不为了 fingerprint 进行 DNS 解析；
 - percent-encoded 字段先验证每个 `%` 后恰有两个十六进制字符，再精确解码一次；拒绝非法 UTF-8、NUL/控制字符和二次 percent decode，不依赖 `percent-encoding` 对畸形 `%` 的宽松透传；
 - `skip-cert-verify` 只映射到节点 TLS 选项，并在诊断中标记安全影响。
@@ -1278,7 +1205,7 @@ detect + decode + parse + normalize + validate + dedupe + compose + serialize <=
 | compose + serialize | 50 ms | outbound fragment，不含完整配置和 `sing-box check` |
 | 合计 | 300 ms | 稳定核心 release gate |
 
-每种格式分别输出 p50/p95、阶段耗时和分配次数。某阶段超过总时间 50%、相对冻结基线回退超过 10%，或连续三次超出初始预算时必须做 profile；是否调整阶段分配由性能 ADR 决定，但总计 300 ms 不变。Stash/INI/snippet 扩展在启用前也必须提交相同报告，不能用“experimental”绕过输入资源上限。
+每种格式分别输出 p50/p95、阶段耗时和分配次数。某阶段超过总时间 50%、相对冻结基线回退超过 10%，或连续三次超出初始预算时必须做 profile；是否调整阶段分配由性能 ADR 决定，但总计 300 ms 不变。Surfboard INI 扩展在启用前也必须提交相同报告，不能用“experimental”绕过输入资源上限。
 
 ### 20.5 parser workspace 子预算
 
@@ -1344,7 +1271,7 @@ Fuzz 目标包括：
 - YAML alias、深度、锚点、重复 key、超长 scalar；
 - JSON 深度、指数型数组、重复字段和巨大字符串；
 - INI quoting、逗号、等号、section 切换；
-- Quantumult X/Surge line parser 的转义和未知参数。
+- Surfboard line parser 的转义和未知参数。
 
 Fuzz 必须保证：
 
@@ -1463,7 +1390,7 @@ Phase 0-A 不要求 5 MiB/10,000 节点 Android 性能、110 MiB 总峰值、任
 ### Phase 1：格式兼容与多 source
 
 - 每个兼容扩展适配器完成官方结构与真实脱敏样本、golden/fuzz、重复 key/转义/资源攻击和 Android arm64 性能报告；逐 feature 通过后才在发布构建启用，未通过的扩展保持关闭并在能力清单中明确；
-- Stash、Surge、Surfboard、Shadowrocket snippet、Quantumult X 的最小可行性样本和依赖/体积评估从 Phase 0-A/0-B 移入本阶段；稳定核心未达标前不得投入完整方言长尾；
+- Surfboard INI 的最小可行性样本和依赖/体积评估从 Phase 0-A/0-B 移入本阶段；稳定核心未达标前不得投入方言长尾；
 - source 独立缓存、部分成功、last-known-good 和多 source 去重通过；
 - active 500/2,000/10,000 边界行为通过；
 - composer、sing-box check 和 generation transaction 集成；
@@ -1507,39 +1434,33 @@ Phase 0-A 不要求 5 MiB/10,000 节点 Android 性能、110 MiB 总峰值、任
 2. NetHop 性能预算与 SLO：[`01-performance-budget-and-slo.md`](./01-performance-budget-and-slo.md)
 3. Mihomo configuration syntax：<https://wiki.metacubex.one/en/handbook/syntax/>
 4. Mihomo proxy providers：<https://wiki.metacubex.one/en/config/proxy-providers/>
-5. Stash proxy types：<https://stash.wiki/en/proxy-protocols/proxy-types>
-6. Stash proxy providers：<https://stash.wiki/en/proxy-protocols/proxy-providers>
-7. Surge profile format：<https://manual.nssurge.com/overview/configuration.html>
-8. Surge proxy policy：<https://manual.nssurge.com/policy/proxy.html>
-9. Surfboard configuration template：<https://manual.getsurfboard.com/config-template>
-10. sing-box configuration：<https://sing-box.sagernet.org/configuration/>
-11. Quantumult X sample profile：<https://github.com/crossutility/Quantumult-X/blob/master/sample.conf>
-12. Quantumult X server snippet：<https://github.com/crossutility/Quantumult-X/blob/master/server-complete.snippet>
-13. Android ML Kit barcode scanning：<https://developers.google.com/ml-kit/vision/barcode-scanning/android>
-14. Android Barcode raw value API：<https://developers.google.com/android/reference/com/google/mlkit/vision/barcode/common/Barcode>
-15. `NetGuard/sub-parser`：`D:/100_Projects/110_Daily/NetGuard/sub-parser/`
-16. `Proxylink-main`：`refer/Proxylink-main/`
-17. Serde：<https://serde.rs/>
-18. `serde_json`：<https://docs.rs/serde_json/>
-19. `serde-saphyr`：<https://docs.rs/serde-saphyr/>
-20. `ureq`：<https://docs.rs/ureq/>
-21. `url`：<https://docs.rs/url/>
-22. `zeroize`：<https://docs.rs/zeroize/>
-23. sing-box AnyTLS outbound（自 1.12.0）：<https://sing-box.sagernet.org/configuration/outbound/anytls/>
-24. OWASP SSRF Prevention Cheat Sheet：<https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html>
-25. 本地 sing-box AnyTLS 证据：`refer/sing-box-testing/protocol/anytls/outbound.go`、`refer/sing-box-testing/option/anytls.go`、`refer/sing-box-testing/include/registry.go`、`refer/sing-box-testing/docs/changelog.md`
-26. 本地依赖源码快照：`refer/subscription-import-and-parser-refer/snapshots/20260802-014712/`
-27. `serde-saphyr` budget/options 源码：`refer/subscription-import-and-parser-refer/snapshots/20260802-014712/vendor/serde-saphyr/src/de/budget.rs`、`de/options.rs`
-28. `ureq` resolver/transport/body 源码：`refer/subscription-import-and-parser-refer/snapshots/20260802-014712/vendor/ureq/src/unversioned/`、`src/body/mod.rs`
-29. BLAKE3 官方仓库：<https://github.com/BLAKE3-team/BLAKE3>；Rust crate：<https://docs.rs/blake3/>（仅为条件 benchmark 候选，不代表已引入）
+5. Surfboard configuration template：<https://manual.getsurfboard.com/config-template>
+6. sing-box configuration：<https://sing-box.sagernet.org/configuration/>
+7. Android ML Kit barcode scanning：<https://developers.google.com/ml-kit/vision/barcode-scanning/android>
+8. Android Barcode raw value API：<https://developers.google.com/android/reference/com/google/mlkit/vision/barcode/common/Barcode>
+9. `NetGuard/sub-parser`：`D:/100_Projects/110_Daily/NetGuard/sub-parser/`
+10. `Proxylink-main`：`refer/Proxylink-main/`
+11. Serde：<https://serde.rs/>
+12. `serde_json`：<https://docs.rs/serde_json/>
+13. `serde-saphyr`：<https://docs.rs/serde-saphyr/>
+14. `ureq`：<https://docs.rs/ureq/>
+15. `url`：<https://docs.rs/url/>
+16. `zeroize`：<https://docs.rs/zeroize/>
+17. sing-box AnyTLS outbound（自 1.12.0）：<https://sing-box.sagernet.org/configuration/outbound/anytls/>
+18. OWASP SSRF Prevention Cheat Sheet：<https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html>
+19. 本地 sing-box AnyTLS 证据：`refer/sing-box-testing/protocol/anytls/outbound.go`、`refer/sing-box-testing/option/anytls.go`、`refer/sing-box-testing/include/registry.go`、`refer/sing-box-testing/docs/changelog.md`
+20. 本地依赖源码快照：`refer/subscription-import-and-parser-refer/snapshots/20260802-014712/`
+21. `serde-saphyr` budget/options 源码：`refer/subscription-import-and-parser-refer/snapshots/20260802-014712/vendor/serde-saphyr/src/de/budget.rs`、`de/options.rs`
+22. `ureq` resolver/transport/body 源码：`refer/subscription-import-and-parser-refer/snapshots/20260802-014712/vendor/ureq/src/unversioned/`、`src/body/mod.rs`
+23. BLAKE3 官方仓库：<https://github.com/BLAKE3-team/BLAKE3>；Rust crate：<https://docs.rs/blake3/>（仅为条件 benchmark 候选，不代表已引入）
 
 ## 27. 冻结结论
 
 1. 二维码、文件、文本和 URL 是输入载体，不是四套 parser；
-2. 客户端展示名称归并到 Clash YAML、sing-box JSON、INI/snippet、URI/Base64 四类容器和若干方言适配器；
-3. 默认稳定核心为 URI/Base64、Clash/Mihomo YAML 和 sing-box JSON；Stash、Surge、Surfboard、Shadowrocket snippet、Quantumult X 作为用户所需兼容扩展逐 feature 验收，Shadowrocket URI/Base64 不属于实验路径；
+2. 客户端展示名称归并到 Clash YAML、sing-box JSON、Surfboard INI 和 URI/Base64 四类容器；
+3. 默认稳定核心为 URI/Base64、Clash/Mihomo YAML 和 sing-box JSON；Surfboard INI 是唯一 Android 兼容扩展，Stash、Surge、Shadowrocket、Quantumult X 专用配置明确不在范围内；
 4. 所有适配器最终生成统一 `ProxyNode`，再由 composer 生成 sing-box outbound；
-5. 首版协议能力仍冻结为 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS；格式支持不等于协议支持；
+5. 首版协议能力仍冻结为 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS；Android sing-box 的额外 outbound 不在首版 parser 白名单内，格式支持不等于协议支持；
 6. 未知关键语义、未支持 transport 和协议必须逐节点拒绝并给稳定诊断码；
 7. 10,000 节点是转换边界，2,000 是首版绝对发布上限，500 是运行性能基线；Expert 模式不能提高首版上限；
 8. parser 不下载嵌套资源、不执行脚本、不信任外部路径、不生成完整配置；

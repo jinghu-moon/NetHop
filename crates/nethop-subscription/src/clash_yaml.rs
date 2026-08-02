@@ -168,6 +168,8 @@ struct ClashNode {
     security: Option<String>,
     plugin: Option<String>,
     obfs: Option<String>,
+    #[serde(rename = "obfs-password")]
+    obfs_password: Option<String>,
     #[serde(rename = "grpc-opts")]
     grpc_options: Option<GrpcOptions>,
     #[serde(rename = "ws-opts")]
@@ -213,6 +215,7 @@ fn clash_node_spec(
     spec.vmess_security = node.security;
     spec.plugin = node.plugin;
     spec.obfs = node.obfs;
+    spec.obfs_password = node.obfs_password;
     if let Some(grpc) = node.grpc_options {
         spec.service_name = grpc.service_name;
     }

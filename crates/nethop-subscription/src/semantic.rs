@@ -6,9 +6,9 @@ use crate::{
     capability::CapabilityMatrix,
     diagnostics::{DiagnosticCode, NodeDiagnostic, Severity, SourceLocation},
     protocol::{
-        BoundedText, Capabilities, Credentials, DisplayName, Endpoint, PluginSpec, ProtocolOptions,
-        ProxyNode, ProxyProtocol, RealityOptions, SourceRef, TlsOptions, TransportKind,
-        TransportOptions, UuidValue,
+        BoundedText, Capabilities, Credentials, DisplayName, Endpoint, Hysteria2Obfs, PluginSpec,
+        ProtocolOptions, ProxyNode, ProxyProtocol, RealityOptions, SourceRef, TlsOptions,
+        TransportKind, TransportOptions, UuidValue,
     },
     secret::SecretString,
     uri::{UriNodeCandidate, UriScheme, percent_decode_field},
@@ -27,6 +27,7 @@ pub struct NodeSpec {
     pub vmess_security: Option<String>,
     pub alter_id: Option<u16>,
     pub plugin: Option<String>,
+    pub plugin_options: BTreeMap<String, String>,
     pub tls: bool,
     pub insecure: bool,
     pub server_name: Option<String>,
@@ -41,6 +42,7 @@ pub struct NodeSpec {
     pub headers: BTreeMap<String, String>,
     pub udp: bool,
     pub obfs: Option<String>,
+    pub obfs_password: Option<String>,
     pub congestion_control: Option<String>,
     pub source_ref: Option<SourceRef>,
     pub location: Option<SourceLocation>,
@@ -61,6 +63,7 @@ impl NodeSpec {
             vmess_security: None,
             alter_id: None,
             plugin: None,
+            plugin_options: BTreeMap::new(),
             tls: false,
             insecure: false,
             server_name: None,
@@ -75,6 +78,7 @@ impl NodeSpec {
             headers: BTreeMap::new(),
             udp: false,
             obfs: None,
+            obfs_password: None,
             congestion_control: None,
             source_ref: None,
             location: None,
@@ -149,10 +153,18 @@ pub fn validate_node_spec(
                 .transpose()
                 .map_err(|_| SemanticError::UnsupportedSemantics)?,
         },
+        ProxyProtocol::Tuic => ProtocolOptions::Tuic {
+            congestion_control: spec
+                .congestion_control
+                .as_deref()
+                .map(|value| text(value, 64))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+        },
         _ => ProtocolOptions::None,
     };
     if let Some(congestion) = spec.congestion_control.as_deref()
-        && !matches!(congestion, "bbr" | "cubic" | "new_reno")
+        && (protocol != ProxyProtocol::Tuic || !matches!(congestion, "bbr" | "cubic" | "new_reno"))
     {
         return Err(SemanticError::UnsupportedSemantics);
     }
@@ -164,6 +176,7 @@ pub fn validate_node_spec(
             endpoint.port()
         )
     });
+    let udp = spec.udp || matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic);
     let node = crate::protocol::UnvalidatedNode {
         display_name: DisplayName::new(display_name)
             .map_err(|_| SemanticError::UnsupportedSemantics)?,
@@ -175,7 +188,7 @@ pub fn validate_node_spec(
         protocol_options,
         capabilities: Capabilities {
             tcp: !matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic),
-            udp: spec.udp,
+            udp,
             ipv6: false,
             quic: matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic),
             tls: spec.tls,
@@ -279,6 +292,7 @@ pub fn node_spec_from_uri(candidate: &UriNodeCandidate<'_>) -> Result<NodeSpec, 
             "serviceName" | "service_name" => spec.service_name = Some(value),
             "udp" => spec.udp = matches!(value.as_str(), "1" | "true"),
             "obfs" => spec.obfs = Some(value),
+            "obfs-password" | "obfs_password" => spec.obfs_password = Some(value),
             "congestion_control" => spec.congestion_control = Some(value),
             "plugin" => spec.plugin = Some(value),
             "allowInsecure" | "insecure" => spec.insecure = matches!(value.as_str(), "1" | "true"),
@@ -413,9 +427,6 @@ fn make_credentials(
             })
         }
         ProxyProtocol::Shadowsocks => {
-            if spec.plugin.is_some() {
-                return Err(SemanticError::UnsupportedSemantics);
-            }
             let method = spec
                 .method
                 .as_deref()
@@ -431,29 +442,63 @@ fn make_credentials(
             ) {
                 return Err(SemanticError::UnsupportedSemantics);
             }
+            let plugin = match spec.plugin.as_deref() {
+                None if spec.plugin_options.is_empty() => None,
+                Some("obfs-local") => {
+                    if spec
+                        .plugin_options
+                        .keys()
+                        .any(|key| !matches!(key.as_str(), "obfs" | "obfs-host"))
+                        || !matches!(
+                            spec.plugin_options.get("obfs").map(String::as_str),
+                            Some("http" | "tls")
+                        )
+                    {
+                        return Err(SemanticError::UnsupportedSemantics);
+                    }
+                    let options = spec
+                        .plugin_options
+                        .iter()
+                        .map(|(key, value)| {
+                            Ok((
+                                key.clone(),
+                                text(value, 256)
+                                    .map_err(|_| SemanticError::UnsupportedSemantics)?,
+                            ))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, SemanticError>>()?;
+                    Some(PluginSpec {
+                        name: text("obfs-local", 64)
+                            .map_err(|_| SemanticError::UnsupportedSemantics)?,
+                        options,
+                    })
+                }
+                _ => return Err(SemanticError::UnsupportedSemantics),
+            };
             Ok(Credentials::Shadowsocks {
                 method: text(method, 64).map_err(|_| SemanticError::InvalidCredential)?,
                 password: password()?,
-                plugin: None::<PluginSpec>,
+                plugin,
             })
         }
         ProxyProtocol::Trojan => Ok(Credentials::Trojan {
             password: password()?,
         }),
         ProxyProtocol::Hysteria2 => {
-            if let Some(obfs) = spec.obfs.as_deref()
-                && obfs != "salamander"
-            {
-                return Err(SemanticError::UnsupportedSemantics);
-            }
+            let obfs = match (spec.obfs.as_deref(), spec.obfs_password.as_deref()) {
+                (None, None) => None,
+                (Some("salamander"), Some(password)) if !password.is_empty() => {
+                    Some(Hysteria2Obfs {
+                        kind: text("salamander", 64)
+                            .map_err(|_| SemanticError::UnsupportedSemantics)?,
+                        password: SecretString::new(password),
+                    })
+                }
+                _ => return Err(SemanticError::UnsupportedSemantics),
+            };
             Ok(Credentials::Hysteria2 {
                 password: password()?,
-                obfs: spec
-                    .obfs
-                    .clone()
-                    .map(|value| text(value, 64))
-                    .transpose()
-                    .map_err(|_| SemanticError::InvalidCredential)?,
+                obfs,
             })
         }
         ProxyProtocol::Tuic => Ok(Credentials::Tuic {

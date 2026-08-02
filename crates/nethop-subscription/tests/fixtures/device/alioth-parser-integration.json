@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "status": "reference_verified",
+  "date": "2026-08-02",
+  "device": {
+    "product": "alioth",
+    "model": "M2012K11AC",
+    "abi": "arm64-v8a",
+    "android": 13,
+    "api_level": 33,
+    "build_fingerprint": "Redmi/alioth/alioth:13/TKQ1.220829.002/V14.0.8.0.TKHCNXM:user/release-keys",
+    "root_manager": "Magisk 30.6"
+  },
+  "build": {
+    "target": "aarch64-linux-android",
+    "min_api": 23,
+    "rust": "1.97.1",
+    "release_profile_sha256": "B7BE5F9C2038C7781EABE02FD14BA16EB008570D3A66E373555EB019AC6FCD91"
+  },
+  "fixture": {
+    "path": "tests/fixtures/mapping/sing-box-1.13.15-check.json",
+    "bytes": 2225,
+    "sha256": "e70bae4d5e64ae7d014bb3ba8c53107ee730be020c60344bcab50bf530968519"
+  },
+  "variants": [
+    {
+      "features": "stable-parser",
+      "binary_bytes": 1862976,
+      "accepted": 7,
+      "rejected": 0,
+      "candidate_state": "ready",
+      "ipc_schema_version": 1,
+      "mapping_digest": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+    },
+    {
+      "features": "stable-parser,fetch",
+      "binary_bytes": 1863040,
+      "accepted": 7,
+      "rejected": 0,
+      "candidate_state": "ready",
+      "ipc_schema_version": 1,
+      "mapping_digest": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+    }
+  ],
+  "notes": [
+    "Controlled local fixture only; no subscription URL or token was used.",
+    "This evidence applies only to the exact device and build combination above."
+  ]
+}

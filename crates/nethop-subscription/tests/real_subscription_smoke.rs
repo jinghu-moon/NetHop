@@ -26,19 +26,19 @@ fn authorized_real_sources_are_downloaded_without_logging_secrets() {
         RealSource {
             label: "surfboard",
             env_name: "NETHOP_TEST_SURFBOARD_URL",
-            profile: RequestProfile::NetHopGeneric,
-            stable_format: None,
+            profile: RequestProfile::Surfboard,
+            stable_format: Some(FormatHint::SurfboardIni),
         },
         RealSource {
             label: "clash_standard",
             env_name: "NETHOP_TEST_CLASH_URL",
-            profile: RequestProfile::Mihomo,
+            profile: RequestProfile::ClashStandard,
             stable_format: Some(FormatHint::ClashYaml),
         },
         RealSource {
             label: "singbox_android",
             env_name: "NETHOP_TEST_SFA_URL",
-            profile: RequestProfile::SingBox,
+            profile: RequestProfile::SingBoxAndroid,
             stable_format: Some(FormatHint::SingboxJson),
         },
     ];
@@ -70,7 +70,15 @@ fn authorized_real_sources_are_downloaded_without_logging_secrets() {
             let detection = detected
                 .as_ref()
                 .unwrap_or_else(|| panic!("{} format detection failed", source.label));
-            assert_eq!(detection.format(), expected, "{} format", source.label);
+            assert!(
+                detection.format() == expected
+                    || (expected == FormatHint::SurfboardIni
+                        && detection.format() == FormatHint::IniProfile),
+                "{} format: detected {:?}, expected {:?}",
+                source.label,
+                detection.format(),
+                expected
+            );
             let conversion = convert_stable_sources(
                 vec![SourceInput {
                     source_id,

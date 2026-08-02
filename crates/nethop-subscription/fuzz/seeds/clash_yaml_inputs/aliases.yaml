@@ -1,0 +1,8 @@
+defaults: &defaults
+  type: trojan
+  server: example.com
+  port: 443
+  password: fixture-value
+proxies:
+  - <<: *defaults
+    name: rejected-merge

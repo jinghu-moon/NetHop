@@ -7,7 +7,7 @@ use flate2::read::MultiGzDecoder;
 use thiserror::Error;
 use url::Url;
 
-use crate::{Digest, ParserLimits, SourceId};
+use crate::{Digest, ParserLimits, RequestProfile, SourceId};
 
 mod ureq_adapter;
 
@@ -77,31 +77,6 @@ impl FetchAgentConfig {
             max_response_header_bytes: policy.max_response_header_bytes,
             tls_verification: true,
             environment_proxy: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestProfile {
-    NetHopGeneric,
-    Mihomo,
-    SingBox,
-}
-
-impl RequestProfile {
-    pub const fn user_agent(self) -> &'static str {
-        match self {
-            Self::NetHopGeneric => "NetHop/0.1",
-            Self::Mihomo => "clash.meta",
-            Self::SingBox => "sing-box",
-        }
-    }
-
-    pub const fn accept(self) -> &'static str {
-        match self {
-            Self::NetHopGeneric => "*/*",
-            Self::Mihomo => "application/yaml, text/yaml, */*",
-            Self::SingBox => "application/json, */*",
         }
     }
 }

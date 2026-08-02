@@ -173,6 +173,7 @@ struct SingboxOutbound {
     alter_id: Option<u16>,
     flow: Option<String>,
     plugin: Option<String>,
+    plugin_opts: Option<String>,
     congestion_control: Option<String>,
     tls: Option<SingboxTls>,
     transport: Option<SingboxTransport>,
@@ -251,13 +252,17 @@ fn singbox_node_spec(
     spec.alter_id = node.alter_id;
     spec.flow = node.flow;
     spec.plugin = node.plugin;
+    if let Some(plugin_options) = node.plugin_opts {
+        match parse_plugin_options(&plugin_options) {
+            Some(options) => spec.plugin_options = options,
+            None => spec.unknown_critical_field = Some("plugin_opts".into()),
+        }
+    }
     spec.congestion_control = node.congestion_control;
     spec.udp = node.udp;
     if let Some(obfs) = node.obfs {
         spec.obfs = obfs.kind;
-        if obfs.password.is_some() {
-            spec.unknown_critical_field = Some("obfs.password".into());
-        }
+        spec.obfs_password = obfs.password;
     }
     if let Some(tls) = node.tls {
         spec.tls = tls.enabled;
@@ -333,6 +338,25 @@ fn is_non_terminal(protocol: &str) -> bool {
         protocol,
         "selector" | "urltest" | "direct" | "block" | "dns" | "shadowtls"
     )
+}
+
+fn parse_plugin_options(input: &str) -> Option<BTreeMap<String, String>> {
+    if input.is_empty() {
+        return Some(BTreeMap::new());
+    }
+    let mut options = BTreeMap::new();
+    for part in input.split(';') {
+        let (key, value) = part.split_once('=')?;
+        if key.is_empty()
+            || key.len() > 64
+            || value.is_empty()
+            || value.len() > 256
+            || options.insert(key.to_owned(), value.to_owned()).is_some()
+        {
+            return None;
+        }
+    }
+    Some(options)
 }
 
 fn is_critical_node_field(field: &str) -> bool {

@@ -261,5 +261,17 @@ fn cache_keeps_last_known_good_and_conditional_headers_without_parser_coupling()
     );
     assert_eq!(RequestProfile::NetHopGeneric.user_agent(), "NetHop/0.1");
     assert_eq!(RequestProfile::Mihomo.user_agent(), "clash.meta");
+    assert_eq!(RequestProfile::ClashStandard.user_agent(), "clash");
+    assert_eq!(RequestProfile::Surfboard.user_agent(), "Surfboard");
     assert_eq!(RequestProfile::SingBox.user_agent(), "sing-box");
+    assert_eq!(RequestProfile::SingBoxAndroid.user_agent(), "SFA");
+    assert_eq!(
+        RequestProfile::ClashStandard.accept(),
+        "application/yaml, text/yaml, */*"
+    );
+    assert_eq!(RequestProfile::Surfboard.accept(), "text/plain, */*");
+    assert_eq!(
+        RequestProfile::SingBoxAndroid.accept(),
+        "application/json, */*"
+    );
 }

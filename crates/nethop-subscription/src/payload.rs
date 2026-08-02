@@ -31,11 +31,7 @@ pub enum FormatHint {
     ClashYaml,
     SingboxJson,
     IniProfile,
-    Quantumultx,
-    SurgeIni,
     SurfboardIni,
-    ShadowrocketServers,
-    QuantumultxSnippet,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -93,6 +89,18 @@ impl Digest {
     pub fn sha256(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
     }
+
+    pub fn from_hex(value: &str) -> Option<Self> {
+        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, slot) in bytes.iter_mut().enumerate() {
+            *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+        }
+        Some(Self(bytes))
+    }
+
     pub const fn bytes(&self) -> &[u8; 32] {
         &self.0
     }

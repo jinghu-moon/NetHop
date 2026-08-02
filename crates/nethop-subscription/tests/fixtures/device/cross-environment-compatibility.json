@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-02",
+  "parser_ipc_schema_version": 1,
+  "fingerprint_schema": "nh-fp-sha256-v1",
+  "mapping_digest": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6",
+  "limits": {
+    "active_baseline": 500,
+    "managed_active": 2000,
+    "conversion_nodes": 10000
+  },
+  "environments": [
+    {
+      "id": "host-windows",
+      "support_level": "test_verified",
+      "evidence": "scripts/a-gate.ps1",
+      "status": "passed"
+    },
+    {
+      "id": "fake-magisk-kernelsu",
+      "support_level": "test_verified",
+      "evidence": "tests/support/fake_module_host.rs",
+      "status": "passed"
+    },
+    {
+      "id": "alioth-android13-arm64",
+      "support_level": "reference_verified",
+      "evidence": "tests/fixtures/device/alioth-parser-integration.json",
+      "status": "passed"
+    }
+  ]
+}

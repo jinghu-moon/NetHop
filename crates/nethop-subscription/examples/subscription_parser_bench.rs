@@ -101,6 +101,8 @@ fn fixture_by_name(name: &str) -> Fixture {
         "base64_uri_list" => uri_fixture(320, true),
         "singbox_json" => json_fixture(),
         "clash_yaml" => yaml_fixture(),
+        #[cfg(feature = "format-surfboard")]
+        "surfboard_ini" => surfboard_fixture(),
         "multi_source" => multi_source_fixture(),
         _ => panic!("unknown benchmark case: {name}"),
     }
@@ -313,6 +315,31 @@ fn yaml_node(index: usize, padding: &str) -> String {
             "{{ name: node-{index}, type: anytls, {common}, password: bench-{index}, tls: true }}"
         ),
     }
+}
+
+#[cfg(feature = "format-surfboard")]
+fn surfboard_fixture() -> Fixture {
+    let padding = "x".repeat(320);
+    let mut text = String::from("[General]\ndns-server = 1.1.1.1\n[Proxy]\nDirect = direct\n");
+    for index in 0..NODE_COUNT {
+        if index % 10 == 0 {
+            text.push_str(&format!(
+                "invalid-{index} = http, invalid-{index}.example, 8080\n"
+            ));
+        } else {
+            text.push_str(&format!(
+                "node-{index} = ss, node-{index}.example, 443, encrypt-method=aes-128-gcm, password=bench-{index}, obfs=tls, obfs-host=cdn-{index}.example, icon={padding}\n"
+            ));
+        }
+    }
+    fixture(
+        "surfboard_ini",
+        vec![source(
+            "surfboard-ini",
+            FormatHint::SurfboardIni,
+            text.into_bytes(),
+        )],
+    )
 }
 
 fn source(id: &str, format_hint: FormatHint, bytes: Vec<u8>) -> SourceInput {

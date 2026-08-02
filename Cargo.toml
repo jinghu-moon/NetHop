@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/nethop-subscription"]
+exclude = ["crates/nethop-subscription/fuzz"]
 
 [workspace.package]
 version = "0.1.0"

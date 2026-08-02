@@ -160,8 +160,12 @@ pub fn detect_normalized(
     }
 
     let mut evidence = Vec::with_capacity(4);
+    collect_profile_evidence(payload, &mut evidence);
+    let has_profile_evidence = evidence
+        .iter()
+        .any(|candidate| candidate.format == FormatHint::IniProfile);
     let first = payload.as_str().as_bytes()[0];
-    if matches!(first, b'{' | b'[') {
+    if matches!(first, b'{' | b'[') && !has_profile_evidence {
         validate_json(payload.as_str())?;
         if supported_json_shape(payload.as_str()) {
             evidence.push(strong(FormatHint::SingboxJson));
@@ -179,7 +183,6 @@ pub fn detect_normalized(
     if has_uri_evidence(payload) {
         evidence.push(strong(FormatHint::UriList));
     }
-    collect_profile_evidence(payload, &mut evidence);
     if let Some(details) = base64_evidence(payload.as_str()) {
         evidence.push(FormatEvidence {
             format: FormatHint::Base64List,
@@ -251,16 +254,7 @@ fn formats_match(expected: FormatHint, actual: FormatHint) -> bool {
     expected == actual
         || matches!(
             (expected, actual),
-            (
-                FormatHint::IniProfile
-                    | FormatHint::SurgeIni
-                    | FormatHint::SurfboardIni
-                    | FormatHint::ShadowrocketServers,
-                FormatHint::IniProfile
-            ) | (
-                FormatHint::Quantumultx | FormatHint::QuantumultxSnippet,
-                FormatHint::Quantumultx
-            )
+            (FormatHint::SurfboardIni, FormatHint::IniProfile)
         )
 }
 
@@ -461,20 +455,15 @@ fn has_uri_evidence(payload: &NormalizedPayload<'_>) -> bool {
 }
 
 fn collect_profile_evidence(payload: &NormalizedPayload<'_>, evidence: &mut Vec<FormatEvidence>) {
-    let mut ini = false;
-    let mut quantumultx = false;
     for line in payload.lines() {
-        match line.text().trim() {
-            "[Proxy]" | "[General]" | "[Proxy Group]" => ini = true,
-            "[server_local]" => quantumultx = true,
-            _ => {}
+        let line = line.text().trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
         }
-    }
-    if ini {
-        evidence.push(strong(FormatHint::IniProfile));
-    }
-    if quantumultx {
-        evidence.push(strong(FormatHint::Quantumultx));
+        if matches!(line, "[Proxy]" | "[General]" | "[Proxy Group]") {
+            evidence.push(strong(FormatHint::IniProfile));
+        }
+        return;
     }
 }
 

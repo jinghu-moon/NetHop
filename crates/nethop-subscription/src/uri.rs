@@ -296,6 +296,14 @@ pub fn parse_uri_list<'a>(
         if text.is_empty() || text.starts_with('#') {
             continue;
         }
+        if item_index as usize >= limits.max_nodes() {
+            return vec![rejected_result(
+                item_index,
+                line.number(),
+                DiagnosticCode::NodeLimitExceeded,
+                source_id.cloned(),
+            )];
+        }
         let result = if text.len() > limits.max_line_bytes() {
             Err(UriContainerError::LineTooLong)
         } else {

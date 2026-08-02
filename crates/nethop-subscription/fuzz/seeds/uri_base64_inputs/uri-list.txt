@@ -1,0 +1,2 @@
+trojan://fixture-value@example.com:443#fixture
+not-a-supported-uri

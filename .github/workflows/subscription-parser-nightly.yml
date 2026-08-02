@@ -1,0 +1,59 @@
+name: subscription-parser-nightly
+
+on:
+  schedule:
+    - cron: "23 18 * * 1,4"
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: Fuzz budget
+        type: choice
+        required: true
+        default: Nightly
+        options:
+          - Nightly
+          - ReleaseCandidate
+
+jobs:
+  locked-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: Verify locked dependency and fixture contracts
+        shell: pwsh
+        run: |
+          cargo metadata --locked --format-version 1 | Out-Null
+          ./scripts/generate-subscription-parser-release-evidence.ps1
+          ./scripts/generate-subscription-parser-fuzz-evidence.ps1
+          cargo test --workspace --locked
+
+  cargo-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 320
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - detect_inputs
+          - uri_base64_inputs
+          - clash_yaml_inputs
+          - singbox_json_inputs
+          - surfboard_inputs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run bounded long fuzz
+        shell: pwsh
+        run: ./scripts/run-subscription-parser-fuzz.ps1 -Target "${{ matrix.target }}" -Budget "${{ inputs.budget || 'Nightly' }}"
+      - name: Upload crash reproducer
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: artifacts/subscription-parser/m011/failures/${{ matrix.target }}
+          if-no-files-found: error

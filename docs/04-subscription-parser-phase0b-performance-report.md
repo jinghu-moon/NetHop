@@ -95,3 +95,29 @@ adb shell /data/local/tmp/nethop-parser-bench
 adb shell /data/local/tmp/nethop-parser-bench baseline
 adb shell /data/local/tmp/nethop-parser-bench base64_uri_list
 ```
+
+## 7. Surfboard Android 扩展
+
+Surfboard 是默认关闭的 Android 兼容扩展，不属于稳定核心五 case。使用同一设备、toolchain、release profile 和 benchmark runner 对 10,000 项确定性 fixture 做扩展测量：
+
+| 项目 | 结果 | 状态 |
+|---|---:|---|
+| 输入大小 | 4,120,837 bytes | measured |
+| fixture SHA-256 | `7cc1355b2744ec32039f21796219d1e5019272441dcdf784e2786d2cf47f2b4d` | measured |
+| accepted / rejected | 9,000 / 1,000 | measured |
+| p50 / p95 | 139.457ms / 142.892ms | measured，满足 300ms |
+| fingerprint 单 pass | 8.972ms | measured |
+| 进程 VmHWM | 45,316KiB | measured，低于 45MiB（46,080KiB） |
+| 直接依赖增量 | 0 | 本地 tokenizer，无 INI/regex crate |
+| 细粒度阶段分配计数 | - | unsupported，runner 尚未提供分配采样 |
+
+该结果证明 Surfboard 路径在参考设备上的端到端时延和进程峰值满足当前目标，但没有补齐细粒度阶段分配证据，也不能代表其他 Android 设备或任意 Surge-compatible 方言。因此 `format-surfboard` 维持 `experimental` 且默认关闭。
+
+复现单 case：
+
+```powershell
+cargo ndk -t arm64-v8a -P 23 build --locked --release --example subscription_parser_bench --features experimental-formats
+adb push "target/aarch64-linux-android/release/examples/subscription_parser_bench" "/data/local/tmp/nethop-parser-bench"
+adb shell chmod 700 /data/local/tmp/nethop-parser-bench
+adb shell /data/local/tmp/nethop-parser-bench surfboard_ini
+```

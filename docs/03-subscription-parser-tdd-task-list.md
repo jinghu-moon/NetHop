@@ -87,7 +87,7 @@ artifacts/tdd/<task-id>/manifest.json
 | property/fuzz/资源攻击 | `02` 20-21 | I001-I012 |
 | 300 ms、45/110 MiB、依赖预算 | `01` 13-14、17、21；`02` 20 | J001-J016 |
 | URL fetch 与 SSRF | `02` 5 | K001-K020 |
-| 兼容方言 | `02` 7.1、10.4、12、13 | L001-L015 |
+| Android 兼容方言 | `02` 7.1、12、13 | L001-L011 |
 | 版本、Android 集成与发布 | `02` 22-25；`01` 19、21 | M001-M014 |
 
 阶段主链：
@@ -109,14 +109,13 @@ flowchart LR
   H022 --> I012["I012 安全测试 gate"]
   I012 --> J016["J016 Phase 0-B 性能 gate"]
   H022 --> K020["K020 fetch gate"]
-  H022 --> L015["L015 扩展格式 gate"]
+  H022 --> L011["L011 Surfboard 范围 gate"]
   J016 --> M001["M001 集成入口"]
   K020 --> M001
-  L015 --> M001
   M001 --> M014["M014 发布冻结 gate"]
 ```
 
-`K` 与 `L` 可以在 H022 后并行；`J` 只验证稳定核心，不等待兼容方言。若首个 Alpha 不启用 fetch 或兼容方言，可把对应节点记录为 `not_in_release_scope`，但不能伪造为功能已通过；M014 只对发布包实际启用的 feature 判 gate。
+`K` 与 `L` 可以在 H022 后并行；`J` 只验证稳定核心，不等待 Surfboard 扩展。若首个 Alpha 不启用 fetch 或 Surfboard feature，可把对应节点记录为 `not_in_release_scope`，但不能伪造为功能已通过；M014 只对发布包实际启用的 feature 判 gate。
 
 ## 5. A - Workspace、测试骨架与依赖门禁
 
@@ -146,7 +145,7 @@ flowchart LR
 
 - [x] **A004 - 建立 fetch 与实验格式 feature 隔离**
   - `depends_on`: A001；`parallel_group`: A-bootstrap
-  - `scope`: `fetch`、Stash、Surge、Surfboard、Shadowrocket snippet、Quantumult X 均只能显式启用。
+  - `scope`: `fetch` 与 Surfboard 只能显式启用；Stash、Surge、Shadowrocket、Quantumult X 专用方言不进入 feature matrix。
   - `RED`: 分别构建纯 parser 和可选 feature，断言当前 feature 隔离失败。
   - `GREEN`: 声明可选依赖和 feature，不实现其业务行为。
   - `REFACTOR`: 保持一个 crate，不为每个格式建立 crate。
@@ -469,10 +468,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 | 交付物 | 实现位置 | 验证结果 |
 |---|---|---|
 | 有界规范化视图 | `src/normalize.rs` | 5 MiB 边界、UTF-8/NUL 拒绝、单次 BOM/首尾视图和 CRLF/CR/LF 行迭代通过；不复制完整 body |
-| 格式证据模型 | `src/detect.rs` | JSON、Clash YAML、白名单 URI、INI/Quantumult X 和弱 Base64 证据均有界；Base64 不提前解码 |
-| hint 与失败策略 | `src/detect.rs`、`src/diagnostics.rs` | 显式 hint 只约束候选；强证据冲突返回 `ambiguous_format`；JSON/YAML 结构失败不回退其他格式 |
+| 格式证据模型 | `src/detect.rs` | JSON、Clash YAML、Surfboard INI、白名单 URI 和弱 Base64 证据均有界；Base64 不提前解码 |
+| hint 与失败策略 | `src/detect.rs`、`src/diagnostics.rs` | 显式 hint 只约束候选；强证据冲突返回 `ambiguous_format`；首个有效 `[Proxy]`/`[General]` section 不被 `[` JSON fast path 误杀，真正的 JSON/YAML 结构失败仍不回退其他格式 |
 | 公共 carrier 入口 | `src/lib.rs` | `ImportPayload` 与 raw bytes 共用同一 normalize/detect API，载体不参与格式选择 |
-| C 专项测试 | `tests/c_contracts.rs` | 12 个边界、证据、hint、歧义和终止失败测试全部通过 |
+| C 专项测试 | `tests/c_contracts.rs` | 14 个边界、证据、hint、歧义和终止失败测试全部通过 |
 
 本次 C 阶段验证命令：
 
@@ -839,7 +838,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `scope`: harmless unknown 仅 warning，critical unknown 拒绝节点。
   - `RED`: 关键未知字段被静默丢失或普通 UI 字段导致整源失败。
   - `GREEN`: 应用版本化 field classification。
-  - `REFACTOR`: Stash 扩展可增加分类但不能覆盖稳定语义。
+  - `REFACTOR`: Surfboard 扩展可增加分类但不能覆盖稳定语义。
   - `done`: unknown-field golden 通过。
 
 - [x] **F012 - YAML 七协议 golden 通过公共语义层**
@@ -1393,7 +1392,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 - [x] **J012 - 验证 release binary 体积预算**
   - `depends_on`: J008,J009,J010；`parallel_group`: J-build
-  - `scope`: parser-only/fetch/扩展格式 arm64 strip 产物及模块总包符合当前预算。
+  - `scope`: parser-only/fetch/Surfboard arm64 strip 产物及模块总包符合当前预算。
   - `RED`: 超预算或报告缺 cargo bloat/tree 差异时失败。
   - `GREEN`: 移除未使用 feature/符号，不提高预算。
   - `REFACTOR`: profile/依赖差异可追溯到 manifest。
@@ -1578,7 +1577,7 @@ adb shell /data/local/tmp/nethop-parser-bench
 
 - [x] **K016 - 验证 fetch 无嵌套 provider/resource 请求**
   - `depends_on`: K015,F008,G004；`parallel_group`: K-boundary
-  - `scope`: parser/fetch 不递归下载 Clash provider、Quantumult remote、脚本或 resource_parser_url。
+  - `scope`: parser/fetch 不递归下载 Clash provider、脚本或外部 resource URL。
   - `RED`: nested URL mock 被请求。
   - `GREEN`: 边界 visitor 只返回诊断。
   - `REFACTOR`: 无网络动作进入 parser crate。
@@ -1618,133 +1617,114 @@ adb shell /data/local/tmp/nethop-parser-bench
 
 K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义 resolver/TCP transport 在解析和连接后分别校验地址；Agent 关闭自动重定向和连接池，TLS 验证与 SNI 固定开启，gzip 由独立有界 decoder 处理。`k_contracts`、`fetch_integration` 和 fetch 单元测试覆盖 200/304、镜像停止条件、SSRF 保留地址矩阵、peer mismatch、重定向、gzip bomb、超时、脱敏和版本锁定。经 ADB 连接的 Android 13 arm64 真机实际获取了四种授权样本：Mihomo/Clash 识别为 `clash_yaml`，SFA 识别为 `singbox_json`，Surfboard 识别为 `ini_profile`；稳定样本节点因包含首版明确拒绝的 SIP003 `plugin/plugin-opts` 与 UDP-over-TCP 语义而全部返回 `unsupported_semantics`，未放宽白名单或执行客户端私有字段。
 
-## 16. L - 兼容扩展格式
+## 16. L - Android Surfboard 兼容扩展
 
-兼容扩展不阻塞稳定三格式 Alpha。每个方言必须先有真实脱敏 fixture，再进入 adapter；所有扩展继续遵守 nodes-only、七协议、资源限制和诊断边界。
+L 阶段只覆盖 Android 上实际使用的 Surfboard INI。Stash、Surge、Shadowrocket、Quantumult X 专用配置属于 `out_of_scope`；它们导出的 URI/Base64 仍由稳定容器处理。Surfboard 扩展不阻塞稳定三格式 Alpha，继续遵守 nodes-only、七协议、资源限制和诊断边界。
 
-- [ ] **L001 - 建立方言扩展 fixture 目录与证据模板**
+- [x] **L001 - 建立 Surfboard 脱敏 fixture 与证据 manifest**
   - `depends_on`: H022；`parallel_group`: L-infra
-  - `scope`: Stash、Surge、Surfboard、Shadowrocket snippet、Quantumult X 各有官方结构、真实脱敏样本、source 和 expected format manifest。
-  - `RED`: 缺 fixture/source/expected diagnostics 的扩展 manifest 失败。
+  - `scope`: 官方结构、真实脱敏样本、来源 digest、expected format 和预期诊断码；不得保存真实 URL/token。
+  - `RED`: 缺 fixture/source/expected diagnostics 的 manifest 失败。
   - `GREEN`: 只建立测试资产，不启用 adapter。
-  - `REFACTOR`: 每个方言复用 fixture schema。
-  - `done`: 五类扩展 manifest 完整且无秘密。
+  - `REFACTOR`: 复用稳定 fixture schema。
+  - `done`: Surfboard manifest 完整且 secret scan 通过。
 
-- [ ] **L002 - 实现共享 INI tokenizer contract**
+- [x] **L002 - 实现有界 Surfboard INI tokenizer**
   - `depends_on`: L001,B001,B006；`parallel_group`: L-tokenizer
-  - `scope`: 保留 section、行号、逗号边界、quoted/escaped value 和注释，不赋予语义。
-  - `RED`: quoted comma/escape/line location fixture 失败。
-  - `GREEN`: 实现小型 byte tokenizer。
-  - `REFACTOR`: 不引入通用 INI crate/regex。
+  - `scope`: 保留 section、行号、逗号边界、quoted/escaped value 和注释，不赋予协议语义。
+  - `RED`: quoted comma、escape、line location 和 16 KiB line fixture 失败。
+  - `GREEN`: 实现小型 byte tokenizer，不引入通用 INI crate/regex。
+  - `REFACTOR`: tokenizer 只负责语法 token，不读取网络或外部路径。
   - `done`: tokenizer golden 与 boundary tests 通过。
 
-- [ ] **L003 - 实现 Surge `[Proxy]` 结构适配**
-  - `depends_on`: L002,E015；`parallel_group`: L-adapters
-  - `scope`: 只读取 `[Proxy]` 节点行，其他策略区域不进入 parser。
-  - `RED`: `[Proxy Group]`/`[Rule]`/`[Script]`/`[MITM]` 影响输出的测试失败。
-  - `GREEN`: 映射 fixture 中与七协议交集的字段。
-  - `REFACTOR`: 语义校验仍由 E 层负责。
-  - `done`: Surge valid/reject/nodes-only golden 通过。
+- [x] **L003 - 实现 Surfboard `[Proxy]` adapter**
+  - `depends_on`: L002,E015；`parallel_group`: L-adapter
+  - `scope`: 只读取 `[Proxy]` terminal entries，映射 fixture 已证明的七协议字段。
+  - `RED`: `[Proxy Group]`、`[Rule]`、`[Script]`、`[MITM]`、remote policy 影响输出时失败。
+  - `GREEN`: 使用公共 semantic validator 生成 `ProxyNode`。
+  - `REFACTOR`: 方言差异只存在于 mapping table，不复制 URI/protocol parser。
+  - `done`: Surfboard valid/reject/nodes-only golden 通过。
 
-- [ ] **L004 - 实现 Surfboard `[Proxy]` 方言适配**
-  - `depends_on`: L002,E015；`parallel_group`: L-adapters
-  - `scope`: 复用 tokenizer，不复用未经 fixture 证明的 Surge 语义映射。
-  - `RED`: Surfboard 专用字段被错误当作 Surge 字段。
-  - `GREEN`: 只映射已验证语义。
-  - `REFACTOR`: 方言差异留在 adapter mapping table。
-  - `done`: Surfboard golden 与 unsupported field tests 通过。
+- [x] **L004 - 固定 Surfboard unknown-field policy**
+  - `depends_on`: L003,E013；`parallel_group`: serial
+  - `scope`: harmless 字段只计数，影响连接的未知 transport/TLS/credential 字段拒绝。
+  - `RED`: 未知字段静默改变节点语义或策略字段进入 IR。
+  - `GREEN`: 使用公共诊断码并记录 source location。
+  - `REFACTOR`: 不增加 Surfboard 专用错误枚举。
+  - `done`: policy matrix 与 golden 通过。
 
-- [ ] **L005 - 实现 Shadowrocket servers-only snippet 适配**
-  - `depends_on`: L002,D012,E015；`parallel_group`: L-adapters
-  - `scope`: servers-only/URI list 可转节点；策略、rewrite、MITM、WireGuard 不执行。
-  - `RED`: 完整策略 section 改变输出或 WireGuard 生成 node。
-  - `GREEN`: snippet parser 只读取 terminal server entries。
-  - `REFACTOR`: URI list 复用 D，不复制协议 parser。
-  - `done`: snippet valid/reject/boundary golden 通过。
-
-- [ ] **L006 - 实现 Stash YAML 方言适配**
-  - `depends_on`: F013,E015,L001；`parallel_group`: L-adapters
-  - `scope`: 复用受限 YAML pipeline，但 Stash 专用字段必须单独映射或返回 unsupported。
-  - `RED`: 端口跳跃/UDP DNS/证书指纹被静默忽略并生成错误 node。
-  - `GREEN`: 只添加 fixture 证明的 mapping。
-  - `REFACTOR`: 不复制 Clash YAML parser。
-  - `done`: Stash official/real fixture、golden、fuzz 入口通过。
-
-- [ ] **L007 - 实现 Quantumult X local snippet 适配**
-  - `depends_on`: L002,D012,E015；`parallel_group`: L-adapters
-  - `scope`: 只处理本地 `[server_local]`/server snippet/URI，不下载 remote、不执行 JS/rewrite/task。
-  - `RED`: resource_parser_url、remote task 或策略区产生网络动作/节点。
-  - `GREEN`: terminal server tokenizer mapping。
-  - `REFACTOR`: remote 内容只返回 boundary warning。
-  - `done`: Quantumult X valid/reject/nodes-only golden 通过。
-
-- [ ] **L008 - 为每个方言建立 unknown-field policy**
-  - `depends_on`: L003,L004,L005,L006,L007,E013；`parallel_group`: serial
-  - `scope`: 每个 adapter 的 harmless/critical unknown 分类有独立 fixture。
-  - `RED`: 方言字段静默丢失或策略字段进入 node。
-  - `GREEN`: 产出 adapter-specific diagnostic mapping。
-  - `REFACTOR`: 稳定 code 仍使用公共枚举。
-  - `done`: 五方言 policy matrix 通过。
-
-- [ ] **L009 - 验证扩展格式资源限制**
-  - `depends_on`: L003,L004,L005,L006,L007；`parallel_group`: serial
-  - `scope`: 方言不绕过 line/depth/string/node/report/active limits。
-  - `RED`: 大型 INI/snippet/YAML 逃逸稳定核心限制。
-  - `GREEN`: 复用 ParserLimits 和 bounded tokenizer/parser。
-  - `REFACTOR`: 不为扩展设更宽松上限。
+- [x] **L005 - 验证 Surfboard 资源限制**
+  - `depends_on`: L003,L004；`parallel_group`: serial
+  - `scope`: tokenizer 不绕过 line/depth/string/node/report/active limits。
+  - `RED`: 大型 INI、超长 quoted value、重复 section 逃逸稳定限制。
+  - `GREEN`: 复用 `ParserLimits` 和 bounded tokenizer。
+  - `REFACTOR`: 不为扩展设置更宽上限。
   - `done`: large/attack fixtures 通过。
 
-- [ ] **L010 - 验证扩展格式性能报告**
-  - `depends_on`: L008,L009,J002；`parallel_group`: L-perf
-  - `scope`: 每个启用扩展提交 Android arm64 release p50/p95、阶段耗时、分配、RSS 和依赖增量报告。
+- [x] **L006 - 生成 Android arm64 Surfboard 性能报告**
+  - `depends_on`: L004,L005,J002；`parallel_group`: L-perf
+  - `scope`: reference_verified 设备提交 p50/p95、阶段耗时、分配、RSS 和依赖增量报告。
   - `RED`: 只用 host 或简单 fixture 证明性能时失败。
   - `GREEN`: 运行统一 benchmark runner。
-  - `REFACTOR`: `experimental` 不能跳过资源上限或报告。
-  - `done`: 五方言各有 measured/invalid/unsupported manifest。
+  - `REFACTOR`: experimental 不能跳过资源上限或报告。
+  - `done`: measured/invalid/unsupported manifest 完整。
 
-- [ ] **L011 - 验证扩展格式 fuzz smoke**
-  - `depends_on`: L008,L009,I001；`parallel_group`: L-fuzz
-  - `scope`: 每个 adapter 有短时 fuzz、最小 corpus 和崩溃 reproducer 目录。
+- [x] **L007 - 执行 Surfboard fuzz smoke**
+  - `depends_on`: L004,L005,I001；`parallel_group`: L-fuzz
+  - `scope`: tokenizer/adapter 有短时 fuzz、最小 corpus 和 crash reproducer 目录。
   - `RED`: malformed escape/quote/section seed 触发 crash/timeout。
-  - `GREEN`: 修复 adapter 边界。
-  - `REFACTOR`: 方言 corpus 不复制公共 protocol corpus。
-  - `done`: 五方言短 fuzz manifest 全绿。
+  - `GREEN`: 修复边界并保留 reproducer。
+  - `REFACTOR`: 不复制公共 protocol corpus。
+  - `done`: Surfboard fuzz manifest 全绿。
 
-- [ ] **L012 - 生成扩展 feature-gated build**
-  - `depends_on`: L010,L011；`parallel_group`: serial
-  - `scope`: 未通过的扩展默认关闭，能力清单显示 `experimental`/`unsupported`。
-  - `RED`: feature gate 允许未通过扩展进入 stable default。
+- [x] **L008 - 生成 Surfboard feature-gated build**
+  - `depends_on`: L006,L007；`parallel_group`: serial
+  - `scope`: 扩展默认关闭，能力清单显示 `experimental`，未通过时不得进入 stable default。
+  - `RED`: feature gate 允许未通过扩展进入默认构建。
   - `GREEN`: 修复 build matrix 和 capability report。
   - `REFACTOR`: 扩展代码仍在单 crate 内隔离。
-  - `done`: default/experimental feature tree 和 support manifest 一致。
+  - `done`: default/experimental feature tree 一致。
 
-- [ ] **L013 - 验证扩展不会改变稳定核心输出**
-  - `depends_on`: L012,H022；`parallel_group`: serial
-  - `scope`: 启用扩展 feature 不改变 URI/YAML/JSON stable fixture 的 fingerprint、report 或 compose。
+- [x] **L009 - 验证扩展不会改变稳定核心输出**
+  - `depends_on`: L008,H022；`parallel_group`: serial
+  - `scope`: 启用 Surfboard feature 不改变 URI/YAML/JSON fixture 的 fingerprint、report 或 compose。
   - `RED`: feature interaction property test 找到输出漂移。
   - `GREEN`: 修复共享 registry/feature side effects。
-  - `REFACTOR`: 扩展 adapter 依赖窄 trait。
+  - `REFACTOR`: adapter 依赖窄 trait。
   - `done`: stable-core regression 全绿。
 
-- [ ] **L014 - 通过兼容扩展 gate**
-  - `depends_on`: L010,L011,L013；`parallel_group`: serial
-  - `scope`: 只对逐 feature 通过的方言生成启用声明；其余保持关闭。
+- [x] **L010 - 通过 Surfboard extension gate**
+  - `depends_on`: L006,L007,L009；`parallel_group`: serial
+  - `scope`: 只有逐项证据完整时生成启用声明；其余保持关闭并标记 `experimental`/`unsupported`。
   - `RED`: support matrix 与 fixture/evidence 不一致时失败。
-  - `GREEN`: 汇总扩展 manifests。
-  - `REFACTOR`: 不为兼容率放宽 nodes-only 或协议白名单。
-  - `done`: Phase 1 extension gate 全绿或逐项明确状态。
+  - `GREEN`: 汇总 Surfboard manifest。
+  - `REFACTOR`: 不为兼容率放宽安全边界。
+  - `done`: Phase 1 Android extension gate 全绿或逐项明确状态。
 
-- [ ] **L015 - 记录扩展范围受限发布声明**
-  - `depends_on`: L014,J016；`parallel_group`: serial
-  - `scope`: 发布说明明确稳定核心、实验方言、未支持字段、设备范围和回退路径。
-  - `RED`: “兼容”没有 evidence/support level 或把实验方言写成稳定。
+- [x] **L011 - 记录 Android 范围受限发布声明**
+  - `depends_on`: L010,J016；`parallel_group`: serial
+  - `scope`: 发布说明明确稳定核心、Surfboard 实验状态、未支持客户端方言、设备范围和 URI/Base64 回退路径。
+  - `RED`: “兼容”没有 evidence/support level 或将非 Android 方言写成稳定。
   - `GREEN`: 生成 support matrix/release note fragment。
   - `REFACTOR`: 声明模板来自 manifest，不手工复制状态。
   - `done`: release scope review artifact 通过。
 
+### L001-L011 实现证据
+
+`tests/fixtures/surfboard/basic.conf` 是脱敏 Surfboard `[Proxy]` fixture，manifest 绑定其字节数和 SHA-256。`src/surfboard.rs` 提供不引入通用 INI/regex 依赖的有界 tokenizer 和 adapter：只读取 `[Proxy]` terminal entries，策略区仅生成 `non_node_section_ignored`，URI/协议语义统一进入已有 semantic validator；关键未知字段返回 `unsupported_semantics`，harmless 字段只生成有界 warning。`l_contracts.rs` 覆盖 fixture digest、quoted comma、转义、行长、节点数、部分成功、nodes-only 和 unknown-field policy。已通过：
+
+```text
+cargo test --locked -p nethop-subscription --test b_contracts --test l_contracts --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+Android `alioth / Android 13 / arm64-v8a` 上的 10,000 项确定性 Surfboard fixture 为 `4,120,837` bytes，SHA-256 为 `7cc1355b2744ec32039f21796219d1e5019272441dcdf784e2786d2cf47f2b4d`；其中 9,000 项接受、1,000 项拒绝。20 次样本的 p50 为 `139.457ms`、p95 为 `142.892ms`，fingerprint 单 pass 为 `8.972ms`，进程 `VmHWM=45,316KiB`，满足 `300ms` 与 `45MiB` 目标。细粒度阶段分配计数尚未接入 runner，报告明确记为 `unsupported`，因此 Surfboard 不升级为稳定默认能力。
+
+L007 使用固定 malformed quote/escape/section corpus 加 256 组有界 ASCII property smoke，零 panic、零超时；L008-L009 的 default/experimental build matrix、稳定 URI/YAML/JSON 回归和 feature tree 全绿。L010 gate 结果为 `experimental`：`format-surfboard` 继续默认关闭，只可显式启用。L011 的范围声明见 [`05-subscription-parser-android-scope.md`](./05-subscription-parser-android-scope.md)，它按容器格式而非客户端品牌承诺兼容性。
+
 ## 17. M - Android 集成、版本化与发布冻结
 
-- [ ] **M001 - 定义 daemon 公共 parser IPC contract**
+- [x] **M001 - 定义 daemon 公共 parser IPC contract**
   - `depends_on`: H022,K020,J016；`parallel_group`: M-contract
   - `scope`: daemon 只接收有界 payload/request profile/expected format，并返回 `ConversionReport` 与候选状态；parser 不监听 UDS。
   - `RED`: IPC schema 允许绕过 active limit、SSRF、nodes-only 或 sing-box check 的测试失败。
@@ -1752,7 +1732,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: QR/file/clipboard 获取层不进入 parser。
   - `done`: public IPC schema golden 与 invalid request tests 通过。
 
-- [ ] **M002 - 定义未来 Kotlin App barcode raw value contract**
+M001 实现证据：`ipc.rs` 定义 schema v1、7 MiB frame 上限、Base64 payload wire、稳定 `request_id/source_id`、`expected_format`、`request_profile`、来源元数据和候选状态；请求结构使用 deny-unknown-fields，调用方不能提交 `active_limit`、私网放行、完整配置、脚本或跳过校验开关。响应只包含有界 `ConversionReport`、节点数和候选摘要，不返回 outbound 凭据或完整配置。`m_contracts` 覆盖 golden、payload/frame 限制、HTTPS response 约束、越权字段拒绝和无 socket/runtime 实现；`cargo test --locked --all-features`、Clippy、A gate 与凭据扫描通过。
+
+- [x] **M002 - 定义未来 Kotlin App barcode raw value contract**
   - `depends_on`: M001；`parallel_group`: M-contract
   - `scope`: App 只传 Android Barcode API raw value UTF-8 文本，不传 UI display text 或直接执行 parser。
   - `RED`: display text、图片 bytes 或未经确认 URL 被 parser 接受的测试失败。
@@ -1760,7 +1742,7 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: 不引入二维码/图像库到 Rust crate。
   - `done`: QR contract golden 与 source boundary review。
 
-- [ ] **M003 - 建立 parser schema/version compatibility reader**
+- [x] **M003 - 建立 parser schema/version compatibility reader**
   - `depends_on`: H022,M001；`parallel_group`: M-version
   - `scope`: 旧 ConversionReport 可读，旧 fingerprint 不与新算法/schema 无提示混用。
   - `RED`: schema version mismatch 被静默接受或旧 report 无法读取。
@@ -1768,7 +1750,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: 不维护双算法运行时开关。
   - `done`: old/new report compatibility matrix 通过。
 
-- [ ] **M004 - 固定 sing-box 1.13.15 mapping manifest**
+M002-M003 实现证据：QR IPC origin 只接受带用户确认状态的 Android Barcode raw value UTF-8 文本；display text、图片 bytes、NUL/非 UTF-8 和未确认 URL 均在 parser 前拒绝，Rust crate 未引入相机或图像依赖。版本化报告 envelope 固定 `schema_version=1` 与 `fingerprint_schema=nh-fp-sha256-v1`；旧裸 `ConversionReport` 可读但返回 `legacy_rebuild_required`，未知 report version 或 fingerprint schema mismatch 直接拒绝，不保留双算法运行时开关。`m_contracts`、default/all-features matrix 和 Clippy 全绿。
+
+- [x] **M004 - 固定 sing-box 1.13.15 mapping manifest**
   - `depends_on`: E015,H022；`parallel_group`: M-version
   - `scope`: parser mapping、build tags、源码 commit、check fixture 和 capability digest 固定。
   - `RED`: beta/development field 或 mapping digest 漂移未阻断。
@@ -1776,7 +1760,13 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: 版本证据来自单一 manifest。
   - `done`: 1.13.15 mapping manifest golden 通过。
 
-- [ ] **M005 - 建立 fake Magisk/KernelSU parser host harness**
+M004 实现证据：`manifests/sing-box-1.13.15-mapping.json` 是运行时 `CapabilityMatrix` 的单一事实来源，冻结上游 tag `v1.13.15`、commit `3708fa18766cda1f11b77f6ed9c7bd61688f17df`、Go `1.24.7`、NetHop 候选 build tags、七协议 mapped fields、源码路径和 23 个 capability shapes；manifest SHA-256 为 `2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6`。严格 validator 拒绝未知字段、版本/commit/build tag 漂移、重复/缺失协议和重复 query。
+
+`tests/fixtures/mapping/sing-box-1.13.15-check.json` SHA-256 为 `e70bae4d5e64ae7d014bb3ba8c53107ee730be020c60344bcab50bf530968519`，覆盖七种 outbound；sing-box v1.13.15 官方 Windows amd64 发布二进制执行 `check` 返回 `0`，其 `version` 输出确认 revision `3708fa...`。本机 Go `1.25.4` 不能链接该版本 `badlinkname` 组合，因此 NetHop 自定义裁剪 tags 的下游源码构建仍留给发布构建 gate，不把官方二进制检查冒充自定义 Android 构建证据。
+
+源码对照同时修复了三个会静默改变连接语义的缺陷：uTLS/Reality composer 补齐 `enabled=true`；TUIC `congestion_control` 进入 typed `ProtocolOptions` 与 outbound；Hysteria2 只接受完整的 `salamander + obfs password` 并同时进入 canonical fingerprint 和 outbound。未建模的端口跳跃、带宽及其他连接关键字段继续拒绝，不做猜测映射。
+
+- [x] **M005 - 建立 fake Magisk/KernelSU parser host harness**
   - `depends_on`: M001；`parallel_group`: M-android
   - `scope`: 在不执行真实 netfilter 的情况下验证 daemon 调用 parser、权限边界和候选 report。
   - `RED`: 普通 App/错误 peer/超时请求能绕过 root-only contract。
@@ -1784,7 +1774,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: parser tests 不依赖某个 Root 管理器私有路径。
   - `done`: fake module integration smoke 通过。
 
-- [ ] **M006 - 在参考 Android arm64 真机运行 parser integration smoke**
+M005 实现证据：`tests/support/fake_module_host.rs` 为 Magisk/KernelSU 提供相同的纯 Host parser worker harness；它不创建 socket、不访问 Root 管理器私有路径，也不执行 netfilter。`m_contracts` 证明非 root peer 在解析前被拒绝、超时请求不执行、两种 Root 管理器对同一 schema v1 frame 产生完全一致的有界 candidate/report，响应不包含 outbound 凭据或完整配置。
+
+- [x] **M006 - 在参考 Android arm64 真机运行 parser integration smoke**
   - `depends_on`: M005,J016；`parallel_group`: M-android
   - `scope`: reference_verified 设备完成 parser-only/fetch-enabled binary 启动、转换、report 和候选交接 smoke。
   - `RED`: device/build/root manifest 缺失或 host 结果被冒充真机时失败。
@@ -1792,7 +1784,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: 只修复设备实际暴露的问题。
   - `done`: device integration manifest 和脱敏 log。
 
-- [ ] **M007 - 验证 active limit 500/2,000/10,000 边界**
+M006 实现证据：`tests/fixtures/device/alioth-parser-integration.json` 绑定 `alioth / Android 13 / API 33 / arm64-v8a / Magisk 30.6`、Rust/NDK 构建参数和本地 check fixture digest。parser-only 与 fetch-enabled release probe 均在设备上启动，输出 `accepted=7`、`rejected=0`、`candidate_state=ready`、`ipc_schema_version=1` 和相同 mapping digest；测试只使用仓库内脱敏 fixture，没有访问订阅 URL。该声明不外推到其他设备、ROM、SoC 或 Root 管理器。
+
+- [x] **M007 - 验证 active limit 500/2,000/10,000 边界**
   - `depends_on`: H022,M001；`parallel_group`: M-boundary
   - `scope`: 500 运行基线、2,000 托管上限、10,000 conversion-only 边界行为明确，不静默截断。
   - `RED`: 2,001 被发布或 10,001 静默截断的测试失败。
@@ -1800,7 +1794,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: limit policy 由一处配置提供。
   - `done`: boundary integration golden 通过。
 
-- [ ] **M008 - 验证 last-known-good 候选交接契约**
+M007 实现证据：公共常量冻结 `ACTIVE_OUTBOUND_BASELINE=500`、`MANAGED_ACTIVE_OUTBOUND_LIMIT=2,000`、`CONVERSION_NODE_LIMIT=10,000`。同一确定性 URI 生成器证明 500 与 2,000 返回 `ready`，2,001 与 10,000 完成转换但 candidate 返回 `active_limit_exceeded`，10,001 在 adapter 资源边界返回 `node_limit_exceeded`；所有路径均不静默截断。
+
+- [x] **M008 - 验证 last-known-good 候选交接契约**
   - `depends_on`: M001,K013,H022；`parallel_group`: M-transaction
   - `scope`: parser 失败/零节点/不安全候选不会覆盖活动 generation 或旧 source cache。
   - `RED`: 故意失败候选改变 current digest 的测试失败。
@@ -1808,7 +1804,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: generation publish 留给 nethopd。
   - `done`: fake worker transaction test 通过。
 
-- [ ] **M009 - 验证稳定核心完整 test matrix**
+M008 实现证据：fake worker 的 `FakeGenerationStore` 只接受 `CandidateStatus::Ready` 的 digest，并在同一步更新 current/source-cache。合法候选建立 last-known-good 后，comment-only 零节点、2,001 active-limit 拒绝和非法 IPC frame 均不能改变两个 digest；parser crate 仍只返回 candidate/report，不拥有真实 generation 发布权。
+
+- [x] **M009 - 验证稳定核心完整 test matrix**
   - `depends_on`: M003,M004,M006,M007,M008；`parallel_group`: serial
   - `scope`: stable parser default features 在 host、fake module 和参考真机上的结果 schema、mapping digest、limit 和 support level 一致。
   - `RED`: 任一环境输出漂移或支持等级被夸大。
@@ -1816,7 +1814,9 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: 测试不以设备差异为理由放宽安全边界。
   - `done`: cross-environment compatibility report。
 
-- [ ] **M010 - 生成 SBOM、许可证和依赖 provenance**
+M009 实现证据：`tests/fixtures/device/cross-environment-compatibility.json` 汇总 Host A-gate、fake Magisk/KernelSU 和 alioth Android 13 arm64 三类环境，并由 `m_contracts` 绑定 IPC schema v1、`nh-fp-sha256-v1`、mapping digest 以及 500/2,000/10,000 边界。`cargo test --workspace --locked`、`cargo test --locked --all-features`、`scripts/a-gate.ps1`、全 feature Clippy、fmt 和 diff-check 均通过；只有 alioth 被标记为 `reference_verified`，fake/Host 不冒充真机支持。
+
+- [x] **M010 - 生成 SBOM、许可证和依赖 provenance**
   - `depends_on`: J009,J010,J012,M004；`parallel_group`: M-release
   - `scope`: parser-only/fetch/dev/test、Rust toolchain、Cargo.lock、源码 digest 和许可证清单可复现。
   - `RED`: unknown license、lock drift、未记录依赖或 feature 泄漏时失败。
@@ -1824,15 +1824,19 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: SBOM 不进入 parser runtime。
   - `done`: `cargo deny`/SBOM/provenance report 全绿。
 
-- [ ] **M011 - 建立长时 fuzz 与定时回归任务**
-  - `depends_on`: I012,L014；`parallel_group`: M-release
+M010 实现证据：`scripts/generate-subscription-parser-release-evidence.ps1` 基于 `cargo metadata --locked` 生成 parser-only、fetch、dev-test 三个 CycloneDX 1.6 BOM、完整许可证 inventory、source-files digest 和 provenance。`deny.toml` 固定 Android `aarch64-linux-android`、全 feature、registry/source/许可证和 wildcard 策略；临时安装的 `cargo-deny 0.20.2` 实际通过 advisories、bans、licenses、sources 四项检查。当前仅保留 base64 与 syn 的传递重复版本 warning，不降低 parser-only feature 隔离。证据目录：`artifacts/subscription-parser/m010/`。
+
+- [x] **M011 - 建立长时 fuzz 与定时回归任务**
+  - `depends_on`: I012,L011；`parallel_group`: M-release
   - `scope`: 长时 fuzz、完整 attack corpus、依赖更新和格式 fixture 定期执行，不阻塞 Phase 0-A 开发循环。
   - `RED`: 定时任务缺 corpus digest、超时/崩溃 artifact 或失败通知。
   - `GREEN`: 配置 nightly/release candidate runner。
   - `REFACTOR`: 短时 PR smoke 与长时任务分开预算。
   - `done`: dry-run schedule report 和 failure artifact schema 通过。
 
-- [ ] **M012 - 生成 support matrix 与 release manifest**
+M011 实现证据：`crates/nethop-subscription/fuzz/` 建立五个独立 libFuzzer target 与冻结 seed；`scripts/run-subscription-parser-fuzz.ps1` 将 seed 与可写演化 corpus 分离，失败时保存 target、seed digest、退出码、artifact digest、toolchain 和资源预算；`.github/workflows/subscription-parser-nightly.yml` 将 PR smoke、nightly 1,800 秒和 release-candidate 3,600 秒预算分开。Windows 参考环境使用 LLVM 20 ASan 完成五个 60 秒 smoke，均通过；sanitizer harness 使用 512 MiB RSS 上限，产品 parser 110 MiB SLO 仍由 J/M gate 单独验证。证据目录：`artifacts/subscription-parser/m011/`。
+
+- [x] **M012 - 生成 support matrix 与 release manifest**
   - `depends_on`: M009,M010,M011；`parallel_group`: M-release
   - `scope`: 每项格式、协议、feature、设备/ROM/kernel/root 组合标记 `reference_verified`、`community_verified`、`experimental`、`best_effort` 或 `unsupported`。
   - `RED`: 无实机证据却宣称广泛稳定或扩展 feature 未列状态。
@@ -1840,21 +1844,27 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
   - `REFACTOR`: 释放说明不手工复制设备状态。
   - `done`: support matrix 与 evidence manifest 一致。
 
-- [ ] **M013 - 执行发布候选全量验证**
-  - `depends_on`: M012,K020,J016,L015；`parallel_group`: serial
+M012 实现证据：`scripts/generate-subscription-parser-support-matrix.ps1` 从 alioth Android integration、跨环境 manifest、sing-box mapping、Phase 0-B 性能报告和 Android scope 生成矩阵，不读取客户端品牌宣传。URI/Base64、Clash YAML、sing-box JSON 标为 `reference_verified`；Surfboard 标为默认关闭 `experimental`；七协议 parser mapping 标为 `reference_verified`，Android data-plane 明确为 `best_effort`，不外推到所有设备。`release-manifest.json` 启用 stable parser + fetch，显式关闭 Surfboard/experimental formats，并绑定每项 artifact digest。
+
+- [x] **M013 - 执行发布候选全量验证**
+  - `depends_on`: M012,K020,J016,L011；`parallel_group`: serial
   - `scope`: 发布包实际启用的 stable/extension features 通过适用 hard gate、性能、资源、fetch、安全、许可证和报告检查。
   - `RED`: 任一 hard gate 缺原始证据、报告 status 错误或安全/数据损坏问题存在。
   - `GREEN`: 关闭未通过可选 feature 或缩小 support declaration，不修改阈值。
   - `REFACTOR`: 只整理 artifact index，不改变行为。
   - `done`: release candidate checklist 和 artifact index 全绿。
 
-- [ ] **M014 - 通过订阅解析库发布冻结 gate**
+M013 实现证据：`scripts/subscription-parser-release-gate.ps1` 通过 fmt、locked metadata、workspace/all-features/release tests、全 feature Clippy、性能 contract、cargo-deny、五目标 fuzz smoke、Android reference evidence 和 support matrix 后，生成 `release-candidate-checklist.json` 与 `artifact-index.json`。最终 checklist 的 11 个 gate 全为 `passed`，artifact index 包含 20 项并逐项验证 SHA-256。
+
+- [x] **M014 - 通过订阅解析库发布冻结 gate**
   - `depends_on`: M013；`parallel_group`: serial
   - `scope`: 形成可审计的 parser 发布基线，所有任务证据可按 ID 追溯，未支持范围明确。
   - `RED`: traceability、manifest digest、support level、security invariant 或发布包文件缺失时失败。
   - `GREEN`: 生成最终 release manifest；不自动提交 Git。
   - `REFACTOR`: 文档和证据索引可读性整理。
   - `done`: `cargo test --workspace --locked`、适用 `cargo fuzz` smoke、性能/资源报告、SBOM、support matrix 和 release review 均通过。
+
+M014 实现证据：`scripts/subscription-parser-freeze-gate.ps1` 在不执行 Git mutation 的前提下复核 M013 candidate、五个 fuzz smoke、fmt、workspace/all-features tests、Clippy 和 `git diff --check`，生成 `artifacts/subscription-parser/m014/release-freeze.json`。冻结文件状态为 `frozen`，绑定 22 个 artifact、10 项安全/确定性/范围不变量，稳定发布 feature 为 parser、URI/Base64、Clash YAML、sing-box JSON 和 fetch；Surfboard/experimental formats 保持关闭。
 
 ## 18. TDD 完成与回归协议
 
@@ -1911,17 +1921,17 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 
 每次修改 parser、依赖、feature、profile 或 mapping 都必须运行适用项目：
 
-- [ ] 输入大小、行长、深度、节点、字符串和 report 都有界；
-- [ ] parser 不发网络请求、不执行脚本、不读取外部路径；
-- [ ] URL fetch 的 TLS、SSRF、redirect、peer、压缩输入和解压输出限制不变；
-- [ ] 订阅不能控制 inbound、route、API、脚本、provider、证书路径或生成完整配置；
-- [ ] unknown critical semantics、unsupported protocol/transport 逐节点拒绝；
-- [ ] fingerprint/schema、去重、排序和 report 计数确定；
-- [ ] source partial success、last-known-good 和 active limit 语义不变；
-- [ ] 日志、diagnostic、report、test artifact 不泄露凭据；
-- [ ] 纯 parser feature 不携带 HTTP/TLS/压缩/SQLite/IPC/CLI 依赖；
-- [ ] release profile、toolchain、fixture digest 和性能报告可追溯；
-- [ ] 未通过设备/feature gate 的能力仍标记 `experimental`、`best_effort` 或 `unsupported`。
+- [x] 输入大小、行长、深度、节点、字符串和 report 都有界；
+- [x] parser 不发网络请求、不执行脚本、不读取外部路径；
+- [x] URL fetch 的 TLS、SSRF、redirect、peer、压缩输入和解压输出限制不变；
+- [x] 订阅不能控制 inbound、route、API、脚本、provider、证书路径或生成完整配置；
+- [x] unknown critical semantics、unsupported protocol/transport 逐节点拒绝；
+- [x] fingerprint/schema、去重、排序和 report 计数确定；
+- [x] source partial success、last-known-good 和 active limit 语义不变；
+- [x] 日志、diagnostic、report、test artifact 不泄露凭据；
+- [x] 纯 parser feature 不携带 HTTP/TLS/压缩/SQLite/IPC/CLI 依赖；
+- [x] release profile、toolchain、fixture digest 和性能报告可追溯；
+- [x] 未通过设备/feature gate 的能力仍标记 `experimental`、`best_effort` 或 `unsupported`。
 
 ## 19. 依赖图与执行建议
 
@@ -1938,7 +1948,7 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 | 安全 fuzz | H022 | I012 | 不等待 Android 性能 |
 | 性能 host | H022 | J013 | 使用稳定核心 fixture |
 | fetch | H022 | K020 | 可选 feature，不进入 parser-only |
-| 方言扩展 | H022 | L015 | 不阻塞稳定核心；每个 adapter 可并行 |
+| Android 方言扩展 | H022 | L011 | 不阻塞稳定核心；Surfboard adapter 可并行 |
 
 ### 19.2 不允许并行的递进关系
 
@@ -1946,7 +1956,7 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 - 不得在 E015 之前把容器字段标记为 validated；否则客户端方言会自行决定协议能力。
 - 不得在 H022 之前做 Android 300 ms 或 110 MiB release gate；Phase 0-A 只做安全可行性。
 - 不得在 K020 之前把真实 URL fetch 接入 daemon；本地受控 fixture 先于任何外部 source。
-- 不得在 J016/L015 之前扩大 Alpha support matrix；性能与兼容扩展必须先有证据。
+- 不得在 J016/L011 之前扩大 Alpha support matrix；性能与 Surfboard 扩展必须先有证据。
 - 不得在 M014 之前启用 `panic="abort"`、BLAKE3 双写、实验方言默认 feature 或未验证协议。
 
 ## 20. 参考资料
@@ -1979,5 +1989,5 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 4. Phase 0-A 只阻断安全、资源有界、nodes-only、确定性和凭据脱敏问题；不要求多设备、Android 大样本性能、长时 fuzz 或实验方言。
 5. Phase 0-B 在当前 `reference_verified` arm64 真机验证稳定三格式的 300 ms、45 MiB parser workspace 和 110 MiB 模块峰值；结果不外推为所有 Android 设备。
 6. BLAKE3 只有在 fingerprint 阶段真实触发阈值时才比较；Base64 SIMD 首版不评估、不引入。
-7. fetch 与兼容方言是稳定核心 gate 后的可并行 feature；未通过的能力保持关闭并公开 `experimental`/`unsupported` 状态。
+7. fetch 与 Surfboard 是稳定核心 gate 后的可并行 feature；未通过的能力保持关闭并公开 `experimental`/`unsupported` 状态。
 8. 任务完成必须有可重放的命令、退出码、fixture/profile digest 和脱敏 RED/GREEN/REFACTOR 证据；不执行 Git commit 作为完成条件。

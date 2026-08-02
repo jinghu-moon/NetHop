@@ -58,6 +58,11 @@ temp/
 *.cache
 *.profraw
 *.profdata
+test-output/
+test-results/
+test-reports/
+*.junit.xml
+*.trx
 
 # Archives and generated native artifacts
 *.zip
@@ -72,8 +77,17 @@ temp/
 *.exe
 *.bin
 
+# cargo-fuzz generated outputs; deterministic seed corpora remain tracked.
+crates/nethop-subscription/fuzz/target/
+crates/nethop-subscription/fuzz/artifacts/
+crates/nethop-subscription/fuzz/coverage/
+crates/nethop-subscription/fuzz/corpus/
+artifacts/subscription-parser/m011/failures/
+
 # Local reference corpus is intentionally excluded from this repository.
 refer/
 
 # Local specification workflow state.
 .spec-workflow/
+
+artifacts/

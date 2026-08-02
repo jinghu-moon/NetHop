@@ -205,6 +205,31 @@ fn malformed_json_is_terminal_and_never_falls_back() {
 }
 
 #[test]
+fn explicit_ini_section_is_not_rejected_as_a_json_array() {
+    let limits = ParserLimits::default();
+    for input in [
+        b"[Proxy]\nnode = trojan, example.com, 443, password\n".as_slice(),
+        b"[General]\nloglevel = notify\n".as_slice(),
+    ] {
+        let detected = detect_bytes(input, FormatHint::Auto, &limits).unwrap();
+        assert_eq!(detected.format(), FormatHint::IniProfile);
+        assert_eq!(detected.strength(), EvidenceStrength::Strong);
+    }
+}
+
+#[test]
+fn malformed_json_array_without_ini_evidence_remains_terminal() {
+    let error = detect_bytes(
+        br#"[{"type":"trojan"}"#,
+        FormatHint::Auto,
+        &ParserLimits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), DiagnosticCode::InvalidJson);
+    assert_eq!(error.terminal_format(), Some(FormatHint::SingboxJson));
+}
+
+#[test]
 fn malformed_yaml_is_terminal_and_never_falls_back() {
     let error = detect_bytes(
         b"proxies:\n  - [unterminated\n",

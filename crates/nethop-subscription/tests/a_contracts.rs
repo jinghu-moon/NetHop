@@ -91,16 +91,17 @@ fn optional_feature_isolation_contract() {
     assert!(manifest.contains("fetch = [\"parser\", \"dep:flate2\", \"dep:ureq\", \"dep:url\"]"));
     assert!(manifest.contains("ureq = { version = \"=3.3.0\", optional = true"));
     assert!(manifest.contains("url = { version = \"2\", optional = true"));
-    for experimental in [
-        "format-stash",
-        "format-surge",
-        "format-surfboard",
-        "format-shadowrocket",
-        "format-quantumultx",
+    assert!(manifest.contains("format-surfboard = [\"parser\"]"));
+    assert!(manifest.contains("experimental-formats = [\"format-surfboard\"]"));
+    for excluded in [
+        "format-stash =",
+        "format-surge =",
+        "format-shadowrocket =",
+        "format-quantumultx =",
     ] {
         assert!(
-            manifest.contains(experimental),
-            "missing experimental feature {experimental}"
+            !manifest.contains(excluded),
+            "non-Android dialect feature must be absent: {excluded}"
         );
     }
     assert!(!manifest.contains("fetch = [\"parser\"]"));

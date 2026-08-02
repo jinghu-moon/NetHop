@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 
 use nethop_subscription::{
-    CapabilityMatrix, DiagnosticCode, Digest, FormatHint, ParserLimits, SourceId, SourceInput,
-    convert_stable_sources, detect_bytes,
+    CandidateStatus, CapabilityMatrix, DiagnosticCode, Digest, FormatHint, ParserIpcResponse,
+    ParserLimits, SourceId, SourceInput, convert_stable_sources, detect_bytes,
 };
 
 fn main() {
@@ -38,13 +38,16 @@ fn main() {
         emit_schema(&body, format, &digest);
         return;
     }
-    if !matches!(
-        format,
+    let parse_format = match format {
         FormatHint::UriList
-            | FormatHint::Base64List
-            | FormatHint::ClashYaml
-            | FormatHint::SingboxJson
-    ) {
+        | FormatHint::Base64List
+        | FormatHint::ClashYaml
+        | FormatHint::SingboxJson => Some(format),
+        #[cfg(feature = "format-surfboard")]
+        FormatHint::IniProfile => Some(FormatHint::SurfboardIni),
+        _ => None,
+    };
+    let Some(parse_format) = parse_format else {
         println!(
             "{}",
             serde_json::json!({
@@ -55,18 +58,30 @@ fn main() {
             })
         );
         return;
-    }
+    };
 
     let input_bytes = body.len();
+    let matrix = CapabilityMatrix::default();
     let conversion = convert_stable_sources(
         vec![SourceInput {
             source_id: SourceId::new("stdin-probe").expect("static source id is valid"),
-            format_hint: format,
+            format_hint: parse_format,
             bytes: body,
         }],
         &limits,
-        &CapabilityMatrix::default(),
+        &matrix,
     );
+    let response = ParserIpcResponse::from_conversion(
+        SourceId::new("probe-request").expect("static request id is valid"),
+        &conversion,
+        &limits,
+    )
+    .expect("bounded conversion must produce an IPC response");
+    let candidate_state = match response.candidate() {
+        CandidateStatus::Ready { .. } => "ready",
+        CandidateStatus::AcceptedZero => "accepted_zero",
+        CandidateStatus::Rejected { .. } => "rejected",
+    };
     let mut protocol_counts = BTreeMap::<&str, usize>::new();
     for item in &conversion.report.items {
         if let Some(protocol) = item.protocol {
@@ -85,6 +100,9 @@ fn main() {
             "diagnostic_counts": conversion.report.diagnostic_counts,
             "protocol_counts": protocol_counts,
             "source_success": conversion.report.summary.source_success,
+            "ipc_schema_version": response.schema_version(),
+            "mapping_digest": matrix.mapping_digest(),
+            "candidate_state": candidate_state,
         })
     );
 }
@@ -92,8 +110,21 @@ fn main() {
 fn emit_schema(body: &[u8], format: FormatHint, digest: &str) {
     let document =
         match format {
+            #[cfg(feature = "format-clash-yaml")]
             FormatHint::ClashYaml => serde_saphyr::from_slice::<serde_json::Value>(body)
                 .expect("validated YAML must decode"),
+            #[cfg(not(feature = "format-clash-yaml"))]
+            FormatHint::ClashYaml => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "digest_prefix": &digest[..12],
+                        "detected": format_name(format),
+                        "schema": "feature_disabled",
+                    })
+                );
+                return;
+            }
             FormatHint::SingboxJson => serde_json::from_slice::<serde_json::Value>(body)
                 .expect("validated JSON must decode"),
             _ => {
@@ -150,11 +181,7 @@ fn format_name(format: FormatHint) -> &'static str {
         FormatHint::ClashYaml => "clash_yaml",
         FormatHint::SingboxJson => "singbox_json",
         FormatHint::IniProfile => "ini_profile",
-        FormatHint::Quantumultx => "quantumultx",
-        FormatHint::SurgeIni => "surge_ini",
         FormatHint::SurfboardIni => "surfboard_ini",
-        FormatHint::ShadowrocketServers => "shadowrocket_servers",
-        FormatHint::QuantumultxSnippet => "quantumultx_snippet",
     }
 }
 

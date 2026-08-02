@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "sing_box_version": "1.13.15",
+  "sing_box_tag": "v1.13.15",
+  "sing_box_commit": "3708fa18766cda1f11b77f6ed9c7bd61688f17df",
+  "go_version": "1.24.7",
+  "build_tags": [
+    "with_quic",
+    "with_utls",
+    "with_clash_api",
+    "with_v2ray_api",
+    "with_gvisor",
+    "badlinkname",
+    "tfogo_checklinkname0"
+  ],
+  "check_fixture": "tests/fixtures/mapping/sing-box-1.13.15-check.json",
+  "protocols": [
+    {
+      "protocol": "vless",
+      "mapped_fields": ["type", "tag", "server", "server_port", "uuid", "flow", "tls", "transport"],
+      "source_paths": ["option/vless.go", "option/tls.go", "option/v2ray_transport.go", "protocol/vless/outbound.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"websocket","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"http","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"httpupgrade","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"grpc","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":"xtls-rprx-vision","plugin":null},
+        {"transport":"tcp","tls":true,"reality":true,"utls":true,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":true,"reality":true,"utls":true,"udp":false,"flow":"xtls-rprx-vision","plugin":null}
+      ]
+    },
+    {
+      "protocol": "vmess",
+      "mapped_fields": ["type", "tag", "server", "server_port", "uuid", "security", "alter_id", "tls", "transport"],
+      "source_paths": ["option/vmess.go", "option/tls.go", "option/v2ray_transport.go", "protocol/vmess/outbound.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"websocket","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"http","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"httpupgrade","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"grpc","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null}
+      ]
+    },
+    {
+      "protocol": "shadowsocks",
+      "mapped_fields": ["type", "tag", "server", "server_port", "method", "password", "plugin", "plugin_opts"],
+      "source_paths": ["option/shadowsocks.go", "protocol/shadowsocks/outbound.go", "transport/sip003/obfs.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":"obfs-local"}
+      ]
+    },
+    {
+      "protocol": "trojan",
+      "mapped_fields": ["type", "tag", "server", "server_port", "password", "tls", "transport"],
+      "source_paths": ["option/trojan.go", "option/tls.go", "option/v2ray_transport.go", "protocol/trojan/outbound.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"websocket","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"grpc","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null}
+      ]
+    },
+    {
+      "protocol": "hysteria2",
+      "mapped_fields": ["type", "tag", "server", "server_port", "password", "obfs", "tls"],
+      "source_paths": ["option/hysteria2.go", "option/tls.go", "protocol/hysteria2/outbound.go", "include/quic.go"],
+      "capabilities": [
+        {"transport":"quic","tls":true,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null}
+      ]
+    },
+    {
+      "protocol": "tuic",
+      "mapped_fields": ["type", "tag", "server", "server_port", "uuid", "password", "congestion_control", "tls"],
+      "source_paths": ["option/tuic.go", "option/tls.go", "protocol/tuic/outbound.go", "include/quic.go"],
+      "capabilities": [
+        {"transport":"quic","tls":true,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null}
+      ]
+    },
+    {
+      "protocol": "anytls",
+      "mapped_fields": ["type", "tag", "server", "server_port", "password", "tls"],
+      "source_paths": ["option/anytls.go", "option/tls.go", "protocol/anytls/outbound.go", "include/registry.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null}
+      ]
+    }
+  ]
+}
