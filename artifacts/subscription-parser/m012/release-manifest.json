@@ -53,7 +53,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "70509680852176e8cccc1e612f6df6a32c205d060b2a8845ac222552ffa78aa6"
+      "sha256": "820865971574136b86a16d18111d4be4c90ff146a991e86cb87e2a90cf4772fa"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",

@@ -45,33 +45,31 @@ impl WorkerControlService for crate::UnixControlServer {
     }
 }
 
-pub fn run_worker_service<C, D, T, H>(
+pub fn run_worker_service<C, D, A>(
     server: &C,
-    handler: &mut H,
-    tasks: &mut T,
+    application: &mut A,
     driver: &mut D,
 ) -> Result<(), WorkerServiceError>
 where
     C: WorkerControlService,
     D: WorkerServiceDriver,
-    T: WorkerServiceTasks,
-    H: ControlRequestHandler,
+    A: WorkerServiceTasks + ControlRequestHandler,
 {
     server.prepare()?;
     loop {
         let iteration = (|| {
-            while server.serve_ready(handler)? {}
-            tasks.run_ready()
+            while server.serve_ready(application)? {}
+            application.run_ready()
         })();
         if let Err(error) = iteration {
-            return match tasks.shutdown() {
+            return match application.shutdown() {
                 Ok(()) => Err(error),
                 Err(_) => Err(WorkerServiceError::ShutdownFailed),
             };
         }
-        let timeout = tasks.next_wakeup_in().min(MAX_IDLE_POLL);
+        let timeout = application.next_wakeup_in().min(MAX_IDLE_POLL);
         if driver.wait(timeout) == WorkerServiceSignal::Stop {
-            return tasks.shutdown();
+            return application.shutdown();
         }
     }
 }

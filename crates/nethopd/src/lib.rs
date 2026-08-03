@@ -10,6 +10,7 @@ pub mod storage;
 pub mod supervisor;
 pub mod uds;
 pub mod worker_activation;
+pub mod worker_application;
 pub mod worker_config;
 pub mod worker_runtime;
 pub mod worker_service;
@@ -23,6 +24,7 @@ pub use activation::{
 pub use application::{
     ApplicationError, DaemonArguments, DaemonMode, RuntimeRoot, SupervisorLoopDriver,
     SupervisorLoopSignal, SystemSupervisorDriver, run_supervisor_loop, run_system_supervisor,
+    run_system_worker,
 };
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
@@ -57,6 +59,10 @@ pub use worker_activation::{
     DataPlaneHealthProbe, NetworkController, NetworkDataPlaneHealthProbe, RuntimeStopError,
     WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator, WorkerRecovery,
     WorkerRecoveryError,
+};
+pub use worker_application::{
+    ApplicationRecovery, MonotonicClock, RuntimeRecoverySource, WorkerApplication, WorkerClock,
+    WorkerRecoveryCoordinator,
 };
 pub use worker_config::{WorkerConfig, WorkerConfigError};
 pub use worker_runtime::{

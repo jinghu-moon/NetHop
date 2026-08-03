@@ -11,8 +11,24 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    RestartPolicy, SupervisorError, SystemWorkerBackend, WorkerProcessBackend, WorkerSupervisor,
+    RestartPolicy, SupervisorError, SystemWorkerBackend, WorkerProcessBackend, WorkerServiceError,
+    WorkerSupervisor,
 };
+
+#[cfg(unix)]
+use crate::{
+    ControlServerLimits, CoreProcessLimits, CoreProcessRunner, MonotonicClock,
+    NetworkDataPlaneHealthProbe, RunnerLimits, SingBoxCheckRunner, StartupLivenessProbe,
+    UnixControlServer, WorkerApplication, WorkerConfig, WorkerRecoveryCoordinator,
+    WorkerRuntimeLimits, WorkerServiceDriver, WorkerServiceSignal, run_worker_service,
+};
+#[cfg(unix)]
+use nethop_android::{
+    AndroidToolPaths, CapabilityProbe, CommandProbeBackend, NetworkExecutor, NetworkPlanVerifier,
+    PlanSlot, ProbeLimits, SystemCommandBackend, SystemCommandLimits,
+};
+#[cfg(unix)]
+use nethop_core::GenerationStore;
 
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -194,6 +210,125 @@ pub fn run_system_supervisor(runtime: &RuntimeRoot) -> Result<(), ApplicationErr
     run_supervisor_loop(&mut supervisor, &mut driver)
 }
 
+#[cfg(unix)]
+#[derive(Debug)]
+struct SystemWorkerServiceDriver;
+
+#[cfg(unix)]
+impl SystemWorkerServiceDriver {
+    fn install() -> Result<Self, ApplicationError> {
+        STOP_REQUESTED.store(false, Ordering::Release);
+        install_signal_handlers()?;
+        Ok(Self)
+    }
+}
+
+#[cfg(unix)]
+impl WorkerServiceDriver for SystemWorkerServiceDriver {
+    fn wait(&mut self, timeout: Duration) -> WorkerServiceSignal {
+        if STOP_REQUESTED.load(Ordering::Acquire) {
+            return WorkerServiceSignal::Stop;
+        }
+        thread::sleep(timeout);
+        if STOP_REQUESTED.load(Ordering::Acquire) {
+            WorkerServiceSignal::Stop
+        } else {
+            WorkerServiceSignal::Wake
+        }
+    }
+}
+
+#[cfg(unix)]
+pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> {
+    ensure_root()?;
+    let config = WorkerConfig::load(&runtime.root().join("config/nethop.json"))
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let inbound_port = config
+        .capture()
+        .inbound_port()
+        .ok_or(ApplicationError::WorkerInitializationFailed)?;
+    let store = GenerationStore::new(runtime.root())
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let executable = std::env::current_exe().map_err(|_| ApplicationError::InvalidExecutable)?;
+    let binary = executable
+        .parent()
+        .ok_or(ApplicationError::InvalidExecutable)?
+        .join("sing-box");
+    let checker =
+        SingBoxCheckRunner::new(&binary, store.generations_root(), RunnerLimits::default())
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let launcher = CoreProcessRunner::new(
+        &binary,
+        store.generations_root(),
+        CoreProcessLimits::default(),
+    )
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let core_health = StartupLivenessProbe::default();
+    let capability_source = CapabilityProbe::new(
+        CommandProbeBackend::new(
+            AndroidToolPaths::from_system()
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+            ProbeLimits::default(),
+        ),
+        config.allocations().to_vec(),
+        inbound_port,
+    )
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let network = NetworkExecutor::new(
+        SystemCommandBackend::from_system(SystemCommandLimits::default())
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+    );
+    let data_plane_health = NetworkDataPlaneHealthProbe::new(
+        NetworkPlanVerifier::new(
+            CommandProbeBackend::new(
+                AndroidToolPaths::from_system()
+                    .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+                ProbeLimits::default(),
+            ),
+            inbound_port,
+        )
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+    );
+    let verifier = NetworkPlanVerifier::new(
+        CommandProbeBackend::new(
+            AndroidToolPaths::from_system()
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+            ProbeLimits::default(),
+        ),
+        inbound_port,
+    )
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let recovery = WorkerRecoveryCoordinator::new(
+        &store,
+        &checker,
+        &launcher,
+        &core_health,
+        capability_source,
+        data_plane_health,
+    );
+    let mut application = WorkerApplication::new(
+        recovery,
+        network,
+        verifier,
+        MonotonicClock::start(),
+        config.capture().clone(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    );
+    let server = UnixControlServer::bind(
+        runtime.run().join("nethopd.sock"),
+        ControlServerLimits::default(),
+    )
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let mut driver = SystemWorkerServiceDriver::install()?;
+    run_worker_service(&server, &mut application, &mut driver).map_err(ApplicationError::Worker)
+}
+
+#[cfg(not(unix))]
+pub fn run_system_worker(_runtime: &RuntimeRoot) -> Result<(), ApplicationError> {
+    Err(ApplicationError::UnsupportedPlatform)
+}
+
 #[derive(Debug)]
 struct PidFile {
     path: PathBuf,
@@ -342,6 +477,10 @@ pub enum ApplicationError {
     PidFileFailed,
     #[error("nethopd signal handlers could not be installed")]
     SignalHandlerFailed,
+    #[error("nethopd worker could not be initialized")]
+    WorkerInitializationFailed,
+    #[error("nethopd worker failed")]
+    Worker(#[from] WorkerServiceError),
     #[error("worker supervisor failed")]
     Supervisor(#[from] SupervisorError),
 }

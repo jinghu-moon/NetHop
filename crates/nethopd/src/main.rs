@@ -1,6 +1,9 @@
 use std::process::ExitCode;
 
-use nethopd::{ApplicationError, DaemonArguments, DaemonMode, RuntimeRoot, run_system_supervisor};
+use nethopd::{
+    ApplicationError, DaemonArguments, DaemonMode, RuntimeRoot, run_system_supervisor,
+    run_system_worker,
+};
 
 fn main() -> ExitCode {
     match run() {
@@ -17,6 +20,6 @@ fn run() -> Result<(), ApplicationError> {
     let runtime = RuntimeRoot::open(arguments.root())?;
     match arguments.mode() {
         DaemonMode::Supervise => run_system_supervisor(&runtime),
-        DaemonMode::Worker => Err(ApplicationError::UnsupportedPlatform),
+        DaemonMode::Worker => run_system_worker(&runtime),
     }
 }

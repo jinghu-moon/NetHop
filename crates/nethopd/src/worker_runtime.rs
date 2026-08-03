@@ -9,7 +9,7 @@ use std::{
 };
 
 use nethop_android::NetworkHealthVerifier;
-use nethop_core::RuntimeState;
+use nethop_core::{GenerationId, RuntimeState};
 use thiserror::Error;
 
 use crate::{ActiveRuntime, CandidateProcess, NetworkController, RuntimeStopError};
@@ -204,6 +204,10 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
 
     pub const fn has_active_runtime(&self) -> bool {
         self.active.is_some()
+    }
+
+    pub fn generation(&self) -> Option<GenerationId> {
+        self.active.as_ref().map(ActiveRuntime::generation)
     }
 
     pub fn next_wakeup_in(&self, now: Duration) -> Duration {

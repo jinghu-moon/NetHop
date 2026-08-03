@@ -7,9 +7,7 @@ use nethopd::{
 };
 use serde_json::json;
 
-struct Handler;
-
-impl ControlRequestHandler for Handler {
+impl ControlRequestHandler for Tasks {
     fn handle(&mut self, request: ControlRequest) -> ControlResponse {
         ControlResponse::success(request.request_id().clone(), None, json!({"state":"init"}))
     }
@@ -74,14 +72,13 @@ impl WorkerServiceDriver for Driver {
 #[test]
 fn idle_worker_loop_is_bounded_and_runs_shutdown_once() {
     let server = ControlService;
-    let mut handler = Handler;
     let mut tasks = Tasks::default();
     let mut driver = Driver {
         signals: VecDeque::from([WorkerServiceSignal::Wake, WorkerServiceSignal::Stop]),
         waits: Vec::new(),
     };
 
-    run_worker_service(&server, &mut handler, &mut tasks, &mut driver).unwrap();
+    run_worker_service(&server, &mut tasks, &mut driver).unwrap();
     assert_eq!(tasks.runs, 2);
     assert_eq!(tasks.shutdowns, 1);
     assert_eq!(driver.waits, vec![Duration::from_secs(1); 2]);
@@ -90,7 +87,6 @@ fn idle_worker_loop_is_bounded_and_runs_shutdown_once() {
 #[test]
 fn task_failure_still_runs_shutdown_cleanup() {
     let server = ControlService;
-    let mut handler = Handler;
     let mut tasks = Tasks {
         fail_run: true,
         ..Tasks::default()
@@ -101,7 +97,7 @@ fn task_failure_still_runs_shutdown_cleanup() {
     };
 
     assert!(matches!(
-        run_worker_service(&server, &mut handler, &mut tasks, &mut driver),
+        run_worker_service(&server, &mut tasks, &mut driver),
         Err(WorkerServiceError::TaskFailed)
     ));
     assert_eq!(tasks.shutdowns, 1);

@@ -165,6 +165,10 @@ impl WorkerControlHandler {
         self.snapshot = snapshot;
     }
 
+    pub const fn snapshot(&self) -> ControlSnapshot {
+        self.snapshot
+    }
+
     pub fn take_command(&mut self) -> Option<ControlCommand> {
         self.pending.pop_front()
     }
