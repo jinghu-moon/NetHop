@@ -1,0 +1,7 @@
+id=nethop
+name=NetHop
+version=0.1.0-alpha
+versionCode=1
+author=jinghu-moon
+description=Root transparent proxy control plane for Android 13 and later
+

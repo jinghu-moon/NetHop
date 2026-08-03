@@ -95,3 +95,15 @@ fn relative_empty_and_oversized_files_are_rejected_before_parsing() {
         WorkerConfigError::InvalidPath
     );
 }
+
+#[test]
+fn module_default_is_a_valid_strict_worker_config() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../module/defaults/nethop.json")
+        .canonicalize()
+        .unwrap();
+    let config = WorkerConfig::load(&path).unwrap();
+    assert_eq!(config.capture().inbound_port(), Some(7893));
+    assert_eq!(config.capture().bypass_mark(), Some(131_072));
+    assert_eq!(config.allocations().len(), 1);
+}

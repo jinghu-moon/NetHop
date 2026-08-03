@@ -1,0 +1,17 @@
+{
+  "schema": "nethop-worker-v1",
+  "inbound_port": 7893,
+  "bypass_mark": 131072,
+  "ipv6_guard": true,
+  "include_uids": [],
+  "exclude_uids": [0],
+  "allocations": [
+    {
+      "mark": 256,
+      "mask": 65280,
+      "route_table": 100,
+      "rule_priority": 10000
+    }
+  ]
+}
+

@@ -21,7 +21,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "820865971574136b86a16d18111d4be4c90ff146a991e86cb87e2a90cf4772fa"
+      "sha256": "4f8cadead55fcecfb0c802527fb192657fbc34a0d667cf84bf8be751d7520c8f"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
@@ -61,7 +61,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m012/release-manifest.json",
-      "sha256": "57c48ddcb253d6c2f6cf434bab7b6583826c4f863b243c087266cd44f6ae1b19"
+      "sha256": "90b3bebcbf35214f854b2ff9f3a850a6b463cbbfda24570002f65cd337df6821"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",

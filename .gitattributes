@@ -1,0 +1,4 @@
+module/*.sh text eol=lf
+module/defaults/*.json text eol=lf
+module/module.prop text eol=lf
+

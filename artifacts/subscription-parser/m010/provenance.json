@@ -14,7 +14,7 @@
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26100 (Windows 11 IoTEnterpriseS) [64-bit]"
   },
   "source_control": {
-    "git_head": "30509bc5002baa3eff8ad54af98c48a8ed11abc3",
+    "git_head": "6740f5cbeddd0e0e1b6cb7af002eb3baf8da7766",
     "working_tree": "dirty"
   },
   "gates": {
