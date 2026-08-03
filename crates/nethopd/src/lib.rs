@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod process;
 pub mod runner;
+pub mod supervisor;
 pub mod worker_activation;
 pub mod worker_runtime;
 
@@ -18,6 +19,11 @@ pub use process::{
 pub use runner::{
     CheckOutputSummary, CheckReport, RunnerDiagnosticCode, RunnerError, RunnerLimits,
     SingBoxCheckRunner,
+};
+pub use supervisor::{
+    RestartPolicy, SupervisorError, SupervisorEvent, SupervisorState, SystemWorkerBackend,
+    SystemWorkerProcess, WorkerExit, WorkerProcess, WorkerProcessBackend, WorkerSignal,
+    WorkerSupervisor,
 };
 pub use worker_activation::{
     ActiveRuntime, CapabilitySource, DataPlaneHealthError, DataPlaneHealthProbe, NetworkController,
