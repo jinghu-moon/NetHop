@@ -4,6 +4,7 @@ pub mod apps;
 pub mod capability;
 pub mod executor;
 pub mod health;
+pub mod netlink;
 pub mod plan;
 pub mod tun;
 
@@ -24,6 +25,12 @@ pub use executor::{
 };
 pub use health::{
     NetworkHealthDiagnosticCode, NetworkHealthError, NetworkHealthVerifier, NetworkPlanVerifier,
+};
+#[cfg(any(target_os = "android", target_os = "linux"))]
+pub use netlink::NetlinkRouteSocket;
+pub use netlink::{
+    NetlinkDebouncer, NetlinkError, NetlinkEventReader, NetlinkEventSource, NetworkAction,
+    NetworkChange, NetworkEvent, NetworkEventBatch,
 };
 pub use plan::{
     NetworkOperationKind, NetworkPlan, NetworkPlanError, NetworkPlanner, PlanDiagnosticCode,

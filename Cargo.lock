@@ -562,6 +562,7 @@ dependencies = [
 name = "nethop-android"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "nethop-core",
  "serde",
  "serde_json",
