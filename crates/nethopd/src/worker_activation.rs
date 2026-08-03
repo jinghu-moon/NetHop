@@ -1,7 +1,7 @@
 use nethop_android::{
     ApplyReceipt, CapabilityError, CapabilityProbe, CapabilityReport, ExecutionError,
-    NetworkCommandBackend, NetworkExecutor, NetworkPlan, NetworkPlanError, NetworkPlanner,
-    PlanSlot, ProbeBackend,
+    NetworkCommandBackend, NetworkExecutor, NetworkHealthVerifier, NetworkPlan, NetworkPlanError,
+    NetworkPlanner, PlanSlot, ProbeBackend,
 };
 use nethop_core::{Candidate, CapturePolicy, GenerationId, RuntimeState};
 use thiserror::Error;
@@ -51,17 +51,68 @@ impl<B: NetworkCommandBackend> NetworkController for NetworkExecutor<B> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DataPlaneHealthError {
-    #[error("candidate data plane is unhealthy")]
-    Unhealthy,
+    #[error("candidate core exited during data-plane verification")]
+    CoreExited,
+    #[error("candidate core state could not be observed during data-plane verification")]
+    CoreObserveFailed,
+    #[error("candidate network plan is unhealthy")]
+    NetworkUnhealthy,
+}
+
+impl DataPlaneHealthError {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CoreExited => "data_plane_core_exited",
+            Self::CoreObserveFailed => "data_plane_core_observe_failed",
+            Self::NetworkUnhealthy => "data_plane_network_unhealthy",
+        }
+    }
 }
 
 pub trait DataPlaneHealthProbe<P: CandidateProcess> {
     fn wait_healthy(
-        &self,
+        &mut self,
         process: &mut P,
         plan: &NetworkPlan,
         capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError>;
+}
+
+#[derive(Debug)]
+pub struct NetworkDataPlaneHealthProbe<V> {
+    verifier: V,
+}
+
+impl<V> NetworkDataPlaneHealthProbe<V> {
+    pub const fn new(verifier: V) -> Self {
+        Self { verifier }
+    }
+
+    pub fn into_verifier(self) -> V {
+        self.verifier
+    }
+}
+
+impl<P, V> DataPlaneHealthProbe<P> for NetworkDataPlaneHealthProbe<V>
+where
+    P: CandidateProcess,
+    V: NetworkHealthVerifier,
+{
+    fn wait_healthy(
+        &mut self,
+        process: &mut P,
+        plan: &NetworkPlan,
+        _capabilities: &CapabilityReport,
+    ) -> Result<(), DataPlaneHealthError> {
+        match process.is_running() {
+            Ok(true) => {}
+            Ok(false) => return Err(DataPlaneHealthError::CoreExited),
+            Err(_) => return Err(DataPlaneHealthError::CoreObserveFailed),
+        }
+        self.verifier
+            .verify(plan)
+            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,7 +239,7 @@ pub struct WorkerActivator<'a, C, L, A, H, S, N, D> {
     core: CandidateActivator<'a, C, L, A, H>,
     capability_source: &'a mut S,
     network: &'a mut N,
-    data_plane_health: &'a D,
+    data_plane_health: &'a mut D,
     state: RuntimeState,
 }
 
@@ -197,7 +248,7 @@ impl<'a, C, L, A, H, S, N, D> WorkerActivator<'a, C, L, A, H, S, N, D> {
         core: CandidateActivator<'a, C, L, A, H>,
         capability_source: &'a mut S,
         network: &'a mut N,
-        data_plane_health: &'a D,
+        data_plane_health: &'a mut D,
     ) -> Self {
         Self {
             core,
@@ -275,16 +326,15 @@ where
                 ));
             }
         };
-        if self
-            .data_plane_health
-            .wait_healthy(staged.process_mut(), &plan, &capabilities)
-            .is_err()
+        if let Err(error) =
+            self.data_plane_health
+                .wait_healthy(staged.process_mut(), &plan, &capabilities)
         {
             let network_cleanup_failed = self.network.rollback(&plan, &mut receipt).is_err();
             let core_cleanup_failed = self.core.abort_staged(staged);
             return Err(self.fail_open(
                 WorkerActivationDiagnosticCode::DataPlaneHealthFailed,
-                Some("worker_data_plane_unhealthy"),
+                Some(error.as_str()),
                 network_cleanup_failed || core_cleanup_failed,
             ));
         }

@@ -2,7 +2,8 @@ use std::{cell::RefCell, collections::BTreeMap, path::Path, rc::Rc};
 
 use nethop_android::{
     AllocationCapability, CapabilityError, CapabilityReport, CapabilityStatus, ExecutionError,
-    FamilyCapability, IpFamily, NetfilterBackend, NetworkPlan, PlanSlot, ResourceCandidate,
+    FamilyCapability, IpFamily, NetfilterBackend, NetworkHealthError, NetworkHealthVerifier,
+    NetworkPlan, PlanSlot, ResourceCandidate,
 };
 use nethop_core::{
     Candidate, CaptureMode, CapturePolicy, GenerationId, GenerationStore, ManagedConfig,
@@ -11,8 +12,8 @@ use nethop_core::{
 use nethopd::{
     CandidateActivator, CandidateChecker, CandidateProcess, CapabilitySource, CoreLauncher,
     DataPlaneHealthError, DataPlaneHealthProbe, HealthProbe, HealthProbeError, NetworkController,
-    ProcessError, ProcessIdentity, RunnerError, SafetyAuditError, SafetyAuditor,
-    WorkerActivationDiagnosticCode, WorkerActivator,
+    NetworkDataPlaneHealthProbe, ProcessError, ProcessIdentity, RunnerError, SafetyAuditError,
+    SafetyAuditor, WorkerActivationDiagnosticCode, WorkerActivator,
 };
 use serde_json::json;
 
@@ -81,6 +82,10 @@ fn report(ipv4_tproxy: CapabilityStatus) -> CapabilityReport {
     .unwrap()
 }
 
+fn supported_report() -> CapabilityReport {
+    report(CapabilityStatus::Supported)
+}
+
 fn policy() -> CapturePolicy {
     CapturePolicy::new(
         CaptureMode::Tproxy,
@@ -127,6 +132,23 @@ impl CandidateProcess for FakeProcess {
 
     fn stop(self) -> Result<(), ProcessError> {
         self.events.borrow_mut().push("core_stop");
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ExitedProcess;
+
+impl CandidateProcess for ExitedProcess {
+    fn identity(&self) -> ProcessIdentity {
+        ProcessIdentity::new(43, Some(8)).unwrap()
+    }
+
+    fn is_running(&mut self) -> Result<bool, ProcessError> {
+        Ok(false)
+    }
+
+    fn stop(self) -> Result<(), ProcessError> {
         Ok(())
     }
 }
@@ -215,7 +237,7 @@ struct FakeDataPlaneHealth<'a> {
 
 impl DataPlaneHealthProbe<FakeProcess> for FakeDataPlaneHealth<'_> {
     fn wait_healthy(
-        &self,
+        &mut self,
         _process: &mut FakeProcess,
         _plan: &NetworkPlan,
         _capabilities: &CapabilityReport,
@@ -226,11 +248,64 @@ impl DataPlaneHealthProbe<FakeProcess> for FakeDataPlaneHealth<'_> {
         );
         self.events.borrow_mut().push("data_health");
         if self.fail {
-            Err(DataPlaneHealthError::Unhealthy)
+            Err(DataPlaneHealthError::NetworkUnhealthy)
         } else {
             Ok(())
         }
     }
+}
+
+#[derive(Debug)]
+struct FakeNetworkHealthVerifier {
+    fail: bool,
+}
+
+impl NetworkHealthVerifier for FakeNetworkHealthVerifier {
+    fn verify(&mut self, _plan: &NetworkPlan) -> Result<(), NetworkHealthError> {
+        if self.fail {
+            Err(NetworkHealthError::OwnerMarkerMissing)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn full_network_plan() -> NetworkPlan {
+    nethop_android::NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(2).unwrap(),
+            PlanSlot::A,
+            &policy(),
+            &supported_report(),
+        )
+        .unwrap()
+}
+
+#[test]
+fn production_data_plane_adapter_requires_a_live_core_and_verified_network_plan() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut process = FakeProcess { events };
+    let mut probe = NetworkDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: false });
+    probe
+        .wait_healthy(&mut process, &full_network_plan(), &supported_report())
+        .unwrap();
+
+    let mut probe = NetworkDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: true });
+    assert_eq!(
+        probe
+            .wait_healthy(&mut process, &full_network_plan(), &supported_report())
+            .unwrap_err(),
+        DataPlaneHealthError::NetworkUnhealthy
+    );
+
+    let mut process = ExitedProcess;
+    let mut probe = NetworkDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: false });
+    assert_eq!(
+        probe
+            .wait_healthy(&mut process, &full_network_plan(), &supported_report())
+            .unwrap_err(),
+        DataPlaneHealthError::CoreExited
+    );
 }
 
 fn assert_candidate_removed(store: &GenerationStore) {
@@ -261,14 +336,15 @@ fn worker_commits_only_after_network_and_data_plane_health() {
         fail_apply: false,
         fail_rollback: false,
     };
-    let data_health = FakeDataPlaneHealth {
+    let mut data_health = FakeDataPlaneHealth {
         store: &store,
         events: Rc::clone(&events),
         fail: false,
     };
 
     let active = {
-        let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &data_health);
+        let mut worker =
+            WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
         let active = worker
             .activate(&candidate(2), &policy(), PlanSlot::A)
             .unwrap();
@@ -317,13 +393,13 @@ fn network_apply_failure_stops_core_and_keeps_previous_generation() {
         fail_apply: true,
         fail_rollback: false,
     };
-    let data_health = FakeDataPlaneHealth {
+    let mut data_health = FakeDataPlaneHealth {
         store: &store,
         events: Rc::clone(&events),
         fail: false,
     };
 
-    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &data_health);
+    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
     let error = worker
         .activate(&candidate(2), &policy(), PlanSlot::A)
         .unwrap_err();
@@ -359,13 +435,13 @@ fn data_plane_failure_rolls_back_network_before_stopping_core() {
         fail_apply: false,
         fail_rollback: false,
     };
-    let data_health = FakeDataPlaneHealth {
+    let mut data_health = FakeDataPlaneHealth {
         store: &store,
         events: Rc::clone(&events),
         fail: true,
     };
 
-    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &data_health);
+    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
     let error = worker
         .activate(&candidate(2), &policy(), PlanSlot::A)
         .unwrap_err();
@@ -406,13 +482,13 @@ fn commit_failure_rolls_back_network_and_discards_candidate() {
         fail_apply: false,
         fail_rollback: false,
     };
-    let data_health = FakeDataPlaneHealth {
+    let mut data_health = FakeDataPlaneHealth {
         store: &store,
         events: Rc::clone(&events),
         fail: false,
     };
 
-    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &data_health);
+    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
     let error = worker
         .activate(&candidate(2), &policy(), PlanSlot::A)
         .unwrap_err();
@@ -451,13 +527,14 @@ fn capability_and_plan_failures_do_not_start_core_or_touch_network() {
             fail_apply: false,
             fail_rollback: false,
         };
-        let data_health = FakeDataPlaneHealth {
+        let mut data_health = FakeDataPlaneHealth {
             store: &store,
             events: Rc::clone(&events),
             fail: false,
         };
 
-        let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &data_health);
+        let mut worker =
+            WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
         let error = worker
             .activate(&candidate(2), &policy(), PlanSlot::A)
             .unwrap_err();
@@ -492,13 +569,13 @@ fn rollback_failure_is_reported_but_does_not_skip_core_stop() {
         fail_apply: false,
         fail_rollback: true,
     };
-    let data_health = FakeDataPlaneHealth {
+    let mut data_health = FakeDataPlaneHealth {
         store: &store,
         events: Rc::clone(&events),
         fail: true,
     };
 
-    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &data_health);
+    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
     let error = worker
         .activate(&candidate(2), &policy(), PlanSlot::A)
         .unwrap_err();

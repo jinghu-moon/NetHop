@@ -3,8 +3,10 @@ use std::{cell::RefCell, rc::Rc};
 use nethop_android::{
     AllocationCapability, CapabilityError, CapabilityProbe, CapabilityReport, CapabilityStatus,
     CommandFailure, CommandInvocation, CommandOutput, ExecutionError, FamilyCapability, IpFamily,
-    NetfilterBackend, NetworkCommandBackend, NetworkExecutor, NetworkOperationKind, NetworkPlanner,
-    NetworkProgram, PlanSlot, ProbeBackend, ProbeCommand, ProbeOutput, ResourceCandidate,
+    NetfilterBackend, NetworkCommandBackend, NetworkExecutor, NetworkHealthDiagnosticCode,
+    NetworkHealthError, NetworkHealthVerifier, NetworkOperationKind, NetworkPlanVerifier,
+    NetworkPlanner, NetworkProgram, PlanSlot, ProbeBackend, ProbeCommand, ProbeOutput,
+    ResourceCandidate,
 };
 use nethop_core::{CaptureMode, CapturePolicy, GenerationId};
 
@@ -78,6 +80,101 @@ fn full_plan() -> nethop_android::NetworkPlan {
             ),
         )
         .unwrap()
+}
+
+#[derive(Debug)]
+struct AppliedPlanProbe {
+    owner_present: bool,
+    rule_present: bool,
+    route_present: bool,
+    port_present: bool,
+}
+
+impl ProbeBackend for AppliedPlanProbe {
+    fn run(&mut self, command: ProbeCommand) -> Result<ProbeOutput, CapabilityError> {
+        let allocation = candidate(0x100, 100, 10_000);
+        let output = match command {
+            ProbeCommand::NetfilterSnapshot(_) => ProbeOutput::new(
+                true,
+                if self.owner_present {
+                    "-A OUTPUT -m comment --comment nethop:g=7 -j NH_OUT_A"
+                } else {
+                    "*mangle\nCOMMIT"
+                },
+                "",
+            ),
+            ProbeCommand::PolicyRules(_) => ProbeOutput::new(
+                true,
+                if self.rule_present {
+                    format!(
+                        "{}: from all fwmark 0x{:x}/0x{:x} lookup {}",
+                        allocation.rule_priority(),
+                        allocation.mark(),
+                        allocation.mask(),
+                        allocation.route_table()
+                    )
+                } else {
+                    "0: from all lookup local".to_owned()
+                },
+                "",
+            ),
+            ProbeCommand::RouteTable(_, _) => ProbeOutput::new(
+                true,
+                if self.route_present {
+                    "local default dev lo scope host"
+                } else {
+                    ""
+                },
+                "",
+            ),
+            ProbeCommand::ListeningSockets => ProbeOutput::new(
+                true,
+                if self.port_present {
+                    "tcp LISTEN 0 128 127.0.0.1:7893 0.0.0.0:*"
+                } else {
+                    ""
+                },
+                "",
+            ),
+            _ => panic!("unexpected health probe command: {command:?}"),
+        };
+        Ok(output)
+    }
+}
+
+#[derive(Debug)]
+struct GuardPlanProbe;
+
+impl ProbeBackend for GuardPlanProbe {
+    fn run(&mut self, command: ProbeCommand) -> Result<ProbeOutput, CapabilityError> {
+        let output = match command {
+            ProbeCommand::ListeningSockets => {
+                ProbeOutput::new(true, "udp UNCONN 0 0 127.0.0.1:7893 0.0.0.0:*", "")
+            }
+            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv4) => ProbeOutput::new(
+                true,
+                "-A OUTPUT -m comment --comment nethop:g=8 -j NH_OUT_B",
+                "",
+            ),
+            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv6) => ProbeOutput::new(
+                true,
+                "-A OUTPUT -m comment --comment nethop:g=8 -j NH_V6G_B",
+                "",
+            ),
+            ProbeCommand::PolicyRules(IpFamily::Ipv4) => {
+                ProbeOutput::new(true, "10000: from all fwmark 0x100/0xff00 lookup 100", "")
+            }
+            ProbeCommand::RouteTable(IpFamily::Ipv4, 100) => {
+                ProbeOutput::new(true, "local default dev lo scope host", "")
+            }
+            ProbeCommand::PolicyRules(IpFamily::Ipv6)
+            | ProbeCommand::RouteTable(IpFamily::Ipv6, _) => {
+                panic!("IPv6 guard must not require IPv6 policy routing")
+            }
+            _ => panic!("unexpected guard health probe command: {command:?}"),
+        };
+        Ok(output)
+    }
 }
 
 #[derive(Debug)]
@@ -160,6 +257,73 @@ fn capability_probe_is_read_only_versioned_and_detects_nft_wrapper() {
 }
 
 #[test]
+fn applied_plan_verifier_checks_owned_rules_routes_and_listener_without_mutation() {
+    let plan = full_plan();
+    assert_eq!(plan.owner_marker(), "nethop:g=7");
+    assert!(plan.ipv6_captured());
+    let mut verifier = NetworkPlanVerifier::new(
+        AppliedPlanProbe {
+            owner_present: true,
+            rule_present: true,
+            route_present: true,
+            port_present: true,
+        },
+        PORT,
+    )
+    .unwrap();
+
+    verifier.verify(&plan).unwrap();
+}
+
+#[test]
+fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
+    for (owner_present, rule_present, route_present, port_present, expected) in [
+        (
+            false,
+            true,
+            true,
+            true,
+            NetworkHealthDiagnosticCode::OwnerMarkerMissing,
+        ),
+        (
+            true,
+            false,
+            true,
+            true,
+            NetworkHealthDiagnosticCode::PolicyRuleMissing,
+        ),
+        (
+            true,
+            true,
+            false,
+            true,
+            NetworkHealthDiagnosticCode::RouteMissing,
+        ),
+        (
+            true,
+            true,
+            true,
+            false,
+            NetworkHealthDiagnosticCode::InboundPortMissing,
+        ),
+    ] {
+        let mut verifier = NetworkPlanVerifier::new(
+            AppliedPlanProbe {
+                owner_present,
+                rule_present,
+                route_present,
+                port_present,
+            },
+            PORT,
+        )
+        .unwrap();
+        let error = verifier.verify(&full_plan()).unwrap_err();
+        assert_eq!(error.code(), expected);
+        assert!(!matches!(error, NetworkHealthError::ProbeFailed));
+    }
+}
+
+#[test]
 fn capability_probe_rejects_preexisting_nethop_chain_namespace() {
     let report = CapabilityProbe::new(
         ReadOnlyProbe {
@@ -221,6 +385,32 @@ fn ipv6_guard_precedes_ipv4_capture_when_ipv6_tproxy_is_unavailable() {
     assert!(payload.contains("*filter"));
     assert!(payload.contains("-j DROP"));
     assert!(payload.contains("--uid-owner 10001"));
+}
+
+#[test]
+fn ipv6_guard_health_requires_guard_ownership_without_ipv6_policy_routing() {
+    let allocation = candidate(0x100, 100, 10_000);
+    let plan = NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(8).unwrap(),
+            PlanSlot::B,
+            &policy(true),
+            &report(
+                CapabilityStatus::Unsupported,
+                vec![AllocationCapability::new(
+                    allocation,
+                    CapabilityStatus::Supported,
+                )],
+            ),
+        )
+        .unwrap();
+    assert!(plan.ipv6_guarded());
+    assert!(!plan.ipv6_captured());
+
+    NetworkPlanVerifier::new(GuardPlanProbe, PORT)
+        .unwrap()
+        .verify(&plan)
+        .unwrap();
 }
 
 #[test]

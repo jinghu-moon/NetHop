@@ -2,6 +2,7 @@
 
 pub mod capability;
 pub mod executor;
+pub mod health;
 pub mod plan;
 
 pub use capability::{
@@ -14,6 +15,9 @@ pub use executor::{
     ApplyReceipt, CommandFailure, CommandInvocation, CommandOutput, ExecutionDiagnosticCode,
     ExecutionError, NetworkCommandBackend, NetworkExecutor, NetworkProgram, SystemCommandBackend,
     SystemCommandLimits,
+};
+pub use health::{
+    NetworkHealthDiagnosticCode, NetworkHealthError, NetworkHealthVerifier, NetworkPlanVerifier,
 };
 pub use plan::{
     NetworkOperationKind, NetworkPlan, NetworkPlanError, NetworkPlanner, PlanDiagnosticCode,

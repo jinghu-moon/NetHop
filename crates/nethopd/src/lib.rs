@@ -20,5 +20,6 @@ pub use runner::{
 };
 pub use worker_activation::{
     ActiveRuntime, CapabilitySource, DataPlaneHealthError, DataPlaneHealthProbe, NetworkController,
-    RuntimeStopError, WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator,
+    NetworkDataPlaneHealthProbe, RuntimeStopError, WorkerActivationDiagnosticCode,
+    WorkerActivationError, WorkerActivator,
 };

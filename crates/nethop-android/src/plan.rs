@@ -31,6 +31,7 @@ pub struct NetworkPlan {
     generation: GenerationId,
     slot: PlanSlot,
     allocation: ResourceCandidate,
+    ipv6_captured: bool,
     ipv6_guarded: bool,
     steps: Vec<PlanStep>,
 }
@@ -52,6 +53,14 @@ impl NetworkPlan {
         self.ipv6_guarded
     }
 
+    pub const fn ipv6_captured(&self) -> bool {
+        self.ipv6_captured
+    }
+
+    pub fn owner_marker(&self) -> String {
+        format!("nethop:g={}", self.generation.get())
+    }
+
     pub fn operation_kinds(&self) -> impl ExactSizeIterator<Item = NetworkOperationKind> + '_ {
         self.steps.iter().map(|step| step.kind)
     }
@@ -65,6 +74,14 @@ impl NetworkPlan {
 
     pub(crate) fn steps(&self) -> &[PlanStep] {
         &self.steps
+    }
+
+    pub(crate) fn entry_chain(&self, family: IpFamily) -> String {
+        if family == IpFamily::Ipv6 && self.ipv6_guarded {
+            format!("NH_V6G_{}", self.slot.suffix())
+        } else {
+            format!("NH_OUT_{}", self.slot.suffix())
+        }
     }
 }
 
@@ -212,6 +229,7 @@ impl NetworkPlanner {
             generation,
             slot,
             allocation,
+            ipv6_captured: ipv6_tproxy,
             ipv6_guarded,
             steps,
         })
