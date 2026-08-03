@@ -7,7 +7,9 @@ pub mod generation;
 pub mod state;
 
 pub use capture::{CaptureMode, CapturePolicy, CapturePolicyError};
-pub use composer::{ComposerError, ManagedConfig, TerminalOutbound};
+pub use composer::{
+    ClashApi, ComposerError, ManagedConfig, ManagedProfile, TerminalOutbound, TunStack,
+};
 pub use diagnostics::{CoreDiagnosticCode, CoreError};
 pub use generation::{
     Candidate, GenerationId, GenerationManifest, GenerationStore, PreparedCandidate,

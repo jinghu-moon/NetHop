@@ -19,7 +19,7 @@
     },
     {
       "path": "crates/nethop-core/src/composer.rs",
-      "sha256": "abe8e4668db4a272019566ea42af20cfa88eed880f2baed5a0320d4a49ebafd7"
+      "sha256": "de70b3baaba18a8b9c84427e276920cd1b82620a0a8409152f0bbb069c9f8a98"
     },
     {
       "path": "crates/nethop-core/src/diagnostics.rs",
@@ -31,7 +31,7 @@
     },
     {
       "path": "crates/nethop-core/src/lib.rs",
-      "sha256": "de59e80db0324203d3f873f93fb28d681eec478aff95d6cc91fa937f47beff06"
+      "sha256": "02c63440f4fd742b44c18aea6c8ef123090785eb0c3fb79182436a24d9cc6131"
     },
     {
       "path": "crates/nethop-core/src/state.rs",

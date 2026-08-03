@@ -37,15 +37,15 @@
   "artifacts": [
     {
       "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
-      "sha256": "89935f7f9bb47cb03f2f7a722b2683696fdac6d64857e20b9f59ccfe3d65f191"
+      "sha256": "968777868ea62b488ecdbe32a06f49ab7803f9bcaa522c313ee124177079d342"
     },
     {
       "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
-      "sha256": "4ea2800c692dd9d8398fc9b4cd5c4ffd3d7e1c1e3c3eec0f3bbd8ef80c8fac72"
+      "sha256": "cd1aa6d3627cc3922ec3a539e2fb6037e2f74a39d30ab484f15caab5cc526dea"
     },
     {
       "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
-      "sha256": "9da1b535e22001ca49b49bd149bd2efd50ecae7bdba61da774f94b2c1b3d821c"
+      "sha256": "32d6748f5fe6028f1bca73696882085df51d9e11491eea7769eac9de7aa175c5"
     },
     {
       "path": "artifacts/subscription-parser/m010/licenses.json",
@@ -53,7 +53,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "cc6f051a21c1dee4493605f75058a73a939b905c5ba92af7366c974a03186db5"
+      "sha256": "03adb1a5e78b40e6b13ed3a407085cd3fb5865dad03c5fde6e46cdd3db0fb20b"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
