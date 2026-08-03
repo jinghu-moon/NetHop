@@ -3,18 +3,18 @@
   "status": "passed_with_tooling_disclosure",
   "generator": "scripts/generate-subscription-parser-release-evidence.ps1",
   "inputs": {
-    "cargo_lock_sha256": "2375496ab17c8a3dcac85195b7a16fe0f33dbdf84a6509290a3817c7938a1b3b",
+    "cargo_lock_sha256": "0fe0288c29bc92d243aa5da5bd5e6b9fa5d0585c70b1d8682399769fd65df6e9",
     "workspace_manifest_sha256": "270dde2af318d5b3653e95e5a5418342c21571608ca5128b37e97a8470609223",
     "crate_manifest_sha256": "c9303924558fdf1eba77d39081f04b6bcbc01333d7c16cabfa6319c746f04c42",
     "mapping_manifest_sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6",
-    "workspace_source_sha256": "6b87c4bffe8694c46d6d80ea1c63e4fc7d1548030003392a5b47a5fc531faa54"
+    "workspace_source_sha256": "3a272f5b30ca30013422631512ee2837a29bbefadb5f1eef97d59b549a094e42"
   },
   "toolchain": {
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26100 (Windows 11 IoTEnterpriseS) [64-bit]"
   },
   "source_control": {
-    "git_head": "22ca322e7647e3fa7cb5f1c8b2ebe795726efe9d",
+    "git_head": "ab32265862852daef412570015803957d944778a",
     "working_tree": "dirty"
   },
   "gates": {
@@ -28,19 +28,19 @@
       "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json",
       "package_count": 41,
       "feature_leakage": false,
-      "bom_sha256": "8cca3812c016216ce9c8fbd07d647925a43ef2ce9369d144c1268bab454f1f83"
+      "bom_sha256": "b664320025f43c8d6a0637af69d41d4e4d886064c42ee5190be2ca645218e8c0"
     },
     "fetch": {
       "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json,fetch",
       "package_count": 103,
       "feature_leakage": false,
-      "bom_sha256": "0658473534ee09437de1737e0fb0331c842de49582f17dee0964b3f1b7b1571a"
+      "bom_sha256": "48fe7803c0f3aebd80fbdfd70f0e55a7394ab150f11503f5f27995d6afd3cc3a"
     },
     "dev-test": {
       "features": "all",
       "package_count": 154,
       "feature_leakage": false,
-      "bom_sha256": "51b29dddbfcb4cf8628cf5be68fb422f883b6ac06d16203d1c370058b1e99c61"
+      "bom_sha256": "3b5a5309f8577ada196b6f9dfb93362129917d437b3555f7338bee14c3603869"
     }
   },
   "tools": {

@@ -573,7 +573,7 @@ impl<B: ProbeBackend> CapabilityProbe<B> {
         })
     }
 
-    pub fn probe(mut self) -> Result<CapabilityReport, CapabilityError> {
+    pub fn probe(&mut self) -> Result<CapabilityReport, CapabilityError> {
         let release = self.backend.run(ProbeCommand::AndroidRelease)?;
         let abi = self.backend.run(ProbeCommand::AndroidAbi)?;
         let uid = self.backend.run(ProbeCommand::EffectiveUid)?;

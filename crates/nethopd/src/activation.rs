@@ -245,6 +245,23 @@ pub struct ActiveGeneration<P: CandidateProcess> {
     process: P,
 }
 
+#[derive(Debug)]
+pub(crate) struct StagedGeneration<P: CandidateProcess> {
+    generation: SealedGeneration,
+    previous_generation: Option<GenerationId>,
+    process: P,
+}
+
+impl<P: CandidateProcess> StagedGeneration<P> {
+    pub(crate) const fn generation(&self) -> GenerationId {
+        self.generation.generation()
+    }
+
+    pub(crate) fn process_mut(&mut self) -> &mut P {
+        &mut self.process
+    }
+}
+
 impl<P: CandidateProcess> ActiveGeneration<P> {
     pub const fn generation(&self) -> GenerationId {
         self.generation.generation()
@@ -301,10 +318,10 @@ where
     A: SafetyAuditor,
     H: HealthProbe<L::Process>,
 {
-    pub fn activate(
+    pub(crate) fn stage(
         &self,
         candidate: &Candidate,
-    ) -> Result<ActiveGeneration<L::Process>, ActivationError> {
+    ) -> Result<StagedGeneration<L::Process>, ActivationError> {
         let previous_generation = self
             .store
             .current_generation()
@@ -360,18 +377,47 @@ where
                 stop_failed || discard_failed,
             ));
         }
-        if self.store.commit_generation(&sealed).is_err() {
-            let stop_failed = process.stop().is_err();
-            let discard_failed = self.store.discard_sealed(sealed).is_err();
-            return Err(ActivationError::new(
-                ActivationDiagnosticCode::CommitFailed,
-                stop_failed || discard_failed,
-            ));
-        }
-        Ok(ActiveGeneration {
+        Ok(StagedGeneration {
             generation: sealed,
             previous_generation,
             process,
         })
+    }
+
+    pub(crate) fn commit_staged(
+        &self,
+        staged: StagedGeneration<L::Process>,
+    ) -> Result<ActiveGeneration<L::Process>, StagedGeneration<L::Process>> {
+        if self.store.commit_generation(&staged.generation).is_err() {
+            return Err(staged);
+        }
+        Ok(ActiveGeneration {
+            generation: staged.generation,
+            previous_generation: staged.previous_generation,
+            process: staged.process,
+        })
+    }
+
+    pub(crate) fn abort_staged(&self, staged: StagedGeneration<L::Process>) -> bool {
+        let stop_failed = staged.process.stop().is_err();
+        let discard_failed = self.store.discard_sealed(staged.generation).is_err();
+        stop_failed || discard_failed
+    }
+
+    pub fn activate(
+        &self,
+        candidate: &Candidate,
+    ) -> Result<ActiveGeneration<L::Process>, ActivationError> {
+        let staged = self.stage(candidate)?;
+        match self.commit_staged(staged) {
+            Ok(active) => Ok(active),
+            Err(staged) => {
+                let cleanup_failed = self.abort_staged(staged);
+                Err(ActivationError::new(
+                    ActivationDiagnosticCode::CommitFailed,
+                    cleanup_failed,
+                ))
+            }
+        }
     }
 }

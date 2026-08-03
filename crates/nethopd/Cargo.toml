@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 libc = "0.2"
+nethop-android = { version = "0.1.0", path = "../nethop-android" }
 nethop-core = { version = "0.1.0", path = "../nethop-core" }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"

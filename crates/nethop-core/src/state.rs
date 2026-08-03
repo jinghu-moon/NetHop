@@ -29,6 +29,8 @@ impl RuntimeState {
             (self, next),
             (Self::Init, Self::Probing)
                 | (Self::Probing, Self::StartingCore)
+                | (Self::Probing, Self::StartingTun)
+                | (Self::Probing, Self::FailOpenDirect)
                 | (Self::StartingCore, Self::RunningTproxy)
                 | (Self::StartingCore, Self::StartingTun)
                 | (Self::StartingCore, Self::FailOpenDirect)

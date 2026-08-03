@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod process;
 pub mod runner;
+pub mod worker_activation;
 
 pub use activation::{
     ActivationDiagnosticCode, ActivationError, ActiveGeneration, CandidateActivator,
@@ -16,4 +17,8 @@ pub use process::{
 pub use runner::{
     CheckOutputSummary, CheckReport, RunnerDiagnosticCode, RunnerError, RunnerLimits,
     SingBoxCheckRunner,
+};
+pub use worker_activation::{
+    ActiveRuntime, CapabilitySource, DataPlaneHealthError, DataPlaneHealthProbe, NetworkController,
+    RuntimeStopError, WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator,
 };
