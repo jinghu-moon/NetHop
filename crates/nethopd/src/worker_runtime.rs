@@ -212,6 +212,17 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
             .saturating_sub(now)
     }
 
+    pub fn request_reconcile(&mut self, now: Duration) -> Result<(), WorkerRuntimeError> {
+        if now < self.last_tick {
+            return Err(WorkerRuntimeError::NonMonotonicTime);
+        }
+        if self.active.is_none() {
+            return Err(WorkerRuntimeError::NotRunning);
+        }
+        self.next_reconcile = self.next_reconcile.min(now);
+        Ok(())
+    }
+
     pub fn tick<N, V>(
         &mut self,
         now: Duration,

@@ -6,7 +6,10 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
-use crate::stats::CounterDeltaBatch;
+use crate::{
+    scheduler::{ScheduleKey, ScheduleRecord, ScheduleStore, SchedulerError},
+    stats::CounterDeltaBatch,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatsBucket {
@@ -60,7 +63,13 @@ impl StatsStore {
                    degraded_count INTEGER NOT NULL
                  );
                  CREATE INDEX IF NOT EXISTS stats_bucket_time_idx
-                   ON stats_bucket(bucket_start);",
+                   ON stats_bucket(bucket_start);
+                 CREATE TABLE IF NOT EXISTS schedule (
+                   schedule_key TEXT PRIMARY KEY,
+                   next_run_wall_seconds INTEGER NOT NULL,
+                   failure_count INTEGER NOT NULL,
+                   last_observed_wall_seconds INTEGER NOT NULL
+                 );",
             )
             .map_err(StatsStoreError::Database)?;
         set_private_mode(&path).map_err(|_| StatsStoreError::InvalidPath)?;
@@ -148,6 +157,63 @@ impl StatsStore {
             )
             .optional()
             .map_err(StatsStoreError::Database)
+    }
+}
+
+impl ScheduleStore for StatsStore {
+    fn load(&mut self) -> Result<Vec<ScheduleRecord>, SchedulerError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT schedule_key, next_run_wall_seconds, failure_count,
+                        last_observed_wall_seconds
+                 FROM schedule ORDER BY schedule_key",
+            )
+            .map_err(|_| SchedulerError::PersistenceFailed)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|_| SchedulerError::PersistenceFailed)?;
+        let mut records = Vec::new();
+        for row in rows {
+            let (key, next_run, failure_count, last_observed) =
+                row.map_err(|_| SchedulerError::PersistenceFailed)?;
+            records.push(ScheduleRecord::from_persisted(
+                ScheduleKey::new(key)?,
+                next_run,
+                failure_count,
+                last_observed,
+            )?);
+        }
+        Ok(records)
+    }
+
+    fn save(&mut self, record: &ScheduleRecord) -> Result<(), SchedulerError> {
+        self.connection
+            .execute(
+                "INSERT INTO schedule
+                   (schedule_key, next_run_wall_seconds, failure_count,
+                    last_observed_wall_seconds)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(schedule_key) DO UPDATE SET
+                   next_run_wall_seconds = excluded.next_run_wall_seconds,
+                   failure_count = excluded.failure_count,
+                   last_observed_wall_seconds = excluded.last_observed_wall_seconds",
+                params![
+                    record.key().as_str(),
+                    record.next_run_wall_seconds(),
+                    record.failure_count(),
+                    record.last_observed_wall_seconds(),
+                ],
+            )
+            .map(|_| ())
+            .map_err(|_| SchedulerError::PersistenceFailed)
     }
 }
 

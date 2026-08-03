@@ -12,8 +12,8 @@ use std::{
 
 use nethop_android::{
     AllocationCapability, CapabilityError, CapabilityReport, CapabilityStatus, ExecutionError,
-    FamilyCapability, IpFamily, NetfilterBackend, NetworkHealthError, NetworkHealthVerifier,
-    NetworkPlan, PlanSlot, ResourceCandidate,
+    FamilyCapability, IpFamily, NetfilterBackend, NetworkAction, NetworkChange, NetworkEvent,
+    NetworkHealthError, NetworkHealthVerifier, NetworkPlan, PlanSlot, ResourceCandidate,
 };
 use nethop_core::{
     Candidate, CaptureMode, CapturePolicy, GenerationId, GenerationStore, ManagedConfig,
@@ -21,11 +21,11 @@ use nethop_core::{
 };
 use nethopd::{
     ActiveRuntime, CandidateActivator, CandidateChecker, CandidateProcess, CapabilitySource,
-    CoreLauncher, DataPlaneHealthError, DataPlaneHealthProbe, HealthProbe, HealthProbeError,
-    NetworkController, NetworkDataPlaneHealthProbe, ProcessError, ProcessIdentity, RestartBudget,
-    RestartDecision, RunnerError, RuntimeFailureCode, RuntimeTick, SafetyAuditError, SafetyAuditor,
-    WorkerActivationDiagnosticCode, WorkerActivator, WorkerLoopDriver, WorkerLoopSignal,
-    WorkerRunExit, WorkerRuntime, WorkerRuntimeLimits,
+    CoreLauncher, DataPlaneHealthError, DataPlaneHealthProbe, EventReconcileGate, HealthProbe,
+    HealthProbeError, NetworkController, NetworkDataPlaneHealthProbe, ProcessError,
+    ProcessIdentity, RestartBudget, RestartDecision, RunnerError, RuntimeFailureCode, RuntimeTick,
+    SafetyAuditError, SafetyAuditor, WorkerActivationDiagnosticCode, WorkerActivator,
+    WorkerLoopDriver, WorkerLoopSignal, WorkerRunExit, WorkerRuntime, WorkerRuntimeLimits,
 };
 use serde_json::json;
 
@@ -842,6 +842,55 @@ fn runtime_reconcile_is_low_frequency_and_repairs_owned_plan_without_core_restar
         events.borrow().as_slice(),
         ["network_rollback", "network_apply"]
     );
+    assert!(running.load(Ordering::SeqCst));
+}
+
+#[test]
+fn debounced_network_event_advances_existing_runtime_reconcile() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let running = Arc::new(AtomicBool::new(true));
+    let observe_error = Arc::new(AtomicBool::new(false));
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let active = monitored_runtime(&store, &running, &observe_error, &events, &mut network);
+    events.borrow_mut().clear();
+    let mut runtime = WorkerRuntime::new(active, Duration::ZERO, runtime_limits());
+    let mut gate = EventReconcileGate::default();
+    let mut verifier = SequenceVerifier::healthy();
+    let mut budget = RestartBudget::new(Duration::from_secs(300)).unwrap();
+
+    gate.observe(
+        Duration::ZERO,
+        NetworkEvent::new(NetworkAction::Upsert, NetworkChange::Link),
+    )
+    .unwrap();
+    assert_eq!(
+        gate.request_ready(Duration::from_millis(249), &mut runtime)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        gate.request_ready(Duration::from_millis(250), &mut runtime)
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        runtime
+            .tick(
+                Duration::from_millis(250),
+                &mut network,
+                &mut verifier,
+                &mut budget,
+            )
+            .unwrap(),
+        RuntimeTick::Reconciled
+    );
+    assert_eq!(verifier.calls, 1);
+    assert!(events.borrow().is_empty());
     assert!(running.load(Ordering::SeqCst));
 }
 

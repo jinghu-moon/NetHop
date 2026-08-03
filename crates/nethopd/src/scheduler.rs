@@ -85,6 +85,26 @@ pub struct ScheduleRecord {
 }
 
 impl ScheduleRecord {
+    pub(crate) fn from_persisted(
+        key: ScheduleKey,
+        next_run_wall_seconds: i64,
+        failure_count: u32,
+        last_observed_wall_seconds: i64,
+    ) -> Result<Self, SchedulerError> {
+        if next_run_wall_seconds < 0
+            || last_observed_wall_seconds < 0
+            || failure_count > MAX_FAILURES
+        {
+            return Err(SchedulerError::PersistenceFailed);
+        }
+        Ok(Self {
+            key,
+            next_run_wall_seconds,
+            failure_count,
+            last_observed_wall_seconds,
+        })
+    }
+
     pub fn key(&self) -> &ScheduleKey {
         &self.key
     }
@@ -95,6 +115,10 @@ impl ScheduleRecord {
 
     pub const fn failure_count(&self) -> u32 {
         self.failure_count
+    }
+
+    pub(crate) const fn last_observed_wall_seconds(&self) -> i64 {
+        self.last_observed_wall_seconds
     }
 }
 

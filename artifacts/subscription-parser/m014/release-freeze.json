@@ -81,15 +81,15 @@
   "artifacts": [
     {
       "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
-      "sha256": "35a26de197e6cacc6943c6d3c92c25d3f4436de5b95a356bd9cd610022b1a640"
+      "sha256": "831149153e11457696f8da53905b812f9224ca8d7ee478a0f13c422f80beca3a"
     },
     {
       "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
-      "sha256": "f6dafa2bac417b3ba6d3398f0b04cb9ca900333a3550044785ad1a1a41c38385"
+      "sha256": "743fbc7da7c093b4808699b757c09b69156ecfd777c20e729ea7249284b99369"
     },
     {
       "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
-      "sha256": "0314088d610bf4e7e445223df5d9901cdaa3212cf2019621b4039536cdd524c3"
+      "sha256": "44db91e19d5c4883bfaf8a6ae848d587c8275aae30b7ac7c3dd45e7431b925a3"
     },
     {
       "path": "artifacts/subscription-parser/m010/licenses.json",
@@ -97,7 +97,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "dab1303046bd6695b00c80d6bc20b42004fac208faa881c7d3f51b6daa654f5d"
+      "sha256": "a487de51a3e13c2d69ec164c0ebfaa205a1d50554842398cd2f314e3ed5f4213"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
@@ -137,7 +137,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m012/release-manifest.json",
-      "sha256": "cc6c123fd79b9b070a1c19ad0c6955a078ea94c8b7f9d092946b4ae2118794ee"
+      "sha256": "0afde477f32cc5e1e59cb0d8ade26bd53271f81368d710a689f8c0f6a9c979e1"
     },
     {
       "path": "artifacts/subscription-parser/m013/release-candidate-checklist.json",
@@ -145,7 +145,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m013/artifact-index.json",
-      "sha256": "a0387ddec21086dd070f35633c901d11da980a3cc5ebc6c3047f50629c53221d"
+      "sha256": "c02de968542845fca376f3b88c9ae2f829ce476412d7e0301e74fbe1bee72713"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
