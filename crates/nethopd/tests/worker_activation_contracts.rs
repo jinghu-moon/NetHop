@@ -345,6 +345,7 @@ fn recovery_without_current_generation_is_an_idle_direct_state() {
 
     let recovered = CurrentGenerationActivator::new(
         &store,
+        &FakeChecker,
         &launcher,
         &core_health,
         &mut capabilities,
@@ -382,6 +383,7 @@ fn recovery_activates_verified_current_without_creating_a_generation() {
 
     let active = CurrentGenerationActivator::new(
         &store,
+        &FakeChecker,
         &launcher,
         &core_health,
         &mut capabilities,
@@ -400,10 +402,15 @@ fn recovery_activates_verified_current_without_creating_a_generation() {
         store.current_generation().unwrap(),
         Some(active.generation())
     );
-    assert_eq!(
-        std::fs::read_dir(store.generations_root()).unwrap().count(),
-        1
-    );
+    let generation_directories = std::fs::read_dir(store.generations_root())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry.file_name().to_string_lossy().parse::<u64>().is_ok()
+        })
+        .count();
+    assert_eq!(generation_directories, 1);
     active.stop(&mut network).unwrap();
 }
 
@@ -432,6 +439,7 @@ fn recovery_data_plane_failure_rolls_back_before_stopping_core() {
 
     let error = CurrentGenerationActivator::new(
         &store,
+        &FakeChecker,
         &launcher,
         &core_health,
         &mut capabilities,

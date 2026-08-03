@@ -142,7 +142,7 @@ impl GenerationStore {
     }
 
     pub fn current_generation(&self) -> Result<Option<GenerationId>, CoreError> {
-        let path = self.root.join("current");
+        let path = self.generations_root().join("current");
         if !path.exists() {
             return Ok(None);
         }
@@ -302,12 +302,13 @@ impl GenerationStore {
     }
 
     fn write_current(&self, generation: GenerationId) -> Result<(), CoreError> {
-        let current_temp = self.root.join(format!(".current-{}", generation.get()));
+        let generations = self.generations_root();
+        let current_temp = generations.join(format!(".current-{}", generation.get()));
         write_sync(&current_temp, format!("{}\n", generation.get()).as_bytes())
             .map_err(|error| io_error("write_current", error))?;
-        fs::rename(&current_temp, self.root.join("current"))
+        fs::rename(&current_temp, generations.join("current"))
             .map_err(|error| io_error("publish_current", error))?;
-        sync_directory(&self.root).map_err(|error| io_error("sync_root", error))
+        sync_directory(&generations).map_err(|error| io_error("sync_generations", error))
     }
 
     fn ensure_owned(&self, token_root: &Path) -> Result<(), CoreError> {

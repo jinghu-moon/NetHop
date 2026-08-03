@@ -260,7 +260,7 @@ fn generation_store_publishes_manifest_and_current_pointer_atomically() {
 
     let generation = directory.path().join("generations/7");
     assert_eq!(
-        std::fs::read_to_string(directory.path().join("current")).unwrap(),
+        std::fs::read_to_string(directory.path().join("generations/current")).unwrap(),
         "7\n"
     );
     assert_eq!(

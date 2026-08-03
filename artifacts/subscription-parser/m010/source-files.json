@@ -27,7 +27,7 @@
     },
     {
       "path": "crates/nethop-core/src/generation.rs",
-      "sha256": "a6f8179168cdcb473bb4084040d9b4a608f41ab08ec3db43a54ce2475fda0e46"
+      "sha256": "40e4c36b8ad1e72b43654dd19113bc2a1d68840891e38cc245ebc43521ee10cb"
     },
     {
       "path": "crates/nethop-core/src/lib.rs",

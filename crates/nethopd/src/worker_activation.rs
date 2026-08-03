@@ -268,8 +268,9 @@ pub struct WorkerActivator<'a, C, L, A, H, S, N, D> {
     state: RuntimeState,
 }
 
-pub struct CurrentGenerationActivator<'a, L, H, S, N, D> {
+pub struct CurrentGenerationActivator<'a, C, L, H, S, N, D> {
     store: &'a GenerationStore,
+    checker: &'a C,
     launcher: &'a L,
     core_health: &'a H,
     capability_source: &'a mut S,
@@ -279,9 +280,10 @@ pub struct CurrentGenerationActivator<'a, L, H, S, N, D> {
 
 pub type WorkerRecovery<P, R> = Result<Option<ActiveRuntime<P, R>>, WorkerRecoveryError>;
 
-impl<'a, L, H, S, N, D> CurrentGenerationActivator<'a, L, H, S, N, D> {
+impl<'a, C, L, H, S, N, D> CurrentGenerationActivator<'a, C, L, H, S, N, D> {
     pub const fn new(
         store: &'a GenerationStore,
+        checker: &'a C,
         launcher: &'a L,
         core_health: &'a H,
         capability_source: &'a mut S,
@@ -290,6 +292,7 @@ impl<'a, L, H, S, N, D> CurrentGenerationActivator<'a, L, H, S, N, D> {
     ) -> Self {
         Self {
             store,
+            checker,
             launcher,
             core_health,
             capability_source,
@@ -299,8 +302,9 @@ impl<'a, L, H, S, N, D> CurrentGenerationActivator<'a, L, H, S, N, D> {
     }
 }
 
-impl<L, H, S, N, D> CurrentGenerationActivator<'_, L, H, S, N, D>
+impl<C, L, H, S, N, D> CurrentGenerationActivator<'_, C, L, H, S, N, D>
 where
+    C: CandidateChecker,
     L: CoreLauncher,
     H: HealthProbe<L::Process>,
     S: CapabilitySource,
@@ -319,6 +323,9 @@ where
         else {
             return Ok(None);
         };
+        self.checker
+            .check(&generation.config_path())
+            .map_err(|_| WorkerRecoveryError::CoreCheckFailed)?;
         let capabilities = self
             .capability_source
             .probe()
@@ -366,6 +373,8 @@ pub enum WorkerRecoveryError {
     InvalidCurrentGeneration,
     #[error("Android capability probe failed during recovery")]
     CapabilityProbeFailed,
+    #[error("current generation failed sing-box check")]
+    CoreCheckFailed,
     #[error("current generation network plan was rejected")]
     NetworkPlanRejected,
     #[error("current generation core could not be started")]
