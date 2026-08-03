@@ -3,7 +3,7 @@ use nethop_android::{
     NetworkCommandBackend, NetworkExecutor, NetworkHealthVerifier, NetworkPlan, NetworkPlanError,
     NetworkPlanner, PlanSlot, ProbeBackend,
 };
-use nethop_core::{Candidate, CapturePolicy, GenerationId, RuntimeState};
+use nethop_core::{Candidate, CapturePolicy, GenerationId, GenerationStore, RuntimeState};
 use thiserror::Error;
 
 use crate::{
@@ -266,6 +266,127 @@ pub struct WorkerActivator<'a, C, L, A, H, S, N, D> {
     network: &'a mut N,
     data_plane_health: &'a mut D,
     state: RuntimeState,
+}
+
+pub struct CurrentGenerationActivator<'a, L, H, S, N, D> {
+    store: &'a GenerationStore,
+    launcher: &'a L,
+    core_health: &'a H,
+    capability_source: &'a mut S,
+    network: &'a mut N,
+    data_plane_health: &'a mut D,
+}
+
+pub type WorkerRecovery<P, R> = Result<Option<ActiveRuntime<P, R>>, WorkerRecoveryError>;
+
+impl<'a, L, H, S, N, D> CurrentGenerationActivator<'a, L, H, S, N, D> {
+    pub const fn new(
+        store: &'a GenerationStore,
+        launcher: &'a L,
+        core_health: &'a H,
+        capability_source: &'a mut S,
+        network: &'a mut N,
+        data_plane_health: &'a mut D,
+    ) -> Self {
+        Self {
+            store,
+            launcher,
+            core_health,
+            capability_source,
+            network,
+            data_plane_health,
+        }
+    }
+}
+
+impl<L, H, S, N, D> CurrentGenerationActivator<'_, L, H, S, N, D>
+where
+    L: CoreLauncher,
+    H: HealthProbe<L::Process>,
+    S: CapabilitySource,
+    N: NetworkController,
+    D: DataPlaneHealthProbe<L::Process>,
+{
+    pub fn recover(
+        &mut self,
+        policy: &CapturePolicy,
+        slot: PlanSlot,
+    ) -> WorkerRecovery<L::Process, N::Receipt> {
+        let Some(generation) = self
+            .store
+            .current_sealed_generation()
+            .map_err(|_| WorkerRecoveryError::InvalidCurrentGeneration)?
+        else {
+            return Ok(None);
+        };
+        let capabilities = self
+            .capability_source
+            .probe()
+            .map_err(|_| WorkerRecoveryError::CapabilityProbeFailed)?;
+        let plan = NetworkPlanner
+            .build_tproxy(generation.generation(), slot, policy, &capabilities)
+            .map_err(|_| WorkerRecoveryError::NetworkPlanRejected)?;
+        let mut process = self
+            .launcher
+            .start(&generation.config_path())
+            .map_err(|_| WorkerRecoveryError::CoreStartFailed)?;
+        if self.core_health.wait_healthy(&mut process).is_err() {
+            let cleanup_failed = process.stop().is_err();
+            return Err(WorkerRecoveryError::CoreHealthFailed { cleanup_failed });
+        }
+        let mut receipt = match self.network.apply(&plan) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let cleanup_failed = process.stop().is_err()
+                    || matches!(error, ExecutionError::ApplyRollbackFailed { .. });
+                return Err(WorkerRecoveryError::NetworkApplyFailed { cleanup_failed });
+            }
+        };
+        if self
+            .data_plane_health
+            .wait_healthy(&mut process, &plan, &capabilities)
+            .is_err()
+        {
+            let cleanup_failed =
+                self.network.rollback(&plan, &mut receipt).is_err() || process.stop().is_err();
+            return Err(WorkerRecoveryError::DataPlaneHealthFailed { cleanup_failed });
+        }
+        Ok(Some(ActiveRuntime {
+            active: ActiveGeneration::recovered(generation, process),
+            plan,
+            receipt,
+            capabilities,
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WorkerRecoveryError {
+    #[error("current generation is missing, incomplete, or invalid")]
+    InvalidCurrentGeneration,
+    #[error("Android capability probe failed during recovery")]
+    CapabilityProbeFailed,
+    #[error("current generation network plan was rejected")]
+    NetworkPlanRejected,
+    #[error("current generation core could not be started")]
+    CoreStartFailed,
+    #[error("current generation core failed startup health")]
+    CoreHealthFailed { cleanup_failed: bool },
+    #[error("current generation network plan could not be applied")]
+    NetworkApplyFailed { cleanup_failed: bool },
+    #[error("current generation data plane failed health verification")]
+    DataPlaneHealthFailed { cleanup_failed: bool },
+}
+
+impl WorkerRecoveryError {
+    pub const fn cleanup_failed(self) -> bool {
+        match self {
+            Self::CoreHealthFailed { cleanup_failed }
+            | Self::NetworkApplyFailed { cleanup_failed }
+            | Self::DataPlaneHealthFailed { cleanup_failed } => cleanup_failed,
+            _ => false,
+        }
+    }
 }
 
 impl<'a, C, L, A, H, S, N, D> WorkerActivator<'a, C, L, A, H, S, N, D> {

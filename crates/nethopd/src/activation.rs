@@ -263,6 +263,14 @@ impl<P: CandidateProcess> StagedGeneration<P> {
 }
 
 impl<P: CandidateProcess> ActiveGeneration<P> {
+    pub(crate) fn recovered(generation: SealedGeneration, process: P) -> Self {
+        Self {
+            generation,
+            previous_generation: None,
+            process,
+        }
+    }
+
     pub const fn generation(&self) -> GenerationId {
         self.generation.generation()
     }

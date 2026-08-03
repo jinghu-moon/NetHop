@@ -52,9 +52,10 @@ pub use uds::{
     RootPeerAuthorizer,
 };
 pub use worker_activation::{
-    ActiveRuntime, CapabilitySource, DataPlaneHealthError, DataPlaneHealthProbe, NetworkController,
-    NetworkDataPlaneHealthProbe, RuntimeStopError, WorkerActivationDiagnosticCode,
-    WorkerActivationError, WorkerActivator,
+    ActiveRuntime, CapabilitySource, CurrentGenerationActivator, DataPlaneHealthError,
+    DataPlaneHealthProbe, NetworkController, NetworkDataPlaneHealthProbe, RuntimeStopError,
+    WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator, WorkerRecovery,
+    WorkerRecoveryError,
 };
 pub use worker_runtime::{
     RestartBudget, RestartDecision, RuntimeFailureCode, RuntimeTick, SystemLoopDriver,

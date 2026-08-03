@@ -21,11 +21,12 @@ use nethop_core::{
 };
 use nethopd::{
     ActiveRuntime, CandidateActivator, CandidateChecker, CandidateProcess, CapabilitySource,
-    CoreLauncher, DataPlaneHealthError, DataPlaneHealthProbe, EventReconcileGate, HealthProbe,
-    HealthProbeError, NetworkController, NetworkDataPlaneHealthProbe, ProcessError,
-    ProcessIdentity, RestartBudget, RestartDecision, RunnerError, RuntimeFailureCode, RuntimeTick,
-    SafetyAuditError, SafetyAuditor, WorkerActivationDiagnosticCode, WorkerActivator,
-    WorkerLoopDriver, WorkerLoopSignal, WorkerRunExit, WorkerRuntime, WorkerRuntimeLimits,
+    CoreLauncher, CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe,
+    EventReconcileGate, HealthProbe, HealthProbeError, NetworkController,
+    NetworkDataPlaneHealthProbe, ProcessError, ProcessIdentity, RestartBudget, RestartDecision,
+    RunnerError, RuntimeFailureCode, RuntimeTick, SafetyAuditError, SafetyAuditor,
+    WorkerActivationDiagnosticCode, WorkerActivator, WorkerLoopDriver, WorkerLoopSignal,
+    WorkerRecoveryError, WorkerRunExit, WorkerRuntime, WorkerRuntimeLimits,
 };
 use serde_json::json;
 
@@ -317,6 +318,147 @@ fn production_data_plane_adapter_requires_a_live_core_and_verified_network_plan(
             .wait_healthy(&mut process, &full_network_plan(), &supported_report())
             .unwrap_err(),
         DataPlaneHealthError::CoreExited
+    );
+}
+
+#[test]
+fn recovery_without_current_generation_is_an_idle_direct_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = GenerationStore::new(directory.path()).unwrap();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let mut capabilities = FakeCapabilitySource { report: None };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeDataPlaneHealth {
+        store: &store,
+        events: Rc::clone(&events),
+        fail: false,
+    };
+
+    let recovered = CurrentGenerationActivator::new(
+        &store,
+        &launcher,
+        &core_health,
+        &mut capabilities,
+        &mut network,
+        &mut data_health,
+    )
+    .recover(&policy(), PlanSlot::A)
+    .unwrap();
+    assert!(recovered.is_none());
+    assert!(events.borrow().is_empty());
+}
+
+#[test]
+fn recovery_activates_verified_current_without_creating_a_generation() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeDataPlaneHealth {
+        store: &store,
+        events: Rc::clone(&events),
+        fail: false,
+    };
+
+    let active = CurrentGenerationActivator::new(
+        &store,
+        &launcher,
+        &core_health,
+        &mut capabilities,
+        &mut network,
+        &mut data_health,
+    )
+    .recover(&policy(), PlanSlot::A)
+    .unwrap()
+    .unwrap();
+    assert_eq!(active.generation(), GenerationId::new(1).unwrap());
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "network_apply", "data_health"]
+    );
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(active.generation())
+    );
+    assert_eq!(
+        std::fs::read_dir(store.generations_root()).unwrap().count(),
+        1
+    );
+    active.stop(&mut network).unwrap();
+}
+
+#[test]
+fn recovery_data_plane_failure_rolls_back_before_stopping_core() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeDataPlaneHealth {
+        store: &store,
+        events: Rc::clone(&events),
+        fail: true,
+    };
+
+    let error = CurrentGenerationActivator::new(
+        &store,
+        &launcher,
+        &core_health,
+        &mut capabilities,
+        &mut network,
+        &mut data_health,
+    )
+    .recover(&policy(), PlanSlot::A)
+    .unwrap_err();
+    assert_eq!(
+        error,
+        WorkerRecoveryError::DataPlaneHealthFailed {
+            cleanup_failed: false
+        }
+    );
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            "core_start",
+            "network_apply",
+            "data_health",
+            "network_rollback",
+            "core_stop"
+        ]
+    );
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(GenerationId::new(1).unwrap())
     );
 }
 
