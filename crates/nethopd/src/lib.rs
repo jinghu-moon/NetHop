@@ -4,6 +4,7 @@ pub mod activation;
 pub mod process;
 pub mod runner;
 pub mod supervisor;
+pub mod uds;
 pub mod worker_activation;
 pub mod worker_runtime;
 
@@ -24,6 +25,12 @@ pub use supervisor::{
     RestartPolicy, SupervisorError, SupervisorEvent, SupervisorState, SystemWorkerBackend,
     SystemWorkerProcess, WorkerExit, WorkerProcess, WorkerProcessBackend, WorkerSignal,
     WorkerSupervisor,
+};
+#[cfg(unix)]
+pub use uds::UnixControlServer;
+pub use uds::{
+    ControlRequestHandler, ControlServerError, ControlServerLimits, PeerCredentials,
+    RootPeerAuthorizer,
 };
 pub use worker_activation::{
     ActiveRuntime, CapabilitySource, DataPlaneHealthError, DataPlaneHealthProbe, NetworkController,

@@ -619,6 +619,7 @@ dependencies = [
  "libc",
  "nethop-android",
  "nethop-core",
+ "nethop-protocol",
  "serde_json",
  "tempfile",
  "thiserror",
