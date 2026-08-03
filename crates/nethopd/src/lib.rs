@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod process;
 pub mod runner;
+pub mod scheduler;
 pub mod stats;
 pub mod storage;
 pub mod supervisor;
@@ -22,6 +23,10 @@ pub use process::{
 pub use runner::{
     CheckOutputSummary, CheckReport, RunnerDiagnosticCode, RunnerError, RunnerLimits,
     SingBoxCheckRunner,
+};
+pub use scheduler::{
+    InMemoryScheduleStore, ScheduleKey, SchedulePolicy, ScheduleRecord, ScheduleStore,
+    SchedulerEngine, SchedulerError,
 };
 pub use stats::{
     CounterBatch, CounterDelta, CounterDeltaBatch, CounterDeltaTracker, CounterName,
