@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod process;
 pub mod runner;
+pub mod stats;
 pub mod supervisor;
 pub mod uds;
 pub mod worker_activation;
@@ -20,6 +21,10 @@ pub use process::{
 pub use runner::{
     CheckOutputSummary, CheckReport, RunnerDiagnosticCode, RunnerError, RunnerLimits,
     SingBoxCheckRunner,
+};
+pub use stats::{
+    CounterBatch, CounterDelta, CounterDeltaBatch, CounterDeltaTracker, CounterName,
+    CounterReading, CounterTransport, StatsError,
 };
 pub use supervisor::{
     RestartPolicy, SupervisorError, SupervisorEvent, SupervisorState, SystemWorkerBackend,
