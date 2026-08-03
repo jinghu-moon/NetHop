@@ -11,6 +11,7 @@ pub mod supervisor;
 pub mod uds;
 pub mod worker_activation;
 pub mod worker_runtime;
+pub mod worker_service;
 pub mod worker_services;
 
 pub use activation::{
@@ -59,6 +60,10 @@ pub use worker_runtime::{
     RestartBudget, RestartDecision, RuntimeFailureCode, RuntimeTick, SystemLoopDriver,
     WorkerLoopDriver, WorkerLoopSignal, WorkerRunExit, WorkerRuntime, WorkerRuntimeError,
     WorkerRuntimeLimits, WorkerStopHandle,
+};
+pub use worker_service::{
+    WorkerControlService, WorkerServiceDriver, WorkerServiceError, WorkerServiceSignal,
+    WorkerServiceTasks, run_worker_service,
 };
 pub use worker_services::{
     BuildCandidateError, ControlCommand, ControlSnapshot, EventReconcileError, EventReconcileGate,

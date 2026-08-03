@@ -154,6 +154,12 @@ impl GenerationStore {
         GenerationId::new(value).map(Some)
     }
 
+    pub fn current_sealed_generation(&self) -> Result<Option<SealedGeneration>, CoreError> {
+        self.current_generation()?
+            .map(|generation| self.sealed_generation(generation))
+            .transpose()
+    }
+
     pub fn prepare_candidate(&self, candidate: &Candidate) -> Result<PreparedCandidate, CoreError> {
         let generations = self.generations_root();
         let final_dir = generations.join(candidate.generation.get().to_string());

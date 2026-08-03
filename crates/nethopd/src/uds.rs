@@ -164,14 +164,39 @@ mod unix {
             &self.socket_path
         }
 
+        pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), ControlServerError> {
+            self.listener
+                .set_nonblocking(nonblocking)
+                .map_err(|_| ControlServerError::AcceptFailed)
+        }
+
         pub fn serve_once(
             &self,
             handler: &mut impl ControlRequestHandler,
         ) -> Result<PeerCredentials, ControlServerError> {
-            let (mut stream, _) = self
+            let (stream, _) = self
                 .listener
                 .accept()
                 .map_err(|_| ControlServerError::AcceptFailed)?;
+            self.serve_stream(stream, handler)
+        }
+
+        pub fn try_serve_once(
+            &self,
+            handler: &mut impl ControlRequestHandler,
+        ) -> Result<Option<PeerCredentials>, ControlServerError> {
+            match self.listener.accept() {
+                Ok((stream, _)) => self.serve_stream(stream, handler).map(Some),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+                Err(_) => Err(ControlServerError::AcceptFailed),
+            }
+        }
+
+        fn serve_stream(
+            &self,
+            mut stream: UnixStream,
+            handler: &mut impl ControlRequestHandler,
+        ) -> Result<PeerCredentials, ControlServerError> {
             stream
                 .set_read_timeout(Some(self.limits.io_timeout))
                 .map_err(|_| ControlServerError::AcceptFailed)?;

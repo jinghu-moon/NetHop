@@ -102,4 +102,29 @@ mod unix {
             ControlServerError::InvalidSocketPath
         );
     }
+
+    #[test]
+    fn nonblocking_server_reports_idle_without_hiding_real_requests() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("nethopd.sock");
+        let server = UnixControlServer::bind(&path, ControlServerLimits::default()).unwrap();
+        server.set_nonblocking(true).unwrap();
+        let mut handler = Handler;
+        assert_eq!(server.try_serve_once(&mut handler).unwrap(), None);
+
+        let mut client = UnixStream::connect(&path).unwrap();
+        FrameCodec::write_to(
+            &mut client,
+            &WireFrame::Request(ControlRequest::new(
+                RequestId::new("req-nonblocking").unwrap(),
+                ControlMethod::StatusGet,
+            )),
+        )
+        .unwrap();
+        assert!(server.try_serve_once(&mut handler).unwrap().is_some());
+        assert!(matches!(
+            FrameCodec::read_from(&mut client).unwrap(),
+            WireFrame::Response(response) if response.ok()
+        ));
+    }
 }

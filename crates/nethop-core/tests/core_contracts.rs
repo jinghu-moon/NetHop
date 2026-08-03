@@ -347,6 +347,24 @@ fn rollback_rejects_a_generation_whose_config_no_longer_matches_manifest() {
 }
 
 #[test]
+fn current_generation_is_reopened_only_after_manifest_verification() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = GenerationStore::new(directory.path()).unwrap();
+    assert!(store.current_sealed_generation().unwrap().is_none());
+    let candidate = Candidate::new(
+        GenerationId::new(9).unwrap(),
+        ManagedConfig::from_outbounds(vec![outbound("nine")]).unwrap(),
+    );
+    store.publish(&candidate, |_| Ok(())).unwrap();
+    let current = store.current_sealed_generation().unwrap().unwrap();
+    assert_eq!(current.generation(), candidate.generation());
+    assert!(current.config_path().is_file());
+
+    std::fs::write(current.config_path(), b"{\"outbounds\":[]}").unwrap();
+    assert!(store.current_sealed_generation().is_err());
+}
+
+#[test]
 fn generation_id_zero_is_rejected() {
     assert_eq!(
         GenerationId::new(0).unwrap_err(),
