@@ -4,6 +4,7 @@ pub mod activation;
 pub mod process;
 pub mod runner;
 pub mod stats;
+pub mod storage;
 pub mod supervisor;
 pub mod uds;
 pub mod worker_activation;
@@ -26,6 +27,7 @@ pub use stats::{
     CounterBatch, CounterDelta, CounterDeltaBatch, CounterDeltaTracker, CounterName,
     CounterReading, CounterTransport, StatsError,
 };
+pub use storage::{StatsBucket, StatsStore, StatsStoreError};
 pub use supervisor::{
     RestartPolicy, SupervisorError, SupervisorEvent, SupervisorState, SystemWorkerBackend,
     SystemWorkerProcess, WorkerExit, WorkerProcess, WorkerProcessBackend, WorkerSignal,

@@ -13,6 +13,7 @@ libc = "0.2"
 nethop-android = { version = "0.1.0", path = "../nethop-android" }
 nethop-core = { version = "0.1.0", path = "../nethop-core" }
 nethop-protocol = { version = "0.1.0", path = "../nethop-protocol" }
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"
 
