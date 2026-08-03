@@ -77,6 +77,9 @@ test-reports/
 *.exe
 *.bin
 
+# Local Android module packages and build staging.
+out/android-arm64/
+
 # cargo-fuzz generated outputs; deterministic seed corpora remain tracked.
 crates/nethop-subscription/fuzz/target/
 crates/nethop-subscription/fuzz/artifacts/
