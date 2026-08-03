@@ -1,11 +1,16 @@
 #![doc = "Android capability probing and controlled network mutation for NetHop."]
 
+pub mod apps;
 pub mod capability;
 pub mod executor;
 pub mod health;
 pub mod plan;
 pub mod tun;
 
+pub use apps::{
+    AppCatalog, AppCatalogError, AppClass, AppIdentity, AppSelectionMode, CompiledAppSelection,
+    PackageSnapshot, SharedUidExpansion, UidGroup,
+};
 pub use capability::{
     AllocationCapability, AndroidToolPaths, CapabilityDiagnosticCode, CapabilityError,
     CapabilityProbe, CapabilityReport, CapabilityStatus, CommandProbeBackend, FamilyCapability,
