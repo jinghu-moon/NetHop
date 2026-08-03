@@ -42,6 +42,23 @@ fn runtime_state_allows_only_declared_lifecycle_edges() {
             .unwrap(),
         RuntimeState::Stopping
     );
+    assert_eq!(
+        RuntimeState::Degraded
+            .transition(RuntimeState::FailOpenDirect)
+            .unwrap(),
+        RuntimeState::FailOpenDirect
+    );
+    assert_eq!(
+        RuntimeState::FailOpenDirect
+            .transition(RuntimeState::CircuitOpen)
+            .unwrap(),
+        RuntimeState::CircuitOpen
+    );
+    assert!(
+        RuntimeState::CircuitOpen
+            .transition(RuntimeState::Probing)
+            .is_err()
+    );
 }
 
 #[test]

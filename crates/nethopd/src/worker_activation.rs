@@ -184,6 +184,14 @@ pub struct ActiveRuntime<P: CandidateProcess, R> {
     capabilities: CapabilityReport,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub(crate) enum RuntimeReconcileError {
+    #[error("active network plan could not be withdrawn for reconcile")]
+    WithdrawFailed,
+    #[error("active network plan could not be reapplied for reconcile")]
+    ReapplyFailed,
+}
+
 impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
     pub const fn generation(&self) -> GenerationId {
         self.active.generation()
@@ -199,6 +207,23 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
 
     pub fn process_mut(&mut self) -> &mut P {
         self.active.process_mut()
+    }
+
+    pub(crate) fn rebuild_network<N>(
+        &mut self,
+        network: &mut N,
+    ) -> Result<(), RuntimeReconcileError>
+    where
+        N: NetworkController<Receipt = R>,
+    {
+        network
+            .rollback(&self.plan, &mut self.receipt)
+            .map_err(|_| RuntimeReconcileError::WithdrawFailed)?;
+        let receipt = network
+            .apply(&self.plan)
+            .map_err(|_| RuntimeReconcileError::ReapplyFailed)?;
+        self.receipt = receipt;
+        Ok(())
     }
 
     pub fn stop<N>(mut self, network: &mut N) -> Result<(), RuntimeStopError>

@@ -7,14 +7,14 @@
     "workspace_manifest_sha256": "270dde2af318d5b3653e95e5a5418342c21571608ca5128b37e97a8470609223",
     "crate_manifest_sha256": "c9303924558fdf1eba77d39081f04b6bcbc01333d7c16cabfa6319c746f04c42",
     "mapping_manifest_sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6",
-    "workspace_source_sha256": "3a272f5b30ca30013422631512ee2837a29bbefadb5f1eef97d59b549a094e42"
+    "workspace_source_sha256": "b3eeb4bd7067ef42a10f6831506d9bb12d25eaf77c0706e6197ead79598821d9"
   },
   "toolchain": {
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26100 (Windows 11 IoTEnterpriseS) [64-bit]"
   },
   "source_control": {
-    "git_head": "993fa4b1f4e8dd9a3d26214083cb731649ad340d",
+    "git_head": "ab9193e44d89aea55818f11bb21d711d882b3de4",
     "working_tree": "dirty"
   },
   "gates": {
@@ -28,19 +28,19 @@
       "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json",
       "package_count": 41,
       "feature_leakage": false,
-      "bom_sha256": "b664320025f43c8d6a0637af69d41d4e4d886064c42ee5190be2ca645218e8c0"
+      "bom_sha256": "89935f7f9bb47cb03f2f7a722b2683696fdac6d64857e20b9f59ccfe3d65f191"
     },
     "fetch": {
       "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json,fetch",
       "package_count": 103,
       "feature_leakage": false,
-      "bom_sha256": "48fe7803c0f3aebd80fbdfd70f0e55a7394ab150f11503f5f27995d6afd3cc3a"
+      "bom_sha256": "4ea2800c692dd9d8398fc9b4cd5c4ffd3d7e1c1e3c3eec0f3bbd8ef80c8fac72"
     },
     "dev-test": {
       "features": "all",
       "package_count": 154,
       "feature_leakage": false,
-      "bom_sha256": "3b5a5309f8577ada196b6f9dfb93362129917d437b3555f7338bee14c3603869"
+      "bom_sha256": "9da1b535e22001ca49b49bd149bd2efd50ecae7bdba61da774f94b2c1b3d821c"
     }
   },
   "tools": {

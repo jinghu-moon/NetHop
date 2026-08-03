@@ -35,7 +35,7 @@
     },
     {
       "path": "crates/nethop-core/src/state.rs",
-      "sha256": "63511c0b1fc0af0b17deae072adf31d657b86cc119e68c92c923dbf20797e978"
+      "sha256": "eb05ebb0faf49fea7e0ca8bf9bdccbfbfec5c64182fedc44d99287b9cbd9cc53"
     },
     {
       "path": "crates/nethop-subscription/Cargo.toml",

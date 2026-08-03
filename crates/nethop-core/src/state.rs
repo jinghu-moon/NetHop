@@ -10,6 +10,7 @@ pub enum RuntimeState {
     RunningTun,
     Degraded,
     Backoff,
+    CircuitOpen,
     FailOpenDirect,
     Stopping,
 }
@@ -42,11 +43,15 @@ impl RuntimeState {
                 | (Self::RunningTun, Self::Degraded)
                 | (Self::RunningTun, Self::Stopping)
                 | (Self::Degraded, Self::Backoff)
+                | (Self::Degraded, Self::FailOpenDirect)
                 | (Self::Degraded, Self::Stopping)
                 | (Self::Backoff, Self::Probing)
                 | (Self::Backoff, Self::FailOpenDirect)
+                | (Self::FailOpenDirect, Self::Backoff)
+                | (Self::FailOpenDirect, Self::CircuitOpen)
                 | (Self::FailOpenDirect, Self::Probing)
                 | (Self::FailOpenDirect, Self::Stopping)
+                | (Self::CircuitOpen, Self::Stopping)
         );
         valid.then_some(next).ok_or(StateTransitionError::Invalid {
             from: self,
