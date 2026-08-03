@@ -4,6 +4,7 @@ pub mod capability;
 pub mod executor;
 pub mod health;
 pub mod plan;
+pub mod tun;
 
 pub use capability::{
     AllocationCapability, AndroidToolPaths, CapabilityDiagnosticCode, CapabilityError,
@@ -22,4 +23,8 @@ pub use health::{
 pub use plan::{
     NetworkOperationKind, NetworkPlan, NetworkPlanError, NetworkPlanner, PlanDiagnosticCode,
     PlanSlot,
+};
+pub use tun::{
+    TunCandidate, TunFallbackError, TunFallbackPlan, TunFallbackPlanner, TunHealthError,
+    TunHealthVerifier, default_tun_interface,
 };
