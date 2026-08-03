@@ -1,6 +1,7 @@
 #![doc = "Controlled daemon process boundaries for NetHop."]
 
 pub mod activation;
+pub mod application;
 pub mod process;
 pub mod runner;
 pub mod scheduler;
@@ -16,6 +17,10 @@ pub use activation::{
     ActivationDiagnosticCode, ActivationError, ActiveGeneration, CandidateActivator,
     CandidateChecker, CandidateProcess, CoreLauncher, HealthProbe, HealthProbeError,
     ManagedSafetyAuditor, SafetyAuditError, SafetyAuditor, StartupLivenessProbe,
+};
+pub use application::{
+    ApplicationError, DaemonArguments, DaemonMode, RuntimeRoot, SupervisorLoopDriver,
+    SupervisorLoopSignal, SystemSupervisorDriver, run_supervisor_loop, run_system_supervisor,
 };
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
