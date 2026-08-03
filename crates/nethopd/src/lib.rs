@@ -10,6 +10,7 @@ pub mod storage;
 pub mod supervisor;
 pub mod uds;
 pub mod worker_activation;
+pub mod worker_config;
 pub mod worker_runtime;
 pub mod worker_service;
 pub mod worker_services;
@@ -57,6 +58,7 @@ pub use worker_activation::{
     WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator, WorkerRecovery,
     WorkerRecoveryError,
 };
+pub use worker_config::{WorkerConfig, WorkerConfigError};
 pub use worker_runtime::{
     RestartBudget, RestartDecision, RuntimeFailureCode, RuntimeTick, SystemLoopDriver,
     WorkerLoopDriver, WorkerLoopSignal, WorkerRunExit, WorkerRuntime, WorkerRuntimeError,
