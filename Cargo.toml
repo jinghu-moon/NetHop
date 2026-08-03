@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/nethop-android",
     "crates/nethop-core",
+    "crates/nethop-protocol",
     "crates/nethop-subscription",
     "crates/nethopd",
 ]

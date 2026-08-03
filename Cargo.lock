@@ -581,6 +581,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nethop-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "nethop-subscription"
 version = "0.1.0"
 dependencies = [

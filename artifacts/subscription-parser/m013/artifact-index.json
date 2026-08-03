@@ -5,15 +5,15 @@
   "artifacts": [
     {
       "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
-      "sha256": "968777868ea62b488ecdbe32a06f49ab7803f9bcaa522c313ee124177079d342"
+      "sha256": "df9683daa66e2935663f69dcbc895d85f3182e2242a49d6b92673d9b4f2b3831"
     },
     {
       "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
-      "sha256": "cd1aa6d3627cc3922ec3a539e2fb6037e2f74a39d30ab484f15caab5cc526dea"
+      "sha256": "3dc2f7d6f7678c4db3f3b0e5dd60a2ed77c8ce25db5c2ac874e8391c98f052c9"
     },
     {
       "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
-      "sha256": "32d6748f5fe6028f1bca73696882085df51d9e11491eea7769eac9de7aa175c5"
+      "sha256": "e009fc1d698f7839cbeed575abc7d172bc4bd190a43d00b900e26423d5567acc"
     },
     {
       "path": "artifacts/subscription-parser/m010/licenses.json",
@@ -21,7 +21,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "03adb1a5e78b40e6b13ed3a407085cd3fb5865dad03c5fde6e46cdd3db0fb20b"
+      "sha256": "e32c0bb9012ff4f6631f126ddf4815d6f165848a8ffae9881f7216cd0a01ee04"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
@@ -61,7 +61,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m012/release-manifest.json",
-      "sha256": "c80cd2c5409a219fbaf31a46f42e1da0ae9346247a120b77f0330bcb1056d417"
+      "sha256": "b4c625c95c27b6c6f61e30c7094614e841b916155ab41ac8aacffa35b45d84bf"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
