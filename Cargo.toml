@@ -5,6 +5,7 @@ members = [
     "crates/nethop-core",
     "crates/nethop-protocol",
     "crates/nethop-subscription",
+    "crates/nethopctl",
     "crates/nethopd",
 ]
 exclude = ["crates/nethop-subscription/fuzz"]

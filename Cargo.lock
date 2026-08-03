@@ -613,6 +613,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nethopctl"
+version = "0.1.0"
+dependencies = [
+ "nethop-protocol",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "nethopd"
 version = "0.1.0"
 dependencies = [

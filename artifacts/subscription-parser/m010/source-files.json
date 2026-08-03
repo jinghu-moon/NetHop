@@ -3,11 +3,11 @@
   "files": [
     {
       "path": "Cargo.lock",
-      "sha256": "5c5fec1f34260e5670c9f0e74280952d09096cb035aa54a9f2efbb18b1db63e0"
+      "sha256": "80204f2063f1615f05388103a2818ebfcee6e5c6bbaba2a864e901e31fadd058"
     },
     {
       "path": "Cargo.toml",
-      "sha256": "b4b46bb991df96ccef6fc71aa06302c92c9bedf58de8c0316a5b506d85374eb1"
+      "sha256": "11980132743dd49957587851dee4fbd1523d264511089d573d445a51f8a64d06"
     },
     {
       "path": "crates/nethop-core/Cargo.toml",

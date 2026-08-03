@@ -1,0 +1,14 @@
+[package]
+name = "nethopctl"
+description = "Thin local control client for NetHop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+nethop-protocol = { version = "0.1.0", path = "../nethop-protocol" }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+thiserror = "2"
