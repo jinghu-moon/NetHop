@@ -1,8 +1,8 @@
 #![cfg(feature = "format-singbox-json")]
 
 use nethop_subscription::{
-    AdapterOutput, CapabilityMatrix, DiagnosticCode, ParserLimits, ProxyProtocol,
-    parse_singbox_json,
+    AdapterOutput, CapabilityMatrix, DiagnosticCode, FormatHint, ParserLimits, ProxyProtocol,
+    SourceId, SourceInput, convert_stable_sources, parse_singbox_json,
 };
 
 fn parse(input: &str) -> AdapterOutput {
@@ -16,6 +16,72 @@ fn parse(input: &str) -> AdapterOutput {
 }
 
 const TROJAN: &str = r#"{"type":"trojan","tag":"node","server":"example.com","server_port":443,"password":"secret","tls":{"enabled":true}}"#;
+
+#[test]
+fn shadowsocks_udp_over_tcp_is_preserved_by_the_controlled_mapping() {
+    let input = br#"{
+      "outbounds": [
+        {
+          "type": "shadowsocks",
+          "tag": "uot-bool",
+          "server": "one.example",
+          "server_port": 443,
+          "method": "chacha20-ietf-poly1305",
+          "password": "fixture",
+          "udp_over_tcp": true
+        },
+        {
+          "type": "shadowsocks",
+          "tag": "uot-object",
+          "server": "two.example",
+          "server_port": 443,
+          "method": "chacha20-ietf-poly1305",
+          "password": "fixture",
+          "udp_over_tcp": { "enabled": true, "version": 1 }
+        }
+      ]
+    }"#;
+    let conversion = convert_stable_sources(
+        vec![SourceInput {
+            source_id: SourceId::new("singbox-uot").unwrap(),
+            format_hint: FormatHint::SingboxJson,
+            bytes: input.to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+
+    assert_eq!(conversion.report.summary.accepted, 2);
+    assert_eq!(conversion.report.summary.rejected, 0);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert_eq!(outbounds[0]["udp_over_tcp"], true);
+    assert_eq!(outbounds[1]["udp_over_tcp"]["enabled"], true);
+    assert_eq!(outbounds[1]["udp_over_tcp"]["version"], 1);
+}
+
+#[test]
+fn udp_over_tcp_rejects_unknown_or_non_shadowsocks_semantics() {
+    for input in [
+        br#"{"outbounds":[{"type":"shadowsocks","tag":"bad","server":"one.example","server_port":443,"method":"chacha20-ietf-poly1305","password":"fixture","udp_over_tcp":{"enabled":true,"unknown":1}}]}"#.as_slice(),
+        br#"{"outbounds":[{"type":"trojan","tag":"bad","server":"one.example","server_port":443,"password":"fixture","tls":{"enabled":true},"udp_over_tcp":true}]}"#.as_slice(),
+    ] {
+        let conversion = convert_stable_sources(
+            vec![SourceInput {
+                source_id: SourceId::new("singbox-uot-rejected").unwrap(),
+                format_hint: FormatHint::SingboxJson,
+                bytes: input.to_vec(),
+            }],
+            &ParserLimits::default(),
+            &CapabilityMatrix::default(),
+        );
+        assert_eq!(conversion.report.summary.accepted, 0);
+        assert_eq!(conversion.report.summary.rejected, 1);
+        assert_eq!(
+            conversion.report.diagnostic_counts[&DiagnosticCode::UnsupportedSemantics],
+            1
+        );
+    }
+}
 
 #[test]
 fn singbox_json_accepts_config_array_and_single_outbound_shapes() {

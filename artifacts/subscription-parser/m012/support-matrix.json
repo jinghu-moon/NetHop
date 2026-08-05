@@ -18,7 +18,7 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         },
         {
           "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -34,7 +34,7 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         },
         {
           "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -50,7 +50,7 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         },
         {
           "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -66,11 +66,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         },
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         }
       ]
     },
@@ -111,11 +111,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     },
@@ -139,11 +139,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     },
@@ -159,18 +159,19 @@
         "method",
         "password",
         "plugin",
-        "plugin_opts"
+        "plugin_opts",
+        "udp_over_tcp"
       ],
-      "capability_variants": 2,
+      "capability_variants": 4,
       "sing_box_version": "1.13.15",
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     },
@@ -192,11 +193,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     },
@@ -218,11 +219,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     },
@@ -245,11 +246,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     },
@@ -270,11 +271,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
         }
       ]
     }
@@ -360,15 +361,15 @@
   "generated_from": [
     {
       "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-      "sha256": "a5a748b2f690b19ec2aebfdfa702c9ccb464a47db5bb1da66185f8ba6c0ca57c"
+      "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
     },
     {
       "path": "crates/nethop-subscription/tests/fixtures/device/cross-environment-compatibility.json",
-      "sha256": "4fba0e5ef42db3c88328c65b74e8daa5c49e67449aedf7ae7dac08a145f25350"
+      "sha256": "28e4ff6f52f8e95e29822fec6b0280df412df82acbe3921e0d153a59e5236478"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-      "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+      "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
     },
     {
       "path": "docs/04-subscription-parser-phase0b-performance-report.md",

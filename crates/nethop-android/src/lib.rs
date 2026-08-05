@@ -15,8 +15,8 @@ pub use apps::{
 pub use capability::{
     AllocationCapability, AndroidToolPaths, CapabilityDiagnosticCode, CapabilityError,
     CapabilityProbe, CapabilityReport, CapabilityStatus, CommandProbeBackend, FamilyCapability,
-    IpFamily, NetfilterBackend, ProbeBackend, ProbeCommand, ProbeLimits, ProbeOutput,
-    ResourceCandidate,
+    IpFamily, NetfilterBackend, PackageListKind, ProbeBackend, ProbeCommand, ProbeLimits,
+    ProbeOutput, ResourceCandidate,
 };
 pub use executor::{
     ApplyReceipt, CommandFailure, CommandInvocation, CommandOutput, ExecutionDiagnosticCode,

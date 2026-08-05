@@ -65,9 +65,9 @@ fn sing_box_1_13_15_mapping_manifest_is_strict_and_digest_pinned() {
     assert_eq!(matrix.go_version, "1.24.7");
     assert_eq!(
         matrix.mapping_digest(),
-        "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+        "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
     );
-    assert_eq!(matrix.entry_count(), 23);
+    assert_eq!(matrix.entry_count(), 25);
 
     let wrong_version = manifest.replacen("1.13.15", "1.14.0", 1);
     assert!(CapabilityMatrix::from_manifest_json(&wrong_version).is_err());

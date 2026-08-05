@@ -174,6 +174,7 @@ struct SingboxOutbound {
     flow: Option<String>,
     plugin: Option<String>,
     plugin_opts: Option<String>,
+    udp_over_tcp: Option<SingboxUdpOverTcp>,
     congestion_control: Option<String>,
     tls: Option<SingboxTls>,
     transport: Option<SingboxTransport>,
@@ -229,6 +230,23 @@ struct SingboxObfs {
     password: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SingboxUdpOverTcp {
+    Enabled(bool),
+    Options(SingboxUdpOverTcpOptions),
+}
+
+#[derive(Deserialize)]
+struct SingboxUdpOverTcpOptions {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    version: u8,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde::de::IgnoredAny>,
+}
+
 fn singbox_node_spec(
     node: SingboxOutbound,
     source_id: Option<&SourceId>,
@@ -252,6 +270,25 @@ fn singbox_node_spec(
     spec.alter_id = node.alter_id;
     spec.flow = node.flow;
     spec.plugin = node.plugin;
+    spec.udp_over_tcp = match node.udp_over_tcp {
+        None => None,
+        Some(SingboxUdpOverTcp::Enabled(enabled)) => Some(crate::UdpOverTcpOptions {
+            enabled,
+            version: 0,
+        }),
+        Some(SingboxUdpOverTcp::Options(options))
+            if options.version <= 2 && options.unknown.is_empty() =>
+        {
+            Some(crate::UdpOverTcpOptions {
+                enabled: options.enabled,
+                version: options.version,
+            })
+        }
+        Some(SingboxUdpOverTcp::Options(_)) => {
+            spec.unknown_critical_field = Some("udp_over_tcp".into());
+            None
+        }
+    };
     if let Some(plugin_options) = node.plugin_opts {
         match parse_plugin_options(&plugin_options) {
             Some(options) => spec.plugin_options = options,
@@ -367,7 +404,6 @@ fn is_critical_node_field(field: &str) -> bool {
             | "routing_mark"
             | "domain_resolver"
             | "multiplex"
-            | "udp_over_tcp"
             | "certificate"
             | "certificate_path"
             | "xudp"

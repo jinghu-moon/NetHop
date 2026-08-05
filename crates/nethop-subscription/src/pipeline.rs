@@ -463,6 +463,12 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
     if let ProtocolOptions::Vless { flow: Some(flow) } = node.node.protocol_options() {
         object.insert("flow".into(), json!(flow.as_str()));
     }
+    if let ProtocolOptions::Shadowsocks {
+        udp_over_tcp: Some(options),
+    } = node.node.protocol_options()
+    {
+        object.insert("udp_over_tcp".into(), udp_over_tcp_json(*options));
+    }
     if let ProtocolOptions::Tuic {
         congestion_control: Some(congestion_control),
     } = node.node.protocol_options()
@@ -584,6 +590,18 @@ fn parse_source(
     matrix: &CapabilityMatrix,
 ) -> AdapterOutput {
     match input.format_hint {
+        FormatHint::Auto => match crate::detect_bytes(&input.bytes, FormatHint::Auto, limits) {
+            Ok(detected) => parse_source(
+                &SourceInput {
+                    source_id: input.source_id.clone(),
+                    format_hint: detected.format(),
+                    bytes: input.bytes.clone(),
+                },
+                limits,
+                matrix,
+            ),
+            Err(error) => single_error(error.code()),
+        },
         FormatHint::UriList => uri_output(&input.bytes, Some(&input.source_id), limits, matrix),
         FormatHint::Base64List => match crate::decode_base64_and_detect(&input.bytes, limits) {
             Ok(decoded) => parse_source(
@@ -612,7 +630,14 @@ fn parse_source(
             crate::parse_surfboard_ini(&input.bytes, Some(&input.source_id), limits, matrix)
                 .unwrap_or_else(|error| source_error(error.code))
         }
-        _ => single_error(DiagnosticCode::UnsupportedSemantics),
+        #[cfg(not(feature = "format-clash-yaml"))]
+        FormatHint::ClashYaml => single_error(DiagnosticCode::UnsupportedSemantics),
+        #[cfg(not(feature = "format-singbox-json"))]
+        FormatHint::SingboxJson => single_error(DiagnosticCode::UnsupportedSemantics),
+        #[cfg(not(feature = "format-surfboard"))]
+        FormatHint::IniProfile | FormatHint::SurfboardIni => {
+            single_error(DiagnosticCode::UnsupportedSemantics)
+        }
     }
 }
 
@@ -791,7 +816,20 @@ fn encode_protocol_options(out: &mut Vec<u8>, options: &ProtocolOptions) {
                 .as_ref()
                 .map_or("", |value| value.as_str()),
         ),
+        ProtocolOptions::Shadowsocks {
+            udp_over_tcp: Some(options),
+        } => {
+            field(out, "udp_over_tcp_enabled", &options.enabled.to_string());
+            field(out, "udp_over_tcp_version", &options.version.to_string());
+        }
         _ => {}
+    }
+}
+
+fn udp_over_tcp_json(options: crate::UdpOverTcpOptions) -> Value {
+    match options.version {
+        0 | 2 => json!(options.enabled),
+        version => json!({"enabled": options.enabled, "version": version}),
     }
 }
 

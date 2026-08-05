@@ -1760,9 +1760,9 @@ M002-M003 实现证据：QR IPC origin 只接受带用户确认状态的 Android
   - `REFACTOR`: 版本证据来自单一 manifest。
   - `done`: 1.13.15 mapping manifest golden 通过。
 
-M004 实现证据：`manifests/sing-box-1.13.15-mapping.json` 是运行时 `CapabilityMatrix` 的单一事实来源，冻结上游 tag `v1.13.15`、commit `3708fa18766cda1f11b77f6ed9c7bd61688f17df`、Go `1.24.7`、NetHop 候选 build tags、七协议 mapped fields、源码路径和 23 个 capability shapes；manifest SHA-256 为 `2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6`。严格 validator 拒绝未知字段、版本/commit/build tag 漂移、重复/缺失协议和重复 query。
+M004 实现证据：`manifests/sing-box-1.13.15-mapping.json` 是运行时 `CapabilityMatrix` 的单一事实来源，冻结上游 tag `v1.13.15`、commit `3708fa18766cda1f11b77f6ed9c7bd61688f17df`、Go `1.24.7`、NetHop 候选 build tags、七协议 mapped fields、源码路径和 25 个 capability shapes；加入 sing-box 1.13.15 原生 Shadowsocks `udp_over_tcp` 以及经审核的 `obfs-local` UDP 窄映射后，manifest SHA-256 为 `4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140`。严格 validator 拒绝未知字段、版本/commit/build tag 漂移、重复/缺失协议和重复 query。
 
-`tests/fixtures/mapping/sing-box-1.13.15-check.json` SHA-256 为 `e70bae4d5e64ae7d014bb3ba8c53107ee730be020c60344bcab50bf530968519`，覆盖七种 outbound；sing-box v1.13.15 官方 Windows amd64 发布二进制执行 `check` 返回 `0`，其 `version` 输出确认 revision `3708fa...`。本机 Go `1.25.4` 不能链接该版本 `badlinkname` 组合，因此 NetHop 自定义裁剪 tags 的下游源码构建仍留给发布构建 gate，不把官方二进制检查冒充自定义 Android 构建证据。
+`tests/fixtures/mapping/sing-box-1.13.15-check.json` SHA-256 为 `571f98cfea51e08550e4e2f82c995a0ef1810ba096f8496c907aa244f93abba1`，覆盖七种 outbound，并在 Shadowsocks 节点覆盖原生 `udp_over_tcp`；sing-box v1.13.15 官方 Android arm64 发布二进制在 alioth 上执行 `check` 返回 `0`，其 `version` 输出确认 revision `3708fa...`。本机 Go `1.25.4` 不能链接该版本 `badlinkname` 组合，因此 NetHop 自定义裁剪 tags 的下游源码构建仍留给发布构建 gate，不把官方二进制检查冒充自定义构建证据。
 
 源码对照同时修复了三个会静默改变连接语义的缺陷：uTLS/Reality composer 补齐 `enabled=true`；TUIC `congestion_control` 进入 typed `ProtocolOptions` 与 outbound；Hysteria2 只接受完整的 `salamander + obfs password` 并同时进入 canonical fingerprint 和 outbound。未建模的端口跳跃、带宽及其他连接关键字段继续拒绝，不做猜测映射。
 
@@ -1784,7 +1784,7 @@ M005 实现证据：`tests/support/fake_module_host.rs` 为 Magisk/KernelSU 提�
   - `REFACTOR`: 只修复设备实际暴露的问题。
   - `done`: device integration manifest 和脱敏 log。
 
-M006 实现证据：`tests/fixtures/device/alioth-parser-integration.json` 绑定 `alioth / Android 13 / API 33 / arm64-v8a / Magisk 30.6`、Rust/NDK 构建参数和本地 check fixture digest。parser-only 与 fetch-enabled release probe 均在设备上启动，输出 `accepted=7`、`rejected=0`、`candidate_state=ready`、`ipc_schema_version=1` 和相同 mapping digest；测试只使用仓库内脱敏 fixture，没有访问订阅 URL。该声明不外推到其他设备、ROM、SoC 或 Root 管理器。
+M006 实现证据：`tests/fixtures/device/alioth-parser-integration.json` 绑定 `alioth / Android 13 / API 33 / arm64-v8a / Magisk 30.6`、Rust/NDK 构建参数和本地 check fixture digest。parser-only 与 fetch-enabled release probe 已于 2026-08-03 在设备上重跑，输出 `accepted=7`、`rejected=0`、`candidate_state=ready`、`ipc_schema_version=1` 和 mapping digest `6215042d...`；同一 fixture 已通过官方 sing-box 1.13.15 Android arm64 的 `check`。测试只使用仓库内脱敏 fixture，没有访问订阅 URL。该声明不外推到其他设备、ROM、SoC 或 Root 管理器。
 
 - [x] **M007 - 验证 active limit 500/2,000/10,000 边界**
   - `depends_on`: H022,M001；`parallel_group`: M-boundary

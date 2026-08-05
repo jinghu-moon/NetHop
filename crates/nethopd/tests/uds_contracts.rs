@@ -39,9 +39,10 @@ mod unix {
     };
 
     use nethop_protocol::{
-        ControlMethod, ControlRequest, ControlResponse, FrameCodec, RequestId, WireFrame,
+        ControlMethod, ControlParams, ControlRequest, ControlResponse, EventKind, FrameCodec,
+        RequestId, WireFrame,
     };
-    use nethopd::{ControlRequestHandler, UnixControlServer};
+    use nethopd::{ControlRequestHandler, EventHub, EventSubscription, UnixControlServer};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -56,6 +57,23 @@ mod unix {
                 Some(7),
                 json!({"state":"running"}),
             )
+        }
+    }
+
+    struct EventHandler(EventHub);
+
+    impl ControlRequestHandler for EventHandler {
+        fn handle(&mut self, request: ControlRequest) -> ControlResponse {
+            ControlResponse::success(request.request_id().clone(), None, json!({}))
+        }
+
+        fn subscribe_events(&mut self, request: &ControlRequest) -> Option<EventSubscription> {
+            self.0
+                .subscribe(
+                    request.request_id().clone(),
+                    request.params().event_kinds().unwrap_or_default(),
+                )
+                .ok()
         }
     }
 
@@ -104,6 +122,27 @@ mod unix {
     }
 
     #[test]
+    fn server_reclaims_only_a_stale_socket_and_never_a_live_listener() {
+        let directory = tempdir().unwrap();
+        let stale = directory.path().join("stale.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&stale).unwrap();
+        drop(listener);
+
+        let replacement = UnixControlServer::bind(&stale, ControlServerLimits::default()).unwrap();
+        assert!(stale.exists());
+        drop(replacement);
+        assert!(!stale.exists());
+
+        let live = directory.path().join("live.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&live).unwrap();
+        assert_eq!(
+            UnixControlServer::bind(&live, ControlServerLimits::default()).unwrap_err(),
+            ControlServerError::SocketPathOccupied
+        );
+        assert!(live.exists());
+    }
+
+    #[test]
     fn nonblocking_server_reports_idle_without_hiding_real_requests() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("nethopd.sock");
@@ -126,5 +165,40 @@ mod unix {
             FrameCodec::read_from(&mut client).unwrap(),
             WireFrame::Response(response) if response.ok()
         ));
+    }
+
+    #[test]
+    fn event_request_receives_snapshot_then_live_stream_frames() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sock");
+        let server = UnixControlServer::bind(&path, ControlServerLimits::default()).unwrap();
+        let hub = EventHub::new(json!({"kind":"snapshot"}), 4).unwrap();
+        let producer = hub.clone();
+        let worker = thread::spawn(move || {
+            let mut handler = EventHandler(hub);
+            server.serve_once(&mut handler).unwrap();
+        });
+        let mut client = UnixStream::connect(&path).unwrap();
+        let request = ControlRequest::new(
+            RequestId::new("events-uds").unwrap(),
+            ControlMethod::EventsSubscribe,
+        )
+        .with_params(ControlParams::event_subscription(vec![EventKind::Config]))
+        .unwrap();
+        FrameCodec::write_to(&mut client, &WireFrame::Request(request)).unwrap();
+        let snapshot = FrameCodec::read_from(&mut client).unwrap();
+        assert!(
+            matches!(snapshot, WireFrame::Stream(frame) if frame.payload().unwrap()["kind"] == "snapshot")
+        );
+        producer.publish(
+            EventKind::Config,
+            json!({"kind":"config","state":"accepted"}),
+        );
+        let event = FrameCodec::read_from(&mut client).unwrap();
+        assert!(
+            matches!(event, WireFrame::Stream(frame) if frame.payload().unwrap()["state"] == "accepted")
+        );
+        drop(client);
+        worker.join().unwrap();
     }
 }

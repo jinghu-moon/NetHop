@@ -565,6 +565,10 @@ pub struct SourceCache {
 }
 
 impl SourceCache {
+    pub fn last_known_good(&self) -> Option<&[u8]> {
+        self.last_known_good.as_deref()
+    }
+
     pub fn conditional_headers(&self) -> Vec<(&'static str, &str)> {
         let mut headers = Vec::new();
         if let Some(etag) = &self.etag {

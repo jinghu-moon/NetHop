@@ -1,8 +1,8 @@
 # NetHop TOML 配置重构与 Manager 契约设计
 
-> 状态：Draft v0.3
+> 状态：Implementation Baseline v0.4
 >
-> 日期：2026-08-04
+> 日期：2026-08-05
 >
 > 适用范围：当前 Alpha 至 Manager APK 接入
 >
@@ -44,6 +44,29 @@ Manager 操作 typed config；daemon 校验后同时更新持久 TOML 和内存�
 ```
 
 模块目录中的入口由安装脚本创建为指向持久文件的受控链接。daemon 始终从持久路径读取普通文件，模块覆盖安装不得覆盖用户配置。
+
+### 1.1 2026-08-05 实现基线
+
+当前代码已经形成以下可验证闭环：
+
+- 完整 v1 TOML wire/effective model、`1..16` 个 source、daemon-owned 128-bit SourceId registry、canonical TOML、exact-byte digest、CAS、原子写、checkpoint 和 rollback；
+- 双目录 inotify watcher、稳定读取、digest self-write no-op、入口 symlink 写断后的完整 admission/导入/恢复，以及 watcher degraded/retry health；
+- 多 source 下载、格式提示、request profile、最多三个 mirror、有序合并、稳定去重、单源 last-known-good、持久自动更新调度和 `source_config_digest` supersede guard；
+- `service.enabled` 持久启停、Stop 对旧 Start/Update 命令的抢占、应用包名到 UID admission、接口 glob 到 probe 已知精确接口名的受控解析、CIDR 和资源候选校验；
+- `protocol.hello`、`config.get/validate/apply/reload/schema/mutate`、`capability.get`、`events.subscribe`，以及 root CLI JSON/JSONL 管道；
+- capability report schema `3`，包含有界接口证据；有界事件 ring、脱敏持久 JSONL 日志、4 MiB 单文件上限和 `1..30` 天日志清理。
+
+以下配置值在对应数据面完成前稳定拒绝，不能解释为已经接线：
+
+| 配置能力 | 当前 admission |
+|---|---|
+| 显式 `capture_mode = "tun"` | 拒绝；TUN probe/规划组件存在，但尚未接入配置 activation |
+| 非 `auto` 的 DNS/IPv6 模式 | 拒绝 |
+| `tun_stack != "system"` | 拒绝 |
+| hotspot/USB 接口接管 | 拒绝 |
+| `routing.bypass_cn=true`、`routing.block_quic=true` | 拒绝 |
+
+这属于开发期的有意 fail-closed，而不是兼容承诺。启用这些值必须先补数据面、capability admission、回滚和 Android 真机测试，再移除拒绝分支。
 
 ## 2. 设计目标
 
@@ -244,7 +267,7 @@ selector_mode = "urltest"
 interval_minutes = 10
 tolerance_ms = 50
 max_candidates = 64
-concurrency = 8
+concurrency = 10
 
 [applications]
 mode = "all"
@@ -386,7 +409,7 @@ registry 和 `EffectiveConfig`/generation 的提交仍受 `MutationCoordinator` 
 | `proxy.urltest.interval_minutes` | `5..1440` | `10` | 低于 5 分钟会侵蚀电量和空闲 CPU 预算 |
 | `proxy.urltest.tolerance_ms` | `0..1000` | `50` | 防止节点抖动切换 |
 | `proxy.urltest.max_candidates` | `1..256` | `64` | 只限制 auto 集，不删除节点 |
-| `proxy.urltest.concurrency` | `1..16` | `8` | 有界测速并发 |
+| `proxy.urltest.concurrency` | 固定为 `10` | `10` | sing-box 1.13.15 内部固定并发；当前版本拒绝伪可配置值 |
 
 当前选中节点、最近延迟和 core instance 不写入用户 TOML。它们是运行状态，通过稳定 `node_id` 存入 state/SQLite 并由 Manager 查询。
 
@@ -708,7 +731,7 @@ daemon 自身通过 Manager/CLI 原子写 TOML 也会产生 inotify 事件。不
 
 ### 11.6 自动更新
 
-第一阶段完成首次启动更新和手动 `nethopctl update`。第二阶段接入默认 24 小时调度、稳定 jitter、失败退避和持久 `next_run`。更新事务沿用现有规则：候选失败不改变活动 generation，首次失败保持 direct。
+当前实现覆盖首次启动更新、手动 `nethopctl update`、默认 24 小时持久调度、失败退避和持久 `next_run`。调度记录按 daemon-owned source ID 写入 SQLite；配置变化后重新 reconcile 活动 source。更新事务沿用现有规则：候选失败不改变活动 generation，首次失败保持 direct；prepared candidate 在 commit 前必须同时通过 `service.enabled`、活动 source config digest 和磁盘 config digest 检查，否则发布 `superseded` 并丢弃。
 
 ### 11.7 单写与事务串行化
 
@@ -743,7 +766,7 @@ APK 不直接连接 loopback TCP 或放宽权限的 UDS。短请求通过 `su -c
 
 ### 12.2 IPC 方法
 
-第二阶段增加：
+当前 daemon/CLI 已实现：
 
 ```text
 config.get
@@ -838,6 +861,8 @@ warnings[]
 
 CAS conflict 返回服务端当前 observed digest，以及在不泄露 sensitive value 前提下可计算的字段差异。Manager 提示用户重新加载、放弃本地编辑或人工合并；daemon 不自动三方合并 secret、数组顺序或网络资源参数。
 
+冲突字段摘要只使用稳定的粗粒度 ID：`service.enabled`、`subscriptions.auto_update`、`subscriptions.update_interval_hours`、`subscriptions.sources`、`proxy`、`applications`、`network`、`routing`、`logging`、`advanced`。只有请求候选能通过完整 typed validation 和 capability admission 时才返回可计算项；否则返回空数组。响应绝不包含字段值、source 名称、URL 或 mirror。
+
 `config.get/status` 同时返回 observed/active digest、`candidate_sequence`、watcher health 和最近一次 reload 结果。observed 与 active 不同时，Manager 必须显示 pending/rejected 状态，不能把旧活动配置误报为磁盘文件已经生效。
 
 ### 12.5 Capability report
@@ -854,6 +879,8 @@ apply_effect
 ```
 
 `unavailable` 表示设备状态可能变化后可恢复，`conflict` 表示资源被占用，`experimental` 表示有实现但不进入稳定承诺。`NeedKernelSU`、`NeedMagisk` 不膨胀为 status，而作为 requirements/reason 表达。Manager 据此显示状态和解决建议，最终 admission 仍由 daemon 执行。
+
+当前 capability report wire schema 为 `3`。接口证据来自只读 `ip link show`，只接受有界安全接口名并稳定排序；`network.interfaces` 的 include/exclude glob 只在 capability 阶段匹配这些已验证名称，原始用户 glob 绝不直接进入 shell 或 netfilter 命令。
 
 ### 12.6 Manager 元数据
 
@@ -884,6 +911,8 @@ Manager 用元数据生成普通 bool/int/string/enum 控件，并为未知标�
 
 Manager apply 后由 daemon 输出固定顺序的 canonical TOML，并恢复官方模板注释。首版不承诺保留用户任意位置的自定义注释，因此不为 comment round-trip 引入 `toml_edit`。Manager 在首次写回前必须明确提示“应用后配置文件将规范化，自定义注释可能丢失”；手工 reload 不重写内容时保留注释。未来若真实用户把 comment round-trip 作为硬需求，再对 `toml_edit` 做体积、内存和维护 ADR。
 
+canonical 输出对无优先级集合执行稳定规范化：包名、include/exclude UID、接口 include/exclude glob 和 CIDR 排序，UID 去重并强制保留 root UID `0`，CIDR 写回规范网络地址。source、mirror 和 resource candidate 保留用户顺序，因为顺序分别表达合并、故障转移和 capability 选择优先级。
+
 ### 12.8 Event API
 
 不增加五套 `watch.*`。daemon 提供一个有界事件订阅：
@@ -901,6 +930,8 @@ CLI 通过 JSONL stdout 转发：
 事件只携带摘要和稳定 ID，不含 URL、节点凭据或完整配置。订阅者连接后先收到 snapshot，再接收单调 `seq` 的增量；队列有界，慢消费者收到 `resync_required` 后重新取 snapshot，daemon 不为 UI 背压阻塞 worker。
 
 配置事件至少区分 `observed`、`accepted`、`rejected`、`superseded` 和 `watch_degraded`，并携带 observed/active digest。Manager 因而可以在文件保存后实时刷新状态，无需轮询完整配置。
+
+同一份脱敏事件还可以写入固定日志目录的 JSONL 文件。实现限制为最多 4 个订阅者、事件 ring 最多 1,024 项、单行最多 16 KiB、单日文件最多 4 MiB；文件使用 epoch-day 名称、`0600`、`O_NOFOLLOW | O_CLOEXEC`。只记录 NetHop 结构化事件，不持久化 sing-box 原始 stdout/stderr。retention 每 24 小时扫描一次固定目录的最多 1,024 个直接子项，只删除过期普通 `.log` 文件且不跟随 symlink；失败只报告 `retention_degraded`，不终止 worker。
 
 ### 12.9 Manager MVP
 

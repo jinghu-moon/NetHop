@@ -1,0 +1,336 @@
+use std::fs;
+
+use nethop_subscription::RequestProfile;
+use nethopd::{
+    ApplicationMode, ApplyImpact, CaptureIntent, ChangeKind, ConfigError, ConfigStore, DnsMode,
+    Ipv6Mode, LogLevel, OutboundMode, SelectorMode, SourceFormatHint, TunStackIntent,
+};
+use tempfile::tempdir;
+
+fn complete_config() -> &'static str {
+    r#"schema_version = 1
+
+[service]
+enabled = true
+
+[subscriptions]
+auto_update = true
+update_interval_hours = 24
+
+[[subscriptions.sources]]
+name = "Primary"
+enabled = true
+url = "https://subscription.example/primary"
+request_profile = "sing_box_android"
+format_hint = "auto"
+mirrors = ["https://mirror.example/primary"]
+
+[[subscriptions.sources]]
+name = "Backup"
+enabled = false
+url = ""
+request_profile = "mihomo"
+format_hint = "clash_yaml"
+mirrors = []
+
+[proxy]
+outbound_mode = "rule"
+selector_mode = "urltest"
+
+[proxy.urltest]
+interval_minutes = 10
+tolerance_ms = 50
+max_candidates = 64
+concurrency = 10
+
+[applications]
+mode = "whitelist"
+packages = ["com.example.alpha", "com.example.beta"]
+include_uids = [10123, 10124]
+exclude_uids = [0]
+
+[network]
+capture_mode = "auto"
+proxy_tcp = true
+proxy_udp = true
+ipv6_mode = "auto"
+dns_mode = "auto"
+tun_stack = "system"
+
+[network.interfaces]
+mobile = true
+wifi = true
+hotspot = false
+usb = false
+include = ["wlan*"]
+exclude = ["wlan-test"]
+
+[routing]
+bypass_private = true
+bypass_cn = false
+block_quic = false
+force_proxy_cidrs = ["203.0.113.7/24"]
+bypass_cidrs = ["192.0.2.0/24"]
+
+[logging]
+level = "info"
+retention_days = 7
+
+[advanced]
+inbound_port = 7893
+bypass_mark = 131072
+ipv6_guard = true
+dry_run = false
+health_timeout_seconds = 3
+reconcile_interval_seconds = 60
+
+[[advanced.resource_candidates]]
+mark = 1313407232
+mask = 4294967295
+route_table = 100
+rule_priority = 12000
+"#
+}
+
+fn write_private(path: &std::path::Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+#[test]
+fn complete_v1_schema_builds_typed_effective_sections() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    write_private(&path, complete_config());
+
+    let snapshot = ConfigStore::new(&path).unwrap().load().unwrap();
+    let config = snapshot.effective();
+    assert!(config.subscriptions().auto_update());
+    assert_eq!(config.subscriptions().update_interval_hours(), 24);
+    assert_eq!(
+        config.sources()[0].request_profile(),
+        RequestProfile::SingBoxAndroid
+    );
+    assert_eq!(config.sources()[0].format_hint(), SourceFormatHint::Auto);
+    assert_eq!(config.sources()[0].mirrors().len(), 1);
+    assert_eq!(config.proxy().outbound_mode(), OutboundMode::Rule);
+    assert_eq!(config.proxy().selector_mode(), SelectorMode::Urltest);
+    assert_eq!(config.proxy().urltest().max_candidates(), 64);
+    assert_eq!(config.applications().mode(), ApplicationMode::Whitelist);
+    assert_eq!(config.applications().packages().len(), 2);
+    assert_eq!(config.network().capture_mode(), CaptureIntent::Auto);
+    assert_eq!(config.network().ipv6_mode(), Ipv6Mode::Auto);
+    assert_eq!(config.network().dns_mode(), DnsMode::Auto);
+    assert_eq!(config.network().tun_stack(), TunStackIntent::System);
+    assert!(config.network().interfaces().mobile());
+    assert!(config.network().interfaces().wifi());
+    assert_eq!(config.network().interfaces().include(), ["wlan*"]);
+    assert_eq!(config.network().interfaces().exclude(), ["wlan-test"]);
+    assert_eq!(
+        config.routing().force_proxy_cidrs()[0].as_str(),
+        "203.0.113.0/24"
+    );
+    assert_eq!(config.logging().level(), LogLevel::Info);
+    assert_eq!(config.advanced().health_timeout_seconds(), 3);
+    assert_eq!(config.allocations().len(), 1);
+
+    let debug = format!("{snapshot:?} {config:?}");
+    assert!(!debug.contains("subscription.example"));
+    assert!(!debug.contains("mirror.example"));
+}
+
+#[test]
+fn minimal_phase_one_document_receives_frozen_phase_two_defaults() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    write_private(
+        &path,
+        "schema_version = 1\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
+    );
+
+    let snapshot = ConfigStore::new(path).unwrap().load().unwrap();
+    let config = snapshot.effective();
+    assert!(config.subscriptions().auto_update());
+    assert_eq!(config.subscriptions().update_interval_hours(), 24);
+    assert_eq!(config.proxy().outbound_mode(), OutboundMode::Rule);
+    assert_eq!(config.applications().mode(), ApplicationMode::All);
+    assert_eq!(config.network().capture_mode(), CaptureIntent::Auto);
+    assert_eq!(config.logging().retention_days(), 7);
+    assert_eq!(config.allocations().len(), 3);
+}
+
+#[test]
+fn advanced_ranges_and_collections_fail_closed() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let cases = [
+        (
+            "update_interval_hours = 24",
+            "update_interval_hours = 0",
+            ConfigError::InvalidUpdateSchedule,
+        ),
+        (
+            "interval_minutes = 10",
+            "interval_minutes = 1",
+            ConfigError::InvalidProxy,
+        ),
+        (
+            "concurrency = 10",
+            "concurrency = 17",
+            ConfigError::InvalidProxy,
+        ),
+        (
+            "retention_days = 7",
+            "retention_days = 31",
+            ConfigError::InvalidLogging,
+        ),
+        (
+            "health_timeout_seconds = 3",
+            "health_timeout_seconds = 0",
+            ConfigError::InvalidAdvanced,
+        ),
+        (
+            "reconcile_interval_seconds = 60",
+            "reconcile_interval_seconds = 10",
+            ConfigError::InvalidAdvanced,
+        ),
+        (
+            "mark = 1313407232",
+            "mark = 0",
+            ConfigError::InvalidAdvanced,
+        ),
+    ];
+    for (from, to, expected) in cases {
+        write_private(&path, &complete_config().replace(from, to));
+        assert_eq!(
+            ConfigStore::new(&path).unwrap().load().unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn duplicate_or_conflicting_advanced_values_are_rejected() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let cases = [
+        (
+            complete_config().replace(
+                "packages = [\"com.example.alpha\", \"com.example.beta\"]",
+                "packages = [\"com.example.alpha\", \"com.example.alpha\"]",
+            ),
+            ConfigError::InvalidApplications,
+        ),
+        (
+            complete_config().replace("include_uids = [10123, 10124]", "include_uids = [0, 10124]"),
+            ConfigError::InvalidApplications,
+        ),
+        (
+            complete_config().replace(
+                "bypass_cidrs = [\"192.0.2.0/24\"]",
+                "bypass_cidrs = [\"203.0.113.0/24\"]",
+            ),
+            ConfigError::InvalidRouting,
+        ),
+        (
+            complete_config().replace("hotspot = false", "hotspot = true"),
+            ConfigError::UnsupportedNetwork,
+        ),
+        (
+            complete_config().replace("bypass_cn = false", "bypass_cn = true"),
+            ConfigError::UnsupportedRouting,
+        ),
+    ];
+    for (contents, expected) in cases {
+        write_private(&path, &contents);
+        assert_eq!(
+            ConfigStore::new(&path).unwrap().load().unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn canonical_write_preserves_the_complete_typed_document() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let unsorted = complete_config()
+        .replace(
+            "packages = [\"com.example.alpha\", \"com.example.beta\"]",
+            "packages = [\"com.example.beta\", \"com.example.alpha\"]",
+        )
+        .replace(
+            "include_uids = [10123, 10124]",
+            "include_uids = [10124, 10123]",
+        )
+        .replace("exclude_uids = [0]", "exclude_uids = []")
+        .replace(
+            "force_proxy_cidrs = [\"203.0.113.7/24\"]",
+            "force_proxy_cidrs = [\"203.0.114.7/24\", \"203.0.113.7/24\"]",
+        );
+    write_private(&path, &unsorted);
+    let store = ConfigStore::new(&path).unwrap();
+    let before = store.load().unwrap();
+
+    let after = store.set_service_enabled(before.digest(), false).unwrap();
+    assert!(!after.effective().service_enabled());
+    let text = fs::read_to_string(&path).unwrap();
+    for section in [
+        "[proxy]",
+        "[applications]",
+        "[network]",
+        "[routing]",
+        "[logging]",
+        "[advanced]",
+        "[[advanced.resource_candidates]]",
+    ] {
+        assert!(text.contains(section), "canonical TOML dropped {section}");
+    }
+    assert!(text.contains("# Persistent proxy switch."));
+    assert!(text.contains("# User-visible name and HTTPS subscription URL."));
+    assert!(text.contains("# sing-box 1.13.15 uses a fixed internal URL-test concurrency of 10."));
+    assert!(text.find("com.example.alpha").unwrap() < text.find("com.example.beta").unwrap());
+    assert!(text.find("10123").unwrap() < text.find("10124").unwrap());
+    assert!(text.contains("exclude_uids = [0]"));
+    assert!(text.find("203.0.113.0/24").unwrap() < text.find("203.0.114.0/24").unwrap());
+    assert_eq!(after.effective().sources()[0].mirrors().len(), 1);
+}
+
+#[test]
+fn typed_diff_returns_the_minimal_bounded_apply_impact() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    write_private(&path, complete_config());
+    let before = ConfigStore::new(&path).unwrap().load().unwrap();
+
+    write_private(
+        &path,
+        &complete_config().replace("level = \"info\"", "level = \"debug\""),
+    );
+    let logging = ConfigStore::new(&path).unwrap().load().unwrap();
+    let plan = before.effective().change_plan(logging.effective());
+    assert_eq!(plan.impact(), ApplyImpact::RuntimeOnly);
+    assert_eq!(plan.changes(), &[ChangeKind::Logging]);
+
+    write_private(
+        &path,
+        &complete_config().replace("proxy_udp = true", "proxy_udp = false"),
+    );
+    let network = ConfigStore::new(&path).unwrap().load().unwrap();
+    let plan = before.effective().change_plan(network.effective());
+    assert_eq!(plan.impact(), ApplyImpact::NetworkPlan);
+    assert!(plan.changes().contains(&ChangeKind::Network));
+
+    write_private(
+        &path,
+        &complete_config().replace("tolerance_ms = 50", "tolerance_ms = 75"),
+    );
+    let proxy = ConfigStore::new(path).unwrap().load().unwrap();
+    let plan = before.effective().change_plan(proxy.effective());
+    assert_eq!(plan.impact(), ApplyImpact::GenerationActivation);
+    assert_eq!(plan.changes(), &[ChangeKind::Proxy]);
+}

@@ -6,6 +6,10 @@ use crate::{
 
 pub trait NetworkHealthVerifier {
     fn verify(&mut self, plan: &NetworkPlan) -> Result<(), NetworkHealthError>;
+
+    fn replace_inbound_port(&mut self, _inbound_port: u16) -> Result<(), NetworkHealthError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -47,6 +51,14 @@ impl<B: ProbeBackend> NetworkHealthVerifier for NetworkPlanVerifier<B> {
         }
         Ok(())
     }
+
+    fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), NetworkHealthError> {
+        if inbound_port == 0 {
+            return Err(NetworkHealthError::InvalidPolicy);
+        }
+        self.inbound_port = inbound_port;
+        Ok(())
+    }
 }
 
 impl<B: ProbeBackend> NetworkPlanVerifier<B> {
@@ -59,6 +71,21 @@ impl<B: ProbeBackend> NetworkPlanVerifier<B> {
         if !snapshot.contains(&plan.owner_marker()) || !snapshot.contains(&plan.entry_chain(family))
         {
             return Err(NetworkHealthError::OwnerMarkerMissing);
+        }
+        if (family == IpFamily::Ipv4 || plan.ipv6_captured())
+            && !reply_bypass_precedes_capture(&snapshot, plan)
+        {
+            return Err(NetworkHealthError::ReplyBypassMissing);
+        }
+        if (family == IpFamily::Ipv4 || plan.ipv6_captured())
+            && !loopback_bypass_precedes_capture(&snapshot, plan)
+        {
+            return Err(NetworkHealthError::LoopbackBypassMissing);
+        }
+        if (family == IpFamily::Ipv4 || plan.ipv6_captured())
+            && !dns_capture_present(&snapshot, plan)
+        {
+            return Err(NetworkHealthError::DnsCaptureMissing);
         }
         Ok(())
     }
@@ -104,6 +131,9 @@ pub enum NetworkHealthDiagnosticCode {
     ProbeFailed,
     InboundPortMissing,
     OwnerMarkerMissing,
+    ReplyBypassMissing,
+    LoopbackBypassMissing,
+    DnsCaptureMissing,
     PolicyRuleMissing,
     RouteMissing,
 }
@@ -115,6 +145,9 @@ impl NetworkHealthDiagnosticCode {
             Self::ProbeFailed => "network_health_probe_failed",
             Self::InboundPortMissing => "network_health_inbound_port_missing",
             Self::OwnerMarkerMissing => "network_health_owner_marker_missing",
+            Self::ReplyBypassMissing => "network_health_reply_bypass_missing",
+            Self::LoopbackBypassMissing => "network_health_loopback_bypass_missing",
+            Self::DnsCaptureMissing => "network_health_dns_capture_missing",
             Self::PolicyRuleMissing => "network_health_policy_rule_missing",
             Self::RouteMissing => "network_health_route_missing",
         }
@@ -131,6 +164,12 @@ pub enum NetworkHealthError {
     InboundPortMissing,
     #[error("candidate network owner marker is missing")]
     OwnerMarkerMissing,
+    #[error("candidate TPROXY reply-direction bypass is missing or ordered after capture")]
+    ReplyBypassMissing,
+    #[error("candidate TPROXY loopback bypass is missing or ordered after capture")]
+    LoopbackBypassMissing,
+    #[error("candidate DNS capture rules are missing")]
+    DnsCaptureMissing,
     #[error("candidate policy rule is missing")]
     PolicyRuleMissing,
     #[error("candidate local route is missing")]
@@ -144,10 +183,94 @@ impl NetworkHealthError {
             Self::ProbeFailed => NetworkHealthDiagnosticCode::ProbeFailed,
             Self::InboundPortMissing => NetworkHealthDiagnosticCode::InboundPortMissing,
             Self::OwnerMarkerMissing => NetworkHealthDiagnosticCode::OwnerMarkerMissing,
+            Self::ReplyBypassMissing => NetworkHealthDiagnosticCode::ReplyBypassMissing,
+            Self::LoopbackBypassMissing => NetworkHealthDiagnosticCode::LoopbackBypassMissing,
+            Self::DnsCaptureMissing => NetworkHealthDiagnosticCode::DnsCaptureMissing,
             Self::PolicyRuleMissing => NetworkHealthDiagnosticCode::PolicyRuleMissing,
             Self::RouteMissing => NetworkHealthDiagnosticCode::RouteMissing,
         }
     }
+}
+
+fn dns_capture_present(snapshot: &str, plan: &NetworkPlan) -> bool {
+    let output_chain = plan.entry_chain(IpFamily::Ipv4);
+    let prerouting_chain = plan.prerouting_chain();
+    ["tcp", "udp"].iter().all(|protocol| {
+        snapshot.lines().any(|line| {
+            line.starts_with(&format!("-A {output_chain} "))
+                && line.contains(&format!("-p {protocol} "))
+                && line.contains("--dport 53 ")
+                && line.contains(" -j MARK ")
+        }) && snapshot.lines().any(|line| {
+            line.starts_with(&format!("-A {prerouting_chain} "))
+                && line.contains(&format!("-p {protocol} "))
+                && line.contains("--dport 53 ")
+                && line.contains(" -j TPROXY ")
+        })
+    })
+}
+
+fn reply_bypass_precedes_capture(snapshot: &str, plan: &NetworkPlan) -> bool {
+    let output_chain = plan.entry_chain(IpFamily::Ipv4);
+    let prerouting_chain = plan.prerouting_chain();
+    let output_reply = format!("-A {output_chain} -m conntrack --ctdir REPLY -j ACCEPT");
+    let prerouting_reply = format!("-A {prerouting_chain} -m conntrack --ctdir REPLY -j ACCEPT");
+
+    let Some(output_reply_index) = snapshot.find(&output_reply) else {
+        return false;
+    };
+    let Some(prerouting_reply_index) = snapshot.find(&prerouting_reply) else {
+        return false;
+    };
+    let output_capture_index = snapshot.lines().position(|line| {
+        line.starts_with(&format!("-A {output_chain} ")) && line.contains(" -j MARK ")
+    });
+    let prerouting_capture_index = snapshot.lines().position(|line| {
+        line.starts_with(&format!("-A {prerouting_chain} "))
+            && (line.contains(" -m socket ") || line.contains(" -j TPROXY "))
+    });
+    let output_reply_line = snapshot[..output_reply_index].lines().count();
+    let prerouting_reply_line = snapshot[..prerouting_reply_index].lines().count();
+
+    output_capture_index.is_some_and(|index| output_reply_line < index)
+        && prerouting_capture_index.is_some_and(|index| prerouting_reply_line < index)
+}
+
+fn loopback_bypass_precedes_capture(snapshot: &str, plan: &NetworkPlan) -> bool {
+    let prerouting_chain = plan.prerouting_chain();
+    let allocation = plan.allocation();
+    let Some(loopback_bypass_line) = snapshot
+        .lines()
+        .position(|line| loopback_bypass_matches(line, &prerouting_chain, allocation))
+    else {
+        return false;
+    };
+    let socket_index = snapshot.lines().position(|line| {
+        line.starts_with(&format!("-A {prerouting_chain} ")) && line.contains(" -m socket ")
+    });
+    let tproxy_index = snapshot.lines().position(|line| {
+        line.starts_with(&format!("-A {prerouting_chain} ")) && line.contains(" -j TPROXY ")
+    });
+    socket_index.is_some_and(|index| index < loopback_bypass_line)
+        && tproxy_index.is_some_and(|index| loopback_bypass_line < index)
+}
+
+fn loopback_bypass_matches(
+    line: &str,
+    prerouting_chain: &str,
+    allocation: ResourceCandidate,
+) -> bool {
+    let tokens = line.split_ascii_whitespace().collect::<Vec<_>>();
+    let chain_matches = tokens.get(0..2) == Some(&["-A", prerouting_chain]);
+    let loopback_matches = tokens.windows(2).any(|pair| pair == ["-i", "lo"]);
+    let return_matches = tokens.windows(2).any(|pair| pair == ["-j", "RETURN"]);
+    let mark_matches = tokens
+        .windows(3)
+        .find(|window| window[0] == "!" && window[1] == "--mark")
+        .and_then(|window| parse_mark_mask(window[2]))
+        == Some((allocation.mark(), allocation.mask()));
+    let mark_module = tokens.windows(2).any(|pair| pair == ["-m", "mark"]);
+    chain_matches && loopback_matches && return_matches && mark_module && mark_matches
 }
 
 fn socket_output_contains_port(output: &str, port: u16) -> bool {
@@ -186,4 +309,30 @@ fn parse_u32(value: &str) -> Option<u32> {
         || value.parse().ok(),
         |hex| u32::from_str_radix(hex, 16).ok(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loopback_bypass_matches;
+    use crate::ResourceCandidate;
+
+    #[test]
+    fn loopback_bypass_accepts_android_full_mask_normalization() {
+        let allocation = ResourceCandidate::new(0x4e49_0100, u32::MAX, 100, 12_000).unwrap();
+        assert!(loopback_bypass_matches(
+            "-A NH_PRE_A -i lo -m mark ! --mark 0x4e490100 -j RETURN",
+            "NH_PRE_A",
+            allocation,
+        ));
+    }
+
+    #[test]
+    fn loopback_bypass_rejects_a_different_mask() {
+        let allocation = ResourceCandidate::new(0x100, 0xff00, 100, 10_000).unwrap();
+        assert!(!loopback_bypass_matches(
+            "-A NH_PRE_A -i lo -m mark ! --mark 0x100 -j RETURN",
+            "NH_PRE_A",
+            allocation,
+        ));
+    }
 }

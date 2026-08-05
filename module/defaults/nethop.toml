@@ -1,0 +1,99 @@
+# NetHop user configuration
+# Source IDs are daemon-owned and never belong in this file.
+schema_version = 1
+
+[service]
+# Persistent proxy switch. The daemon remains available when disabled.
+enabled = true
+
+[subscriptions]
+auto_update = true
+update_interval_hours = 24
+
+[[subscriptions.sources]]
+# User-visible name and HTTPS subscription URL.
+name = "Primary"
+enabled = true
+url = "https://update.glados-config.com/mihomo/121525/f936155/150503/glados.yaml"
+request_profile = "sing_box_android"
+format_hint = "auto"
+mirrors = []
+
+[[subscriptions.sources]]
+# Optional fallback source. Enable it only after setting a URL.
+name = "Backup"
+enabled = false
+url = ""
+request_profile = "sing_box_android"
+format_hint = "auto"
+mirrors = []
+
+[proxy]
+outbound_mode = "rule"
+selector_mode = "urltest"
+
+[proxy.urltest]
+interval_minutes = 10
+tolerance_ms = 50
+max_candidates = 64
+# sing-box 1.13.15 uses a fixed internal URL-test concurrency of 10.
+concurrency = 10
+
+[applications]
+mode = "all"
+packages = []
+include_uids = []
+exclude_uids = [0]
+
+[network]
+capture_mode = "auto"
+proxy_tcp = true
+proxy_udp = true
+ipv6_mode = "auto"
+dns_mode = "auto"
+tun_stack = "system"
+
+[network.interfaces]
+mobile = true
+wifi = true
+hotspot = false
+usb = false
+include = []
+exclude = []
+
+[routing]
+bypass_private = true
+bypass_cn = false
+block_quic = false
+force_proxy_cidrs = []
+bypass_cidrs = []
+
+[logging]
+level = "info"
+retention_days = 7
+
+[advanced]
+inbound_port = 7893
+bypass_mark = 131072
+ipv6_guard = true
+dry_run = false
+health_timeout_seconds = 3
+reconcile_interval_seconds = 60
+
+[[advanced.resource_candidates]]
+mark = 1313407232
+mask = 4294967295
+route_table = 100
+rule_priority = 12000
+
+[[advanced.resource_candidates]]
+mark = 1313407488
+mask = 4294967295
+route_table = 101
+rule_priority = 12010
+
+[[advanced.resource_candidates]]
+mark = 1313407744
+mask = 4294967295
+route_table = 102
+rule_priority = 12020

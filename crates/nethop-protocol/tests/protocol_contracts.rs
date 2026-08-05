@@ -1,9 +1,9 @@
 use std::io::Cursor;
 
 use nethop_protocol::{
-    ControlError, ControlMethod, ControlRequest, ControlResponse, ErrorCode, ErrorDomain,
-    FrameCodec, MAX_FRAME_BYTES, PROTOCOL_VERSION, ProtocolError, RequestId, StreamFrame,
-    StreamKind, WireFrame,
+    ControlError, ControlMethod, ControlParams, ControlRequest, ControlResponse, ErrorCode,
+    ErrorDomain, FrameCodec, MAX_FRAME_BYTES, PROTOCOL_VERSION, ProtocolError, RequestId,
+    StreamFrame, StreamKind, WireFrame,
 };
 use serde_json::json;
 
@@ -84,6 +84,7 @@ fn response_requires_exactly_one_result_or_error_branch() {
 fn all_stable_error_domains_round_trip() {
     for domain in [
         ErrorDomain::Config,
+        ErrorDomain::Source,
         ErrorDomain::Subscription,
         ErrorDomain::Capability,
         ErrorDomain::Network,
@@ -158,4 +159,131 @@ fn codec_rejects_trailing_bytes_invalid_utf8_and_truncated_io() {
 #[test]
 fn protocol_version_is_frozen() {
     assert_eq!(PROTOCOL_VERSION, 1);
+}
+
+#[test]
+fn control_error_details_are_optional_and_bounded_by_the_outer_frame() {
+    let legacy = ControlError::new(
+        ErrorCode::new(ErrorDomain::Config, "CONFLICT").unwrap(),
+        "requested service is unavailable",
+    )
+    .unwrap();
+    assert!(legacy.details().is_none());
+    assert!(!serde_json::to_string(&legacy).unwrap().contains("details"));
+
+    let detailed = ControlError::with_details(
+        ErrorCode::new(ErrorDomain::Config, "CONFLICT").unwrap(),
+        "requested service is unavailable",
+        json!({
+            "observed_config_digest": "a".repeat(64),
+            "changed_field_ids": [],
+            "requires_reload": true,
+        }),
+    )
+    .unwrap();
+    assert_eq!(detailed.details().unwrap()["requires_reload"], true);
+    assert_eq!(
+        serde_json::from_str::<ControlError>(&serde_json::to_string(&detailed).unwrap()).unwrap(),
+        detailed
+    );
+}
+
+#[test]
+fn subscription_update_is_a_bounded_v1_empty_params_command() {
+    let frame = WireFrame::Request(ControlRequest::new(
+        request_id(),
+        ControlMethod::SubscriptionUpdate,
+    ));
+    let encoded = FrameCodec::encode(&frame).unwrap();
+    assert_eq!(
+        &encoded[4..],
+        br#"{"version":1,"request_id":"req-001","method":"subscription.update","params":{}}"#
+    );
+    assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
+}
+
+#[test]
+fn config_reload_is_a_bounded_v1_empty_params_command() {
+    let frame = WireFrame::Request(ControlRequest::new(
+        request_id(),
+        ControlMethod::ConfigReload,
+    ));
+    let encoded = FrameCodec::encode(&frame).unwrap();
+    assert_eq!(
+        &encoded[4..],
+        br#"{"version":1,"request_id":"req-001","method":"config.reload","params":{}}"#
+    );
+    assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
+}
+
+#[test]
+fn bounded_wait_options_are_method_scoped_and_round_trip() {
+    let request = ControlRequest::new(request_id(), ControlMethod::SubscriptionUpdate)
+        .with_params(ControlParams::new(true, true))
+        .unwrap();
+    let encoded = FrameCodec::encode(&WireFrame::Request(request.clone())).unwrap();
+    assert_eq!(
+        FrameCodec::decode(&encoded).unwrap(),
+        WireFrame::Request(request)
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::StatusGet)
+            .with_params(ControlParams::new(true, false))
+            .is_err()
+    );
+}
+
+#[test]
+fn manager_config_methods_require_bounded_cas_documents() {
+    let document = json!({
+        "schema_version": 1,
+        "service": {"enabled": true},
+        "subscriptions": {"sources": [{"name": "Primary", "url": ""}]}
+    });
+    for method in [ControlMethod::ConfigValidate, ControlMethod::ConfigApply] {
+        let request = ControlRequest::new(request_id(), method)
+            .with_params(ControlParams::config_document(
+                "a".repeat(64),
+                document.clone(),
+            ))
+            .unwrap();
+        assert_eq!(
+            FrameCodec::decode(&FrameCodec::encode(&WireFrame::Request(request.clone())).unwrap())
+                .unwrap(),
+            WireFrame::Request(request)
+        );
+    }
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::ConfigGet)
+            .with_params(ControlParams::config_document(
+                "a".repeat(64),
+                document.clone()
+            ))
+            .is_err()
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::ConfigApply)
+            .with_params(ControlParams::config_document(
+                "not-a-digest".into(),
+                document
+            ))
+            .is_err()
+    );
+}
+
+#[test]
+fn protocol_hello_requires_an_explicit_manager_version_range() {
+    let request = ControlRequest::new(request_id(), ControlMethod::ProtocolHello)
+        .with_params(ControlParams::hello("manager-alpha".into(), 1, 1))
+        .unwrap();
+    assert_eq!(
+        FrameCodec::decode(&FrameCodec::encode(&WireFrame::Request(request.clone())).unwrap())
+            .unwrap(),
+        WireFrame::Request(request)
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::StatusGet)
+            .with_params(ControlParams::hello("manager-alpha".into(), 1, 1))
+            .is_err()
+    );
 }

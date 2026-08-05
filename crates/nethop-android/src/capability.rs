@@ -11,7 +11,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const CAPABILITY_SCHEMA_VERSION: u16 = 1;
+const CAPABILITY_SCHEMA_VERSION: u16 = 3;
+const MAX_NETWORK_INTERFACES: usize = 64;
+const MAX_INTERFACE_NAME_BYTES: usize = 64;
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_OUTPUT_LIMIT: usize = 64 * 1024;
 const MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -115,6 +117,7 @@ pub struct FamilyCapability {
     restore: CapabilityStatus,
     tproxy: CapabilityStatus,
     mark: CapabilityStatus,
+    conntrack: CapabilityStatus,
     owner: CapabilityStatus,
     socket: CapabilityStatus,
     policy_routing: CapabilityStatus,
@@ -130,6 +133,7 @@ impl FamilyCapability {
         restore: CapabilityStatus,
         tproxy: CapabilityStatus,
         mark: CapabilityStatus,
+        conntrack: CapabilityStatus,
         owner: CapabilityStatus,
         socket: CapabilityStatus,
         policy_routing: CapabilityStatus,
@@ -142,6 +146,7 @@ impl FamilyCapability {
             restore,
             tproxy,
             mark,
+            conntrack,
             owner,
             socket,
             policy_routing,
@@ -173,6 +178,10 @@ impl FamilyCapability {
         self.mark
     }
 
+    pub const fn conntrack(&self) -> CapabilityStatus {
+        self.conntrack
+    }
+
     pub const fn owner(&self) -> CapabilityStatus {
         self.owner
     }
@@ -195,6 +204,7 @@ impl FamilyCapability {
             && self.restore.is_supported()
             && self.tproxy.is_supported()
             && self.mark.is_supported()
+            && self.conntrack.is_supported()
             && self.owner.is_supported()
             && self.socket.is_supported()
             && self.policy_routing.is_supported()
@@ -225,6 +235,7 @@ pub struct CapabilityReport {
     inbound_port: u16,
     inbound_port_status: CapabilityStatus,
     allocations: Vec<AllocationCapability>,
+    interfaces: Vec<String>,
 }
 
 impl CapabilityReport {
@@ -264,7 +275,19 @@ impl CapabilityReport {
             inbound_port,
             inbound_port_status,
             allocations,
+            interfaces: Vec::new(),
         })
+    }
+
+    pub fn with_interfaces(mut self, interfaces: Vec<String>) -> Result<Self, CapabilityError> {
+        if interfaces.len() > MAX_NETWORK_INTERFACES
+            || interfaces.iter().any(|name| !valid_interface_name(name))
+            || interfaces.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(CapabilityError::InvalidPolicy);
+        }
+        self.interfaces = interfaces;
+        Ok(self)
     }
 
     pub const fn schema_version(&self) -> u16 {
@@ -318,6 +341,10 @@ impl CapabilityReport {
     pub fn allocations(&self) -> &[AllocationCapability] {
         &self.allocations
     }
+
+    pub fn interfaces(&self) -> &[String] {
+        &self.interfaces
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,6 +358,7 @@ pub enum ProbeCommand {
     NetfilterRestoreHelp(IpFamily),
     TproxyHelp(IpFamily),
     MarkHelp(IpFamily),
+    ConntrackHelp(IpFamily),
     OwnerHelp(IpFamily),
     SocketHelp(IpFamily),
     PolicyRules(IpFamily),
@@ -339,6 +367,14 @@ pub enum ProbeCommand {
     Links,
     ListeningSockets,
     TunDevice,
+    PackageList(PackageListKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageListKind {
+    All,
+    System,
+    User,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -422,6 +458,7 @@ pub struct AndroidToolPaths {
     ip: PathBuf,
     ss: PathBuf,
     tun: PathBuf,
+    cmd: PathBuf,
 }
 
 impl AndroidToolPaths {
@@ -439,6 +476,7 @@ impl AndroidToolPaths {
             ip: resolve_tool("/system/bin/ip")?,
             ss: resolve_tool("/system/bin/ss")?,
             tun: PathBuf::from("/dev/net/tun"),
+            cmd: resolve_tool("/system/bin/cmd")?,
         })
     }
 }
@@ -492,6 +530,10 @@ impl CommandProbeBackend {
                 self.netfilter(family),
                 vec!["-j".into(), "MARK".into(), "-h".into()],
             ),
+            ProbeCommand::ConntrackHelp(family) => (
+                self.netfilter(family),
+                vec!["-m".into(), "conntrack".into(), "-h".into()],
+            ),
             ProbeCommand::OwnerHelp(family) => (
                 self.netfilter(family),
                 vec!["-m".into(), "owner".into(), "-h".into()],
@@ -520,6 +562,24 @@ impl CommandProbeBackend {
             ),
             ProbeCommand::Links => (&self.tools.ip, vec!["link".into(), "show".into()]),
             ProbeCommand::ListeningSockets => (&self.tools.ss, vec!["-H".into(), "-lntu".into()]),
+            ProbeCommand::PackageList(kind) => {
+                let class = match kind {
+                    PackageListKind::All => None,
+                    PackageListKind::System => Some("-s"),
+                    PackageListKind::User => Some("-3"),
+                };
+                let mut args = vec![
+                    "package".into(),
+                    "list".into(),
+                    "packages".into(),
+                    "-U".into(),
+                ];
+                if let Some(class) = class {
+                    args.push(class.into());
+                }
+                args.extend(["--user".into(), "0".into()]);
+                (&self.tools.cmd, args)
+            }
             ProbeCommand::TunDevice => unreachable!("handled without a process"),
         }
     }
@@ -624,7 +684,25 @@ impl<B: ProbeBackend> CapabilityProbe<B> {
                 success_status(&sockets)
             },
             allocations,
-        )
+        )?
+        .with_interfaces(parse_link_interfaces(links.stdout())?)
+    }
+
+    pub fn replace_policy(
+        &mut self,
+        candidates: Vec<ResourceCandidate>,
+        inbound_port: u16,
+    ) -> Result<(), CapabilityError> {
+        if candidates.is_empty() || candidates.len() > 16 || inbound_port == 0 {
+            return Err(CapabilityError::InvalidPolicy);
+        }
+        let unique = candidates.iter().copied().collect::<BTreeSet<_>>();
+        if unique.len() != candidates.len() {
+            return Err(CapabilityError::InvalidPolicy);
+        }
+        self.candidates = candidates;
+        self.inbound_port = inbound_port;
+        Ok(())
     }
 
     fn probe_family(
@@ -639,6 +717,7 @@ impl<B: ProbeBackend> CapabilityProbe<B> {
             .run(ProbeCommand::NetfilterRestoreHelp(family))?;
         let tproxy = self.backend.run(ProbeCommand::TproxyHelp(family))?;
         let mark = self.backend.run(ProbeCommand::MarkHelp(family))?;
+        let conntrack = self.backend.run(ProbeCommand::ConntrackHelp(family))?;
         let owner = self.backend.run(ProbeCommand::OwnerHelp(family))?;
         let socket = self.backend.run(ProbeCommand::SocketHelp(family))?;
         let rules = self.backend.run(ProbeCommand::PolicyRules(family))?;
@@ -654,6 +733,7 @@ impl<B: ProbeBackend> CapabilityProbe<B> {
             success_status(&restore),
             success_status(&tproxy),
             success_status(&mark),
+            success_status(&conntrack),
             success_status(&owner),
             success_status(&socket),
             success_status(&rules),
@@ -855,6 +935,41 @@ fn success_status(output: &ProbeOutput) -> CapabilityStatus {
     }
 }
 
+fn parse_link_interfaces(output: &str) -> Result<Vec<String>, CapabilityError> {
+    let mut interfaces = BTreeSet::new();
+    for line in output.lines() {
+        let Some((index, remainder)) = line.split_once(':') else {
+            continue;
+        };
+        if index.trim().parse::<u32>().is_err() {
+            continue;
+        }
+        let Some((label, _)) = remainder.split_once(':') else {
+            continue;
+        };
+        let name = label
+            .trim()
+            .split_once('@')
+            .map_or(label.trim(), |pair| pair.0);
+        if !valid_interface_name(name) {
+            return Err(CapabilityError::InvalidPolicy);
+        }
+        interfaces.insert(name.to_owned());
+        if interfaces.len() > MAX_NETWORK_INTERFACES {
+            return Err(CapabilityError::InvalidPolicy);
+        }
+    }
+    Ok(interfaces.into_iter().collect())
+}
+
+fn valid_interface_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_INTERFACE_NAME_BYTES
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'+'))
+}
+
 fn address_status(output: &ProbeOutput, family: IpFamily) -> CapabilityStatus {
     if !output.success() {
         return classify_failure(output);
@@ -964,7 +1079,8 @@ fn links_output_has_active_tunnel(output: &str) -> bool {
 mod tests {
     use super::{
         CapabilityStatus, ProbeLimits, ProbeOutput, ResourceCandidate, contains_owned_chain,
-        links_output_has_active_tunnel, rules_conflict, socket_output_contains_port,
+        links_output_has_active_tunnel, parse_link_interfaces, rules_conflict,
+        socket_output_contains_port,
     };
     use std::time::Duration;
 
@@ -997,6 +1113,18 @@ mod tests {
             "16000: from all fwmark 0x10163/0x1ffff lookup 97",
             candidate
         ));
+    }
+
+    #[test]
+    fn android_system_priority_conflict_does_not_block_fallback_candidate() {
+        let system_rules = "10000: from all fwmark 0xc0000/0xd0000 lookup legacy_system\n\
+                            11000: from all iif lo oif wlan0 lookup wlan0\n\
+                            16000: from all fwmark 0x10064/0x1ffff lookup wlan0";
+        let legacy = ResourceCandidate::new(0x100, 0xff00, 100, 10_000).unwrap();
+        let fallback = ResourceCandidate::new(0x4e49_0100, u32::MAX, 100, 12_000).unwrap();
+
+        assert!(rules_conflict(system_rules, legacy));
+        assert!(!rules_conflict(system_rules, fallback));
     }
 
     #[test]
@@ -1034,5 +1162,20 @@ mod tests {
         assert!(!links_output_has_active_tunnel(
             "4: ip_vti0@NONE: <NOARP> mtu 1480 state DOWN"
         ));
+    }
+
+    #[test]
+    fn link_parser_ignores_android_detail_lines_with_ipv6_colons() {
+        let output = "5: ip6_vti0@NONE: <NOARP> mtu 1364 state DOWN\n\
+                          link/tunnel6 :: brd ::\n\
+                      10: rmnet_mhi0: <UP,LOWER_UP> mtu 65535\n\
+                          link/[519]\n\
+                          alias rmnet_mhi_0306_02.01.00_0\n\
+                      21: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500";
+
+        assert_eq!(
+            parse_link_interfaces(output).unwrap(),
+            vec!["ip6_vti0", "rmnet_mhi0", "wlan0"]
+        );
     }
 }

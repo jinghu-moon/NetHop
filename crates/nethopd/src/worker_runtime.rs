@@ -227,6 +227,12 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
         Ok(())
     }
 
+    pub fn replace_limits(&mut self, limits: WorkerRuntimeLimits) {
+        self.limits = limits;
+        self.next_core_poll = self.last_tick.saturating_add(limits.core_poll_interval);
+        self.next_reconcile = self.last_tick.saturating_add(limits.reconcile_interval);
+    }
+
     pub fn tick<N, V>(
         &mut self,
         now: Duration,

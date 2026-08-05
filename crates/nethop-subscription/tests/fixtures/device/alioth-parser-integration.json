@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "status": "reference_verified",
-  "date": "2026-08-02",
+  "date": "2026-08-03",
   "device": {
     "product": "alioth",
     "model": "M2012K11AC",
@@ -19,31 +19,32 @@
   },
   "fixture": {
     "path": "tests/fixtures/mapping/sing-box-1.13.15-check.json",
-    "bytes": 2225,
-    "sha256": "e70bae4d5e64ae7d014bb3ba8c53107ee730be020c60344bcab50bf530968519"
+    "bytes": 2253,
+    "sha256": "571f98cfea51e08550e4e2f82c995a0ef1810ba096f8496c907aa244f93abba1"
   },
   "variants": [
     {
       "features": "stable-parser",
-      "binary_bytes": 1862976,
+      "binary_bytes": 1898160,
       "accepted": 7,
       "rejected": 0,
       "candidate_state": "ready",
       "ipc_schema_version": 1,
-      "mapping_digest": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+      "mapping_digest": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
     },
     {
       "features": "stable-parser,fetch",
-      "binary_bytes": 1863040,
+      "binary_bytes": 1898400,
       "accepted": 7,
       "rejected": 0,
       "candidate_state": "ready",
       "ipc_schema_version": 1,
-      "mapping_digest": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+      "mapping_digest": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
     }
   ],
   "notes": [
     "Controlled local fixture only; no subscription URL or token was used.",
+    "The Shadowsocks fixture includes native udp_over_tcp and passed sing-box 1.13.15 Android arm64 check.",
     "This evidence applies only to the exact device and build combination above."
   ]
 }

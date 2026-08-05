@@ -1,7 +1,8 @@
 #![cfg(feature = "format-clash-yaml")]
 
 use nethop_subscription::{
-    CapabilityMatrix, DiagnosticCode, ParserLimits, ProxyProtocol, parse_clash_yaml, yaml_options,
+    CapabilityMatrix, Credentials, DiagnosticCode, ParserLimits, ProtocolOptions, ProxyProtocol,
+    parse_clash_yaml, yaml_options,
 };
 
 fn parse(input: &str) -> nethop_subscription::AdapterOutput {
@@ -55,6 +56,121 @@ script: ignored
         output.nodes[0].node.as_ref().unwrap().protocol(),
         ProxyProtocol::Vless
     );
+}
+
+#[test]
+fn clash_shadowsocks_maps_audited_obfs_and_udp_over_tcp_semantics() {
+    let output = parse(
+        r#"
+proxies:
+  - name: ss-obfs
+    type: ss
+    server: ss.example
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+    plugin: obfs
+    plugin-opts:
+      mode: tls
+      host: edge.example
+    udp: true
+    udp-over-tcp: true
+"#,
+    );
+
+    assert_eq!(output.accepted_count(), 1);
+    assert_eq!(output.rejected_count(), 0);
+    let node = output.nodes[0].node.as_ref().unwrap();
+    let Credentials::Shadowsocks {
+        plugin: Some(plugin),
+        ..
+    } = node.credentials()
+    else {
+        panic!("expected Shadowsocks obfs plugin");
+    };
+    assert_eq!(plugin.name.as_str(), "obfs-local");
+    assert_eq!(plugin.options["obfs"].as_str(), "tls");
+    assert_eq!(plugin.options["obfs-host"].as_str(), "edge.example");
+    assert_eq!(
+        node.protocol_options(),
+        &ProtocolOptions::Shadowsocks {
+            udp_over_tcp: Some(nethop_subscription::UdpOverTcpOptions {
+                enabled: true,
+                version: 0,
+            }),
+        }
+    );
+}
+
+#[test]
+fn clash_shadowsocks_rejects_unknown_obfs_plugin_option() {
+    let output = parse(
+        r#"
+proxies:
+  - name: ss-obfs
+    type: ss
+    server: ss.example
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+    plugin: obfs
+    plugin-opts:
+      mode: tls
+      unexpected: value
+"#,
+    );
+
+    assert_eq!(output.accepted_count(), 0);
+    assert_eq!(output.rejected_count(), 1);
+    assert_eq!(
+        output.nodes[0].diagnostic.as_ref().unwrap().code,
+        DiagnosticCode::UnsupportedSemantics
+    );
+}
+
+#[test]
+fn clash_shadowsocks_rejects_unknown_plugin_name() {
+    let output = parse(
+        r#"
+proxies:
+  - name: ss-plugin
+    type: ss
+    server: ss.example
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+    plugin: arbitrary-plugin
+"#,
+    );
+
+    assert_eq!(output.accepted_count(), 0);
+    assert_eq!(output.rejected_count(), 1);
+    assert_eq!(
+        output.nodes[0].diagnostic.as_ref().unwrap().code,
+        DiagnosticCode::UnsupportedSemantics
+    );
+}
+
+#[test]
+fn clash_shadowsocks_rejects_non_boolean_udp_over_tcp() {
+    let error = parse_clash_yaml(
+        br#"
+proxies:
+  - name: ss-uot
+    type: ss
+    server: ss.example
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+    udp-over-tcp: enabled
+"#,
+        None,
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, DiagnosticCode::InvalidYaml);
 }
 
 #[test]

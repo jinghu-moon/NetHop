@@ -1,5 +1,4 @@
 #!/system/bin/sh
-set -eu
 
 DATA_ROOT=/data/adb/nethop
 CHECKSUMS="$MODPATH/checksums.sha256"
@@ -71,14 +70,25 @@ do
   chmod 0700 "$directory"
 done
 
-if [ ! -e "$DATA_ROOT/config/nethop.json" ]; then
-  require_regular_file "$MODPATH/defaults/nethop.json"
-  cp "$MODPATH/defaults/nethop.json" "$DATA_ROOT/config/nethop.json"
-elif [ -L "$DATA_ROOT/config/nethop.json" ] || [ ! -f "$DATA_ROOT/config/nethop.json" ]; then
+if [ ! -e "$DATA_ROOT/config/nethop.toml" ]; then
+  require_regular_file "$MODPATH/defaults/nethop.toml"
+  cp "$MODPATH/defaults/nethop.toml" "$DATA_ROOT/config/nethop.toml"
+elif [ -L "$DATA_ROOT/config/nethop.toml" ] || [ ! -f "$DATA_ROOT/config/nethop.toml" ]; then
   fail "existing managed config is not a regular file"
 fi
-chown 0:0 "$DATA_ROOT/config/nethop.json"
-chmod 0600 "$DATA_ROOT/config/nethop.json"
+chown 0:0 "$DATA_ROOT/config/nethop.toml"
+chmod 0600 "$DATA_ROOT/config/nethop.toml"
+
+if [ -L "$MODPATH/config" ] || { [ -e "$MODPATH/config" ] && [ ! -d "$MODPATH/config" ]; }; then
+  fail "module config entry is invalid"
+fi
+mkdir -p "$MODPATH/config" || fail "could not create module config directory"
+if [ -e "$MODPATH/config/nethop.toml" ] || [ -L "$MODPATH/config/nethop.toml" ]; then
+  [ -L "$MODPATH/config/nethop.toml" ] || fail "module config entry is not a symlink"
+  [ "$(readlink "$MODPATH/config/nethop.toml")" = "$DATA_ROOT/config/nethop.toml" ] || fail "module config symlink target is invalid"
+else
+  ln -s "$DATA_ROOT/config/nethop.toml" "$MODPATH/config/nethop.toml" || fail "could not publish module config link"
+fi
 
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
@@ -86,8 +96,8 @@ set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/bin/nethopd" 0 0 0755
 set_perm "$MODPATH/bin/nethopctl" 0 0 0755
 set_perm "$MODPATH/bin/sing-box" 0 0 0755
+set_perm "$MODPATH/defaults/nethop.toml" 0 0 0644
 set_perm "$BUILD_MANIFEST" 0 0 0644
 set_perm "$CHECKSUMS" 0 0 0644
 
 ui_print "- NetHop package integrity and persistent layout verified"
-

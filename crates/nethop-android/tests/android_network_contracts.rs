@@ -8,7 +8,7 @@ use nethop_android::{
     NetworkPlanner, NetworkProgram, PlanSlot, ProbeBackend, ProbeCommand, ProbeOutput,
     ResourceCandidate,
 };
-use nethop_core::{CaptureMode, CapturePolicy, GenerationId};
+use nethop_core::{CaptureMode, CapturePolicy, GenerationId, InterfacePolicy};
 
 const PORT: u16 = 7893;
 
@@ -17,6 +17,14 @@ fn candidate(mark: u32, table: u32, priority: u32) -> ResourceCandidate {
 }
 
 fn family(family: IpFamily, tproxy: CapabilityStatus) -> FamilyCapability {
+    family_with_conntrack(family, tproxy, CapabilityStatus::Supported)
+}
+
+fn family_with_conntrack(
+    family: IpFamily,
+    tproxy: CapabilityStatus,
+    conntrack: CapabilityStatus,
+) -> FamilyCapability {
     FamilyCapability::new(
         family,
         CapabilityStatus::Supported,
@@ -24,6 +32,7 @@ fn family(family: IpFamily, tproxy: CapabilityStatus) -> FamilyCapability {
         CapabilityStatus::Supported,
         tproxy,
         CapabilityStatus::Supported,
+        conntrack,
         CapabilityStatus::Supported,
         CapabilityStatus::Supported,
         CapabilityStatus::Supported,
@@ -85,6 +94,9 @@ fn full_plan() -> nethop_android::NetworkPlan {
 #[derive(Debug)]
 struct AppliedPlanProbe {
     owner_present: bool,
+    reply_bypass_present: bool,
+    loopback_bypass_present: bool,
+    dns_capture_present: bool,
     rule_present: bool,
     route_present: bool,
     port_present: bool,
@@ -97,7 +109,39 @@ impl ProbeBackend for AppliedPlanProbe {
             ProbeCommand::NetfilterSnapshot(_) => ProbeOutput::new(
                 true,
                 if self.owner_present {
-                    "-A OUTPUT -m comment --comment nethop:g=7 -j NH_OUT_A"
+                    if self.reply_bypass_present && self.loopback_bypass_present {
+                        let dns = if self.dns_capture_present {
+                            "-A NH_OUT_A -p tcp --dport 53 -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_OUT_A -p udp --dport 53 -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_PRE_A -p tcp --dport 53 -j TPROXY --on-port 7893\n\
+-A NH_PRE_A -p udp --dport 53 -j TPROXY --on-port 7893\n"
+                        } else {
+                            ""
+                        };
+                        return Ok(ProbeOutput::new(
+                            true,
+                            format!(
+                                "-A OUTPUT -m comment --comment nethop:g=7 -j NH_OUT_A\n\
+-A NH_OUT_A -m conntrack --ctdir REPLY -j ACCEPT\n\
+-A NH_OUT_A -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_PRE_A -m conntrack --ctdir REPLY -j ACCEPT\n\
+-A NH_PRE_A -m socket --transparent -j NH_DIV_A\n\
+-A NH_PRE_A -i lo -m mark ! --mark 0x100/0xff00 -j RETURN\n\
+-A NH_PRE_A -j TPROXY --on-port 7893\n{dns}"
+                            ),
+                            "",
+                        ));
+                    } else if self.reply_bypass_present {
+                        "-A OUTPUT -m comment --comment nethop:g=7 -j NH_OUT_A\n\
+-A NH_OUT_A -m conntrack --ctdir REPLY -j ACCEPT\n\
+-A NH_OUT_A -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_PRE_A -m conntrack --ctdir REPLY -j ACCEPT\n\
+-A NH_PRE_A -j TPROXY --on-port 7893"
+                    } else {
+                        "-A OUTPUT -m comment --comment nethop:g=7 -j NH_OUT_A\n\
+-A NH_OUT_A -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_PRE_A -j TPROXY --on-port 7893"
+                    }
                 } else {
                     "*mangle\nCOMMIT"
                 },
@@ -153,7 +197,17 @@ impl ProbeBackend for GuardPlanProbe {
             }
             ProbeCommand::NetfilterSnapshot(IpFamily::Ipv4) => ProbeOutput::new(
                 true,
-                "-A OUTPUT -m comment --comment nethop:g=8 -j NH_OUT_B",
+                "-A OUTPUT -m comment --comment nethop:g=8 -j NH_OUT_B\n\
+-A NH_OUT_B -m conntrack --ctdir REPLY -j ACCEPT\n\
+-A NH_OUT_B -p tcp --dport 53 -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_OUT_B -p udp --dport 53 -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_OUT_B -j MARK --set-xmark 0x100/0xff00\n\
+-A NH_PRE_B -m conntrack --ctdir REPLY -j ACCEPT\n\
+-A NH_PRE_B -m socket --transparent -j NH_DIV_B\n\
+-A NH_PRE_B -i lo -m mark ! --mark 0x100/0xff00 -j RETURN\n\
+-A NH_PRE_B -p tcp --dport 53 -j TPROXY --on-port 7893\n\
+-A NH_PRE_B -p udp --dport 53 -j TPROXY --on-port 7893\n\
+-A NH_PRE_B -j TPROXY --on-port 7893",
                 "",
             ),
             ProbeCommand::NetfilterSnapshot(IpFamily::Ipv6) => ProbeOutput::new(
@@ -210,13 +264,14 @@ impl ProbeBackend for ReadOnlyProbe {
                 "",
             ),
             ProbeCommand::PolicyRules(_) => ProbeOutput::new(true, "0: from all lookup local", ""),
-            ProbeCommand::RouteTable(_, _) | ProbeCommand::ListeningSockets => {
-                ProbeOutput::new(true, "", "")
-            }
+            ProbeCommand::RouteTable(_, _)
+            | ProbeCommand::ListeningSockets
+            | ProbeCommand::PackageList(_) => ProbeOutput::new(true, "", ""),
             ProbeCommand::TunDevice
             | ProbeCommand::NetfilterRestoreHelp(_)
             | ProbeCommand::TproxyHelp(_)
             | ProbeCommand::MarkHelp(_)
+            | ProbeCommand::ConntrackHelp(_)
             | ProbeCommand::OwnerHelp(_)
             | ProbeCommand::SocketHelp(_) => ProbeOutput::new(true, "supported", ""),
         };
@@ -239,7 +294,8 @@ fn capability_probe_is_read_only_versioned_and_detects_nft_wrapper() {
     .probe()
     .unwrap();
 
-    assert_eq!(report.schema_version(), 1);
+    assert_eq!(report.schema_version(), 3);
+    assert_eq!(report.interfaces(), ["ip_vti0", "lo"]);
     assert_eq!(report.abi(), "arm64-v8a");
     assert_eq!(report.backend(), NetfilterBackend::NftWrapper);
     assert!(report.selinux_enforcing());
@@ -257,6 +313,46 @@ fn capability_probe_is_read_only_versioned_and_detects_nft_wrapper() {
 }
 
 #[test]
+fn planner_rejects_tproxy_when_reply_direction_cannot_be_classified() {
+    let allocation = candidate(0x100, 100, 10_000);
+    let capabilities = CapabilityReport::new(
+        CapabilityStatus::Supported,
+        "arm64-v8a",
+        CapabilityStatus::Supported,
+        true,
+        NetfilterBackend::Legacy,
+        family_with_conntrack(
+            IpFamily::Ipv4,
+            CapabilityStatus::Supported,
+            CapabilityStatus::Unsupported,
+        ),
+        family(IpFamily::Ipv6, CapabilityStatus::Supported),
+        CapabilityStatus::Supported,
+        CapabilityStatus::Supported,
+        PORT,
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            allocation,
+            CapabilityStatus::Supported,
+        )],
+    )
+    .unwrap();
+
+    let error = NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(12).unwrap(),
+            PlanSlot::A,
+            &policy(true),
+            &capabilities,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code().as_str(),
+        "network_plan_ipv4_tproxy_unavailable"
+    );
+}
+
+#[test]
 fn applied_plan_verifier_checks_owned_rules_routes_and_listener_without_mutation() {
     let plan = full_plan();
     assert_eq!(plan.owner_marker(), "nethop:g=7");
@@ -264,6 +360,9 @@ fn applied_plan_verifier_checks_owned_rules_routes_and_listener_without_mutation
     let mut verifier = NetworkPlanVerifier::new(
         AppliedPlanProbe {
             owner_present: true,
+            reply_bypass_present: true,
+            loopback_bypass_present: true,
+            dns_capture_present: true,
             rule_present: true,
             route_present: true,
             port_present: true,
@@ -277,9 +376,21 @@ fn applied_plan_verifier_checks_owned_rules_routes_and_listener_without_mutation
 
 #[test]
 fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
-    for (owner_present, rule_present, route_present, port_present, expected) in [
+    for (
+        owner_present,
+        reply_bypass_present,
+        loopback_bypass_present,
+        dns_capture_present,
+        rule_present,
+        route_present,
+        port_present,
+        expected,
+    ) in [
         (
             false,
+            true,
+            true,
+            true,
             true,
             true,
             true,
@@ -290,9 +401,45 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
             false,
             true,
             true,
+            true,
+            true,
+            true,
+            NetworkHealthDiagnosticCode::ReplyBypassMissing,
+        ),
+        (
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            NetworkHealthDiagnosticCode::LoopbackBypassMissing,
+        ),
+        (
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            NetworkHealthDiagnosticCode::DnsCaptureMissing,
+        ),
+        (
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
             NetworkHealthDiagnosticCode::PolicyRuleMissing,
         ),
         (
+            true,
+            true,
+            true,
             true,
             true,
             false,
@@ -303,6 +450,9 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
             true,
             true,
             true,
+            true,
+            true,
+            true,
             false,
             NetworkHealthDiagnosticCode::InboundPortMissing,
         ),
@@ -310,6 +460,9 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
         let mut verifier = NetworkPlanVerifier::new(
             AppliedPlanProbe {
                 owner_present,
+                reply_bypass_present,
+                loopback_bypass_present,
+                dns_capture_present,
                 rule_present,
                 route_present,
                 port_present,
@@ -357,6 +510,199 @@ fn pure_plan_is_deterministic_owned_and_never_flushes_system_tables() {
         assert!(!payload.contains("--flush"));
         assert!(!payload.contains("iptables"));
     }
+}
+
+#[test]
+fn tproxy_plan_bypasses_conntrack_replies_before_capture() {
+    let plan = full_plan();
+    for (family, payload) in plan.restore_payloads() {
+        if family != IpFamily::Ipv4 || !payload.starts_with("*mangle") {
+            continue;
+        }
+        let output_reply = payload
+            .find("-A NH_OUT_A -m conntrack --ctdir REPLY -j ACCEPT")
+            .expect("OUTPUT reply bypass must exist");
+        let output_capture = payload
+            .find("-A NH_OUT_A -m owner --uid-owner 10001 -j MARK")
+            .expect("OUTPUT capture rules must exist");
+        let prerouting_reply = payload
+            .find("-A NH_PRE_A -m conntrack --ctdir REPLY -j ACCEPT")
+            .expect("PREROUTING reply bypass must exist");
+        let loopback_bypass = payload
+            .find("-A NH_PRE_A -i lo -m mark ! --mark 0x100/0xff00 -j RETURN")
+            .expect("PREROUTING loopback bypass must exist");
+        let socket_divert = payload
+            .find("-A NH_PRE_A -p tcp -m socket")
+            .expect("PREROUTING socket divert must exist");
+        let tproxy_capture = payload
+            .find("-A NH_PRE_A -p tcp -m mark")
+            .expect("PREROUTING TPROXY capture must exist");
+
+        assert!(output_reply < output_capture);
+        assert!(prerouting_reply < socket_divert);
+        assert!(socket_divert < loopback_bypass);
+        assert!(loopback_bypass < tproxy_capture);
+    }
+}
+
+#[test]
+fn tproxy_plan_captures_dns_before_private_and_uid_bypass() {
+    let plan = full_plan();
+    for (family, payload) in plan.restore_payloads() {
+        if family != IpFamily::Ipv4 || !payload.starts_with("*mangle") {
+            continue;
+        }
+        let dns_output_tcp = payload
+            .find("-A NH_OUT_A -p tcp --dport 53 -j MARK --set-xmark 0x100/0xff00")
+            .expect("TCP DNS must be marked");
+        let dns_output_udp = payload
+            .find("-A NH_OUT_A -p udp --dport 53 -j MARK --set-xmark 0x100/0xff00")
+            .expect("UDP DNS must be marked");
+        let private_bypass = payload
+            .find("-A NH_OUT_A -d 10.0.0.0/8 -j RETURN")
+            .expect("private destinations must remain bypassed");
+        let uid_bypass = payload
+            .find("-A NH_OUT_A -m owner --uid-owner 10003 -j RETURN")
+            .expect("excluded UIDs must remain bypassed");
+        let dns_tproxy_tcp = payload
+            .find("-A NH_PRE_A -p tcp --dport 53 -m mark --mark 0x100/0xff00 -j TPROXY")
+            .expect("marked TCP DNS must enter the inbound");
+        let dns_tproxy_udp = payload
+            .find("-A NH_PRE_A -p udp --dport 53 -m mark --mark 0x100/0xff00 -j TPROXY")
+            .expect("marked UDP DNS must enter the inbound");
+
+        assert!(dns_output_tcp < private_bypass);
+        assert!(dns_output_udp < private_bypass);
+        assert!(dns_output_tcp < uid_bypass);
+        assert!(dns_output_udp < uid_bypass);
+        assert!(dns_tproxy_tcp < dns_tproxy_udp);
+    }
+}
+
+#[test]
+fn tproxy_plan_honors_bounded_tcp_and_udp_capture_switches() {
+    let capabilities = report(
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            candidate(0x100, 100, 10_000),
+            CapabilityStatus::Supported,
+        )],
+    );
+    for (tcp, udp) in [(true, false), (false, true)] {
+        let policy = CapturePolicy::new_with_protocols(
+            CaptureMode::Tproxy,
+            tcp,
+            udp,
+            true,
+            Some(7893),
+            Some(0x20000),
+            vec![],
+            vec![0],
+        )
+        .unwrap();
+        let plan = NetworkPlanner
+            .build_tproxy(
+                GenerationId::new(9).unwrap(),
+                PlanSlot::A,
+                &policy,
+                &capabilities,
+            )
+            .unwrap();
+        let payload = plan
+            .restore_payloads()
+            .find(|(family, _)| *family == IpFamily::Ipv4)
+            .unwrap()
+            .1;
+        assert_eq!(payload.contains("-A NH_PRE_A -p tcp -m mark --mark"), tcp);
+        assert_eq!(payload.contains("-A NH_PRE_A -p udp -m mark --mark"), udp);
+        assert!(payload.contains("-A NH_PRE_A -p tcp --dport 53 -m mark --mark"));
+        assert!(payload.contains("-A NH_PRE_A -p udp --dport 53 -m mark --mark"));
+    }
+}
+
+#[test]
+fn tproxy_plan_resolves_interface_globs_before_building_rules() {
+    let capabilities = report(
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            candidate(0x100, 100, 10_000),
+            CapabilityStatus::Supported,
+        )],
+    )
+    .with_interfaces(vec![
+        "rmnet_data0".into(),
+        "wlan-test".into(),
+        "wlan0".into(),
+    ])
+    .unwrap();
+    let policy = CapturePolicy::new(
+        CaptureMode::Tproxy,
+        true,
+        Some(PORT),
+        Some(0x200),
+        vec![],
+        vec![0],
+    )
+    .unwrap()
+    .with_interface_policy(
+        InterfacePolicy::new(true, true, vec!["wlan*".into()], vec!["wlan-test".into()]).unwrap(),
+    )
+    .unwrap();
+
+    let plan = NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(10).unwrap(),
+            PlanSlot::A,
+            &policy,
+            &capabilities,
+        )
+        .unwrap();
+    let payload = plan
+        .restore_payloads()
+        .find(|(family, _)| *family == IpFamily::Ipv4)
+        .unwrap()
+        .1;
+    assert!(payload.contains("-A NH_OUT_A -o wlan0 -j MARK"));
+    assert!(!payload.contains("-o wlan-test"));
+    assert!(!payload.contains("-o rmnet_data0"));
+    assert!(!payload.contains("wlan*"));
+}
+
+#[test]
+fn tproxy_plan_rejects_an_interface_scope_that_matches_nothing() {
+    let capabilities = report(
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            candidate(0x100, 100, 10_000),
+            CapabilityStatus::Supported,
+        )],
+    )
+    .with_interfaces(vec!["rmnet_data0".into()])
+    .unwrap();
+    let policy = CapturePolicy::new(
+        CaptureMode::Tproxy,
+        true,
+        Some(PORT),
+        Some(0x200),
+        vec![],
+        vec![0],
+    )
+    .unwrap()
+    .with_interface_policy(InterfacePolicy::new(false, true, Vec::new(), Vec::new()).unwrap())
+    .unwrap();
+
+    let error = NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(11).unwrap(),
+            PlanSlot::A,
+            &policy,
+            &capabilities,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code().as_str(),
+        "network_plan_interface_selection_empty"
+    );
 }
 
 #[test]

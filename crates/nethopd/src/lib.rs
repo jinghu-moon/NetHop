@@ -1,10 +1,24 @@
 #![doc = "Controlled daemon process boundaries for NetHop."]
 
 pub mod activation;
+pub mod api_secret;
 pub mod application;
+#[cfg(feature = "subscription-update")]
+pub mod auto_update;
+mod config_model;
+#[cfg(feature = "subscription-update")]
+pub mod config_reconciler;
+#[cfg(feature = "subscription-update")]
+pub mod config_watch;
+pub mod events;
+pub mod log_retention;
 pub mod process;
 pub mod runner;
 pub mod scheduler;
+#[cfg(feature = "subscription-update")]
+pub mod source_config;
+#[cfg(feature = "subscription-update")]
+pub mod source_update;
 pub mod stats;
 pub mod storage;
 pub mod supervisor;
@@ -21,10 +35,33 @@ pub use activation::{
     CandidateChecker, CandidateProcess, CoreLauncher, HealthProbe, HealthProbeError,
     ManagedSafetyAuditor, SafetyAuditError, SafetyAuditor, StartupLivenessProbe,
 };
+pub use api_secret::{
+    ApiSecret, ApiSecretError, ApiSecretStore, SecretEntropy, SystemSecretEntropy,
+};
 pub use application::{
     ApplicationError, DaemonArguments, DaemonMode, RuntimeRoot, SupervisorLoopDriver,
     SupervisorLoopSignal, SystemSupervisorDriver, run_supervisor_loop, run_system_supervisor,
     run_system_worker,
+};
+#[cfg(feature = "subscription-update")]
+pub use auto_update::{PersistentUpdateSchedule, RuntimeUpdateSchedule, UnavailableUpdateSchedule};
+pub use config_model::{
+    AdvancedSettings, ApplicationMode, ApplicationSettings, ApplyImpact, CanonicalCidr,
+    CaptureIntent, ChangeKind, ChangePlan, DnsMode, EffectiveConfig, Ipv6Mode, LogLevel,
+    LoggingSettings, NetworkSettings, OutboundMode, ProxySettings, RoutingSettings, SelectorMode,
+    SourceFormatHint, SourceName, SubscriptionSettings, TunStackIntent, UrltestSettings,
+    UserSource,
+};
+#[cfg(feature = "subscription-update")]
+pub use config_reconciler::{
+    ConfigChange, ConfigMutationOutcome, ConfigPreview, ConfigReloadState, ConfigRuntime,
+    ConfigRuntimeCheckpoint, ConfigRuntimeError,
+};
+#[cfg(feature = "subscription-update")]
+pub use config_watch::{ConfigWatchError, ConfigWatcher};
+pub use events::{EventError, EventHub, EventSubscription};
+pub use log_retention::{
+    FileLogRetention, LogRetentionError, RuntimeLogRetention, UnavailableLogRetention,
 };
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
@@ -37,6 +74,16 @@ pub use runner::{
 pub use scheduler::{
     InMemoryScheduleStore, ScheduleKey, SchedulePolicy, ScheduleRecord, ScheduleStore,
     SchedulerEngine, SchedulerError,
+};
+#[cfg(feature = "subscription-update")]
+pub use source_config::{
+    SourceConfig, SourceDefinition, SourceIdEntropy, SourceRegistry, SourceRegistryError,
+    SystemSourceIdEntropy,
+};
+#[cfg(feature = "subscription-update")]
+pub use source_update::{
+    ConfiguredSourceUpdater, HttpSourceBodyFetcher, PreparedSourceUpdate, SourceBodyFetcher,
+    SourceUpdateError, SourceUpdateReport, SourceUpdateService, UpdateRuntimePolicy,
 };
 pub use stats::{
     CounterBatch, CounterDelta, CounterDeltaBatch, CounterDeltaTracker, CounterName,
@@ -61,10 +108,11 @@ pub use worker_activation::{
     WorkerRecoveryError,
 };
 pub use worker_application::{
-    ApplicationRecovery, MonotonicClock, RuntimeRecoverySource, WorkerApplication, WorkerClock,
-    WorkerRecoveryCoordinator,
+    ApplicationRecovery, MonotonicClock, OptionalRuntimeUpdateSource, RuntimePolicyError,
+    RuntimeRecoverySource, RuntimeUpdateError, RuntimeUpdateSource, UnavailableRuntimeUpdateSource,
+    WorkerApplication, WorkerClock, WorkerRecoveryCoordinator,
 };
-pub use worker_config::{WorkerConfig, WorkerConfigError};
+pub use worker_config::{ConfigError, ConfigSnapshot, ConfigStore};
 pub use worker_runtime::{
     RestartBudget, RestartDecision, RuntimeFailureCode, RuntimeTick, SystemLoopDriver,
     WorkerLoopDriver, WorkerLoopSignal, WorkerRunExit, WorkerRuntime, WorkerRuntimeError,
@@ -76,5 +124,5 @@ pub use worker_service::{
 };
 pub use worker_services::{
     BuildCandidateError, ControlCommand, ControlSnapshot, EventReconcileError, EventReconcileGate,
-    StatsCollector, StatsCollectorError, WorkerControlHandler, build_candidate,
+    StatsCollector, StatsCollectorError, UpdateStatus, WorkerControlHandler, build_candidate,
 };

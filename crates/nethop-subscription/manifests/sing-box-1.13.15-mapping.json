@@ -46,11 +46,13 @@
     },
     {
       "protocol": "shadowsocks",
-      "mapped_fields": ["type", "tag", "server", "server_port", "method", "password", "plugin", "plugin_opts"],
-      "source_paths": ["option/shadowsocks.go", "protocol/shadowsocks/outbound.go", "transport/sip003/obfs.go"],
+      "mapped_fields": ["type", "tag", "server", "server_port", "method", "password", "plugin", "plugin_opts", "udp_over_tcp"],
+      "source_paths": ["option/shadowsocks.go", "option/udp_over_tcp.go", "protocol/shadowsocks/outbound.go", "transport/sip003/obfs.go"],
       "capabilities": [
         {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
-        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":"obfs-local"}
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":"obfs-local"},
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":"obfs-local"}
       ]
     },
     {

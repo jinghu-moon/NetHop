@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
+use crate::{PackageListKind, ProbeBackend, ProbeCommand};
+
 const MAX_APPS: usize = 20_000;
 const MAX_PACKAGES_PER_UID: usize = 128;
 const MAX_PACKAGE_BYTES: usize = 255;
@@ -91,6 +93,27 @@ pub struct AppCatalog {
 }
 
 impl AppCatalog {
+    pub fn load_primary_user(backend: &mut impl ProbeBackend) -> Result<Self, AppCatalogError> {
+        let all = backend
+            .run(ProbeCommand::PackageList(PackageListKind::All))
+            .map_err(|_| AppCatalogError::QueryFailed)?;
+        let system = backend
+            .run(ProbeCommand::PackageList(PackageListKind::System))
+            .map_err(|_| AppCatalogError::QueryFailed)?;
+        let user = backend
+            .run(ProbeCommand::PackageList(PackageListKind::User))
+            .map_err(|_| AppCatalogError::QueryFailed)?;
+        if !all.success() || !system.success() || !user.success() {
+            return Err(AppCatalogError::QueryFailed);
+        }
+        Self::from_snapshots([PackageSnapshot::new(
+            0,
+            all.stdout(),
+            system.stdout(),
+            user.stdout(),
+        )])
+    }
+
     pub fn from_snapshots<'a>(
         snapshots: impl IntoIterator<Item = PackageSnapshot<'a>>,
     ) -> Result<Self, AppCatalogError> {
@@ -261,6 +284,8 @@ impl CompiledAppSelection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum AppCatalogError {
+    #[error("package manager query failed")]
+    QueryFailed,
     #[error("package catalog contains an invalid line")]
     InvalidLine,
     #[error("package name is invalid or too long")]

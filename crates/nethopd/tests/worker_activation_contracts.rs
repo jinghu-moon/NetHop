@@ -70,6 +70,7 @@ fn family(family: IpFamily, tproxy: CapabilityStatus) -> FamilyCapability {
         CapabilityStatus::Supported,
         CapabilityStatus::Supported,
         CapabilityStatus::Supported,
+        CapabilityStatus::Supported,
     )
 }
 
@@ -412,6 +413,62 @@ fn recovery_activates_verified_current_without_creating_a_generation() {
         .count();
     assert_eq!(generation_directories, 1);
     active.stop(&mut network).unwrap();
+}
+
+#[test]
+fn sealed_candidate_can_be_activated_and_checked_before_current_is_committed() {
+    let (_directory, store) = store_with_active_generation();
+    let prepared = store.prepare_candidate(&candidate(2)).unwrap();
+    let sealed = store.seal_candidate(&prepared).unwrap();
+    assert_eq!(sealed.generation(), GenerationId::new(2).unwrap());
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(GenerationId::new(1).unwrap())
+    );
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeDataPlaneHealth {
+        store: &store,
+        events: Rc::clone(&events),
+        fail: false,
+    };
+
+    let active = CurrentGenerationActivator::new(
+        &store,
+        &FakeChecker,
+        &launcher,
+        &core_health,
+        &mut capabilities,
+        &mut network,
+        &mut data_health,
+    )
+    .recover_generation(GenerationId::new(2).unwrap(), &policy(), PlanSlot::A)
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(active.generation(), GenerationId::new(2).unwrap());
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(GenerationId::new(1).unwrap())
+    );
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "network_apply", "data_health"]
+    );
+    active.stop(&mut network).unwrap();
+    store.discard_sealed(sealed).unwrap();
 }
 
 #[test]

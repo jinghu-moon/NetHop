@@ -1,13 +1,74 @@
 use nethop_protocol::{
     ControlError, ControlRequest, ControlResponse, ErrorCode, ErrorDomain, RequestId,
 };
-use nethopctl::{CliCommand, CliError, ControlTransport, execute, parse_command, render_response};
+use nethopctl::{
+    CliCommand, CliError, ControlTransport, build_request, execute, execute_invocation,
+    parse_command, parse_invocation, render_response,
+};
 use serde_json::json;
 
 #[derive(Debug)]
 struct FakeTransport {
     response: Option<ControlResponse>,
     observed: Vec<ControlRequest>,
+}
+
+#[test]
+fn manager_commands_build_typed_bounded_requests() {
+    let digest = "a".repeat(64);
+    let validate = parse_invocation([
+        "config",
+        "validate",
+        "--expected-digest",
+        digest.as_str(),
+        "--json",
+    ])
+    .unwrap();
+    let request = build_request(
+        &validate,
+        RequestId::new("manager-validate").unwrap(),
+        Some(json!({"schema_version":1})),
+    )
+    .unwrap();
+    assert_eq!(
+        request.method(),
+        nethop_protocol::ControlMethod::ConfigValidate
+    );
+    assert_eq!(
+        request.params().expected_config_digest(),
+        Some(digest.as_str())
+    );
+    assert_eq!(request.params().document().unwrap()["schema_version"], 1);
+
+    let mutation =
+        parse_invocation(["config", "mutate", "--expected-digest", digest.as_str()]).unwrap();
+    let request = build_request(
+        &mutation,
+        RequestId::new("manager-mutate").unwrap(),
+        Some(json!({"type":"add_source","name":"Backup","url":"https://example.com/sub"})),
+    )
+    .unwrap();
+    assert!(matches!(
+        request.params().mutation_value(),
+        Some(nethop_protocol::ConfigMutation::AddSource { .. })
+    ));
+
+    let hello = parse_invocation([
+        "hello",
+        "--manager-version",
+        "0.1.0",
+        "--protocol-min",
+        "1",
+        "--protocol-max",
+        "1",
+    ])
+    .unwrap();
+    let request = build_request(&hello, RequestId::new("manager-hello").unwrap(), None).unwrap();
+    assert_eq!(request.params().manager_protocol_range(), Some((1, 1)));
+
+    let events = parse_invocation(["events", "--kinds", "config,generation", "--jsonl"]).unwrap();
+    let request = build_request(&events, RequestId::new("manager-events").unwrap(), None).unwrap();
+    assert_eq!(request.params().event_kinds().unwrap().len(), 2);
 }
 
 impl ControlTransport for FakeTransport {
@@ -23,6 +84,11 @@ fn command_parser_is_exact_and_maps_only_minimal_methods() {
     assert_eq!(parse_command(["start"]).unwrap(), CliCommand::Start);
     assert_eq!(parse_command(["stop"]).unwrap(), CliCommand::Stop);
     assert_eq!(parse_command(["probe"]).unwrap(), CliCommand::Probe);
+    assert_eq!(parse_command(["update"]).unwrap(), CliCommand::Update);
+    assert_eq!(
+        parse_command(["config", "reload"]).unwrap(),
+        CliCommand::ConfigReload
+    );
     assert_eq!(
         parse_command(["status", "extra"]).unwrap_err(),
         CliError::Usage
@@ -31,6 +97,34 @@ fn command_parser_is_exact_and_maps_only_minimal_methods() {
         parse_command(std::iter::empty::<&str>()).unwrap_err(),
         CliError::Usage
     );
+}
+
+#[test]
+fn wait_and_if_needed_are_accepted_only_for_bounded_mutations() {
+    let reload = parse_invocation(["config", "reload", "--wait"]).unwrap();
+    assert_eq!(reload.command(), CliCommand::ConfigReload);
+    assert!(reload.wait());
+    assert!(!reload.if_needed());
+
+    let update = parse_invocation(["update", "--if-needed", "--wait"]).unwrap();
+    assert_eq!(update.command(), CliCommand::Update);
+    assert!(update.wait());
+    assert!(update.if_needed());
+    assert!(parse_invocation(["status", "--wait"]).is_err());
+    assert!(parse_invocation(["start", "--if-needed"]).is_err());
+
+    let request_id = RequestId::new("wait-options").unwrap();
+    let mut transport = FakeTransport {
+        response: Some(ControlResponse::success(
+            request_id.clone(),
+            None,
+            json!({}),
+        )),
+        observed: Vec::new(),
+    };
+    execute_invocation(&mut transport, update, request_id).unwrap();
+    assert!(transport.observed[0].params().wait());
+    assert!(transport.observed[0].params().if_needed());
 }
 
 #[test]

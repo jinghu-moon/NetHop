@@ -2,8 +2,8 @@ use std::{collections::VecDeque, time::Duration};
 
 use nethop_android::{NetlinkDebouncer, NetlinkError, NetworkEvent};
 use nethop_core::{
-    Candidate, CapturePolicy, ClashApi, GenerationId, ManagedConfig, ManagedProfile, RuntimeState,
-    TunStack,
+    Candidate, CapturePolicy, ClashApi, GenerationId, ManagedConfig, ManagedOptions,
+    ManagedProfile, RuntimeState, TunStack,
 };
 use nethop_protocol::{
     ControlError, ControlMethod, ControlRequest, ControlResponse, ErrorCode, ErrorDomain,
@@ -35,12 +35,15 @@ pub fn build_candidate(
     capture: CapturePolicy,
     clash_api: ClashApi,
     tun_stack: TunStack,
+    options: ManagedOptions,
 ) -> Result<Candidate, BuildCandidateError> {
     if conversion.nodes.is_empty() || !conversion.report.summary.source_success {
         return Err(BuildCandidateError::EmptyConversion);
     }
     let outbounds = adapt_terminal_outbounds(&conversion.nodes)?;
-    let profile = ManagedProfile::new(capture, outbounds, clash_api)?.with_tun_stack(tun_stack);
+    let profile = ManagedProfile::new(capture, outbounds, clash_api)?
+        .with_tun_stack(tun_stack)
+        .with_options(options);
     let config = ManagedConfig::from_profile(profile)?;
     Ok(Candidate::new(generation, config))
 }
@@ -139,18 +142,39 @@ pub enum ControlCommand {
     Start,
     Stop,
     Probe,
+    Update,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlSnapshot {
     pub state: RuntimeState,
     pub generation: Option<GenerationId>,
+    pub last_update: UpdateStatus,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UpdateStatus {
+    #[default]
+    Never,
+    Succeeded,
+    Failed,
+}
+
+impl UpdateStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct WorkerControlHandler {
     snapshot: ControlSnapshot,
     pending: VecDeque<ControlCommand>,
+    update_available: bool,
 }
 
 impl WorkerControlHandler {
@@ -158,6 +182,35 @@ impl WorkerControlHandler {
         Self {
             snapshot,
             pending: VecDeque::new(),
+            update_available: false,
+        }
+    }
+
+    pub fn with_update_available(mut self) -> Self {
+        self.update_available = true;
+        self
+    }
+
+    pub fn with_update_available_if(self, available: bool) -> Self {
+        if available {
+            self.with_update_available()
+        } else {
+            self
+        }
+    }
+
+    pub fn set_update_available(&mut self, available: bool) {
+        self.update_available = available;
+    }
+
+    pub fn queue_command(&mut self, command: ControlCommand) {
+        match command {
+            ControlCommand::Stop => {
+                self.pending
+                    .retain(|pending| matches!(pending, ControlCommand::Probe));
+                self.pending.push_front(ControlCommand::Stop);
+            }
+            _ => self.pending.push_back(command),
         }
     }
 
@@ -182,20 +235,49 @@ impl ControlRequestHandler for WorkerControlHandler {
             ControlMethod::StatusGet => ControlResponse::success(
                 request_id,
                 generation,
-                json!({"state": state_wire(self.snapshot.state)}),
+                json!({
+                    "state": state_wire(self.snapshot.state),
+                    "last_update": self.snapshot.last_update.as_str(),
+                }),
             ),
             ControlMethod::ServiceStart => {
-                self.pending.push_back(ControlCommand::Start);
+                self.queue_command(ControlCommand::Start);
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
             }
             ControlMethod::ServiceStop => {
-                self.pending.push_back(ControlCommand::Stop);
+                self.queue_command(ControlCommand::Stop);
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
             }
             ControlMethod::CapabilityProbe => {
-                self.pending.push_back(ControlCommand::Probe);
+                self.queue_command(ControlCommand::Probe);
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
             }
+            ControlMethod::SubscriptionUpdate if self.update_available => {
+                self.queue_command(ControlCommand::Update);
+                ControlResponse::success(request_id, generation, json!({"accepted":true}))
+            }
+            ControlMethod::SubscriptionUpdate => ControlResponse::failure(
+                request_id,
+                generation,
+                unavailable_control_error(ErrorDomain::Subscription, "UPDATE-UNAVAILABLE"),
+            ),
+            ControlMethod::ConfigReload => ControlResponse::failure(
+                request_id,
+                generation,
+                unavailable_control_error(ErrorDomain::Config, "RELOAD-UNAVAILABLE"),
+            ),
+            ControlMethod::ProtocolHello
+            | ControlMethod::ConfigGet
+            | ControlMethod::ConfigValidate
+            | ControlMethod::ConfigApply
+            | ControlMethod::ConfigSchema
+            | ControlMethod::CapabilityGet
+            | ControlMethod::ConfigMutate
+            | ControlMethod::EventsSubscribe => ControlResponse::failure(
+                request_id,
+                generation,
+                unavailable_control_error(ErrorDomain::Config, "MANAGER-UNAVAILABLE"),
+            ),
         }
     }
 }
@@ -220,6 +302,19 @@ pub fn unavailable_control_error(domain: ErrorDomain, detail: &str) -> ControlEr
     ControlError::new(
         ErrorCode::new(domain, detail).expect("static control error detail is valid"),
         "requested service is unavailable",
+    )
+    .expect("static control message is valid")
+}
+
+pub fn unavailable_control_error_with_details(
+    domain: ErrorDomain,
+    detail: &str,
+    details: serde_json::Value,
+) -> ControlError {
+    ControlError::with_details(
+        ErrorCode::new(domain, detail).expect("static control error detail is valid"),
+        "requested service is unavailable",
+        details,
     )
     .expect("static control message is valid")
 }

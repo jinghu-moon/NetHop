@@ -31,21 +31,21 @@
   "sing_box": {
     "version": "1.13.15",
     "commit": "3708fa18766cda1f11b77f6ed9c7bd61688f17df",
-    "mapping_digest": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+    "mapping_digest": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
   },
-  "support_matrix_sha256": "263fdc275ad2dfc9616285f1d7692968721dfe33e80c87e4856ec52b29e2bee0",
+  "support_matrix_sha256": "acbe0dffe405db44d1bf3b4bc5621106514f7afb700438c7e28f1a258bb5de76",
   "artifacts": [
     {
       "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
-      "sha256": "4524ba46e9949fc35fe876a2af83066b0c33d851bb94ffd3d1953f4123b815ee"
+      "sha256": "44a31ea102335f9da894f9c4e32ad155153dcb6a803fbc0d003ac7220be46cde"
     },
     {
       "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
-      "sha256": "032775f1d750ea4e2b44ea6220c97a3b081afda83076467f4f9e0a9bb0cb056e"
+      "sha256": "e2e098bf9b92fe4e3baa17f1708501a9f6ea0a46228d3255cd0e9e20871bc05d"
     },
     {
       "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
-      "sha256": "6327ea6b043cc2874f8d0987240f209e2e3614bed21c4fbcd635b1f774c3d891"
+      "sha256": "fbd8cadc168321b79abeed808f140cbda17bc7b1135e592cf13babe3402b48e8"
     },
     {
       "path": "artifacts/subscription-parser/m010/licenses.json",
@@ -53,7 +53,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "f931a0349f292d866f1fd5e9d90e596a13961d538236ee39bf52d14797e4298a"
+      "sha256": "b115dd6ba7d074112b366cbd50482942f0d68f9de24bb4740f17fafca8d376e5"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
@@ -69,11 +69,11 @@
     },
     {
       "path": "artifacts/subscription-parser/m012/support-matrix.json",
-      "sha256": "263fdc275ad2dfc9616285f1d7692968721dfe33e80c87e4856ec52b29e2bee0"
+      "sha256": "acbe0dffe405db44d1bf3b4bc5621106514f7afb700438c7e28f1a258bb5de76"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-      "sha256": "2c124659025a2062c0e822851f480fc4324b52d1454c1821bb1088bb04935ea6"
+      "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
     },
     {
       "path": "docs/04-subscription-parser-phase0b-performance-report.md",

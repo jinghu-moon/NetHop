@@ -29,7 +29,8 @@
       "method": "aes-128-gcm",
       "password": "fixture-password",
       "plugin": "obfs-local",
-      "plugin_opts": "obfs=tls;obfs-host=example.com"
+      "plugin_opts": "obfs=tls;obfs-host=example.com",
+      "udp_over_tcp": true
     },
     {
       "type": "trojan",

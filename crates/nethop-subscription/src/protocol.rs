@@ -194,6 +194,12 @@ pub struct Hysteria2Obfs {
     pub password: SecretString,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UdpOverTcpOptions {
+    pub enabled: bool,
+    pub version: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Credentials {
     Vless {
@@ -320,7 +326,9 @@ pub enum ProtocolOptions {
         flow: Option<BoundedText>,
     },
     Vmess,
-    Shadowsocks,
+    Shadowsocks {
+        udp_over_tcp: Option<UdpOverTcpOptions>,
+    },
     Trojan,
     Hysteria2,
     Tuic {

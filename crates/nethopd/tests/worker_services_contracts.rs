@@ -1,7 +1,9 @@
 use std::{collections::VecDeque, time::Duration};
 
 use nethop_android::{IpFamily, NetworkAction, NetworkChange, NetworkEvent};
-use nethop_core::{CaptureMode, CapturePolicy, ClashApi, GenerationId, RuntimeState, TunStack};
+use nethop_core::{
+    CaptureMode, CapturePolicy, ClashApi, GenerationId, ManagedOptions, RuntimeState, TunStack,
+};
 use nethop_protocol::{ControlMethod, ControlRequest, RequestId};
 use nethop_subscription::{
     CapabilityMatrix, FormatHint, ParserLimits, SourceId, SourceInput, convert_stable_sources,
@@ -9,8 +11,8 @@ use nethop_subscription::{
 use nethopd::{
     ControlCommand, ControlRequestHandler, ControlSnapshot, CounterBatch, CounterName,
     CounterReading, CounterTransport, EventReconcileGate, ScheduleKey, SchedulePolicy,
-    ScheduleStore, SchedulerEngine, StatsCollector, StatsError, StatsStore, WorkerControlHandler,
-    build_candidate,
+    ScheduleStore, SchedulerEngine, StatsCollector, StatsError, StatsStore, UpdateStatus,
+    WorkerControlHandler, build_candidate,
 };
 use tempfile::tempdir;
 
@@ -43,6 +45,7 @@ fn stable_parser_output_builds_a_managed_generation_candidate() {
         capture(),
         ClashApi::new("127.0.0.1:9090", "x".repeat(32)).unwrap(),
         TunStack::System,
+        ManagedOptions::default(),
     )
     .unwrap();
 
@@ -139,6 +142,7 @@ fn control_handler_exposes_snapshot_and_queues_only_typed_commands() {
     let mut handler = WorkerControlHandler::new(ControlSnapshot {
         state: RuntimeState::RunningTproxy,
         generation: Some(GenerationId::new(8).unwrap()),
+        last_update: UpdateStatus::Never,
     });
     let status = handler.handle(ControlRequest::new(
         RequestId::new("status").unwrap(),
@@ -147,6 +151,7 @@ fn control_handler_exposes_snapshot_and_queues_only_typed_commands() {
     assert!(status.ok());
     assert_eq!(status.generation(), Some(8));
     assert_eq!(status.result().unwrap()["state"], "running_tproxy");
+    assert_eq!(status.result().unwrap()["last_update"], "never");
     assert!(handler.take_command().is_none());
 
     let start = handler.handle(ControlRequest::new(
@@ -155,4 +160,50 @@ fn control_handler_exposes_snapshot_and_queues_only_typed_commands() {
     ));
     assert!(start.ok());
     assert_eq!(handler.take_command(), Some(ControlCommand::Start));
+}
+
+#[test]
+fn stop_preempts_pending_start_and_update_without_dropping_probe() {
+    let snapshot = ControlSnapshot {
+        state: RuntimeState::FailOpenDirect,
+        generation: None,
+        last_update: UpdateStatus::Never,
+    };
+    let mut handler = WorkerControlHandler::new(snapshot).with_update_available();
+    handler.queue_command(ControlCommand::Start);
+    handler.queue_command(ControlCommand::Update);
+    handler.queue_command(ControlCommand::Probe);
+    handler.queue_command(ControlCommand::Stop);
+
+    assert_eq!(handler.take_command(), Some(ControlCommand::Stop));
+    assert_eq!(handler.take_command(), Some(ControlCommand::Probe));
+    assert_eq!(handler.take_command(), None);
+}
+
+#[test]
+fn update_command_is_rejected_until_an_updater_is_injected() {
+    let snapshot = ControlSnapshot {
+        state: RuntimeState::FailOpenDirect,
+        generation: None,
+        last_update: UpdateStatus::Never,
+    };
+    let request = || {
+        ControlRequest::new(
+            RequestId::new("update").unwrap(),
+            ControlMethod::SubscriptionUpdate,
+        )
+    };
+    let mut unavailable = WorkerControlHandler::new(snapshot);
+    let rejected = unavailable.handle(request());
+    assert!(!rejected.ok());
+    assert_eq!(
+        rejected.error().unwrap().code().as_str(),
+        "NH-SUB-UPDATE-UNAVAILABLE"
+    );
+    assert!(unavailable.take_command().is_none());
+
+    let mut available = WorkerControlHandler::new(snapshot).with_update_available();
+    let accepted = available.handle(request());
+    assert!(accepted.ok());
+    assert_eq!(available.take_command(), Some(ControlCommand::Update));
 }

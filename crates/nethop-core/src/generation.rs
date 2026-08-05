@@ -36,6 +36,10 @@ pub struct GenerationManifest {
     pub generation: GenerationId,
     pub config_sha256: String,
     pub node_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_config_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,12 +56,44 @@ impl Candidate {
             generation,
             config_sha256: config.digest_sha256().to_owned(),
             node_count: config.node_count(),
+            source_config_digest: None,
+            source_ids: Vec::new(),
         };
         Self {
             generation,
             config,
             manifest,
         }
+    }
+
+    pub fn bind_sources(
+        mut self,
+        source_config_digest: impl Into<String>,
+        source_ids: Vec<String>,
+    ) -> Result<Self, CoreError> {
+        let digest = source_config_digest.into();
+        let valid_digest = digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+        let valid_ids = !source_ids.is_empty()
+            && source_ids.len() <= 16
+            && source_ids.iter().all(|id| {
+                id.starts_with("src_")
+                    && id.len() == 36
+                    && id[4..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            });
+        if !valid_digest || !valid_ids {
+            return Err(publish_error(
+                "bind_sources",
+                "source generation binding is invalid",
+            ));
+        }
+        self.manifest.source_config_digest = Some(digest);
+        self.manifest.source_ids = source_ids;
+        Ok(self)
     }
 
     pub const fn generation(&self) -> GenerationId {
@@ -125,8 +161,12 @@ pub struct GenerationStore {
 impl GenerationStore {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, CoreError> {
         let root = root.into();
-        fs::create_dir_all(root.join("generations"))
-            .map_err(|error| io_error("create_root", error))?;
+        create_private_dir_all(&root).map_err(|error| io_error("create_root", error))?;
+        let generations = root.join("generations");
+        create_private_dir_all(&generations).map_err(|error| io_error("create_root", error))?;
+        set_private_dir_permissions(&root).map_err(|error| io_error("secure_root", error))?;
+        set_private_dir_permissions(&generations)
+            .map_err(|error| io_error("secure_generations", error))?;
         let root = root
             .canonicalize()
             .map_err(|error| io_error("canonicalize_root", error))?;
@@ -160,6 +200,22 @@ impl GenerationStore {
             .transpose()
     }
 
+    pub fn current_manifest(&self) -> Result<Option<GenerationManifest>, CoreError> {
+        let Some(generation) = self.current_generation()? else {
+            return Ok(None);
+        };
+        self.verify_generation(generation)?;
+        let path = self
+            .generations_root()
+            .join(generation.get().to_string())
+            .join("manifest.json");
+        let manifest = serde_json::from_slice(
+            &fs::read(path).map_err(|error| io_error("read_manifest", error))?,
+        )
+        .map_err(|_| publish_error("read_manifest", "generation manifest is invalid"))?;
+        Ok(Some(manifest))
+    }
+
     pub fn prepare_candidate(&self, candidate: &Candidate) -> Result<PreparedCandidate, CoreError> {
         let generations = self.generations_root();
         let final_dir = generations.join(candidate.generation.get().to_string());
@@ -178,7 +234,7 @@ impl GenerationStore {
             fs::remove_dir_all(&directory)
                 .map_err(|error| io_error("remove_stale_candidate", error))?;
         }
-        fs::create_dir(&directory).map_err(|error| io_error("create_candidate", error))?;
+        create_private_dir(&directory).map_err(|error| io_error("create_candidate", error))?;
         let result = self.write_candidate(candidate, &directory);
         if result.is_err() {
             let _ = fs::remove_dir_all(&directory);
@@ -379,9 +435,66 @@ fn publish_error(operation: &str, message: &str) -> CoreError {
 }
 
 fn write_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = fs::File::create(path)?;
+    let mut file = open_private_file(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+#[cfg(unix)]
+fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700).create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path)
+}
+
+#[cfg(unix)]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700).create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    fs::create_dir(path)
+}
+
+#[cfg(unix)]
+fn set_private_dir_permissions(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn set_private_dir_permissions(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_private_file(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_private_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::create(path)
 }
 
 #[cfg(not(windows))]

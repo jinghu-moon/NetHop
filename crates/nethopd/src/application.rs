@@ -8,6 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(unix)]
+use std::sync::mpsc::Receiver;
+
 use thiserror::Error;
 
 use crate::{
@@ -15,20 +18,30 @@ use crate::{
     WorkerSupervisor,
 };
 
+#[cfg(all(unix, feature = "subscription-update"))]
+use crate::{
+    ApiSecretStore, ConfigRuntime, ConfigStore, ConfigWatcher, ConfiguredSourceUpdater,
+    FileLogRetention, HttpSourceBodyFetcher, OptionalRuntimeUpdateSource, PersistentUpdateSchedule,
+    SourceRegistry, SourceUpdateService, StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy,
+};
 #[cfg(unix)]
 use crate::{
     ControlServerLimits, CoreProcessLimits, CoreProcessRunner, MonotonicClock,
     NetworkDataPlaneHealthProbe, RunnerLimits, SingBoxCheckRunner, StartupLivenessProbe,
-    UnixControlServer, WorkerApplication, WorkerConfig, WorkerRecoveryCoordinator,
-    WorkerRuntimeLimits, WorkerServiceDriver, WorkerServiceSignal, run_worker_service,
+    UnixControlServer, WorkerApplication, WorkerRecoveryCoordinator, WorkerRuntimeLimits,
+    WorkerServiceDriver, WorkerServiceSignal, run_worker_service,
 };
 #[cfg(unix)]
 use nethop_android::{
-    AndroidToolPaths, CapabilityProbe, CommandProbeBackend, NetworkExecutor, NetworkPlanVerifier,
-    PlanSlot, ProbeLimits, SystemCommandBackend, SystemCommandLimits,
+    AndroidToolPaths, AppCatalog, CapabilityProbe, CommandProbeBackend, NetworkExecutor,
+    NetworkPlanVerifier, PlanSlot, ProbeLimits, SystemCommandBackend, SystemCommandLimits,
 };
+#[cfg(all(unix, feature = "subscription-update"))]
+use nethop_core::ClashApi;
 #[cfg(unix)]
 use nethop_core::GenerationStore;
+#[cfg(all(unix, feature = "subscription-update"))]
+use nethop_subscription::{CapabilityMatrix, ParserLimits};
 
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -212,14 +225,16 @@ pub fn run_system_supervisor(runtime: &RuntimeRoot) -> Result<(), ApplicationErr
 
 #[cfg(unix)]
 #[derive(Debug)]
-struct SystemWorkerServiceDriver;
+struct SystemWorkerServiceDriver {
+    wake_receiver: Receiver<()>,
+}
 
 #[cfg(unix)]
 impl SystemWorkerServiceDriver {
-    fn install() -> Result<Self, ApplicationError> {
+    fn install(wake_receiver: Receiver<()>) -> Result<Self, ApplicationError> {
         STOP_REQUESTED.store(false, Ordering::Release);
         install_signal_handlers()?;
-        Ok(Self)
+        Ok(Self { wake_receiver })
     }
 }
 
@@ -229,7 +244,7 @@ impl WorkerServiceDriver for SystemWorkerServiceDriver {
         if STOP_REQUESTED.load(Ordering::Acquire) {
             return WorkerServiceSignal::Stop;
         }
-        thread::sleep(timeout);
+        let _ = self.wake_receiver.recv_timeout(timeout);
         if STOP_REQUESTED.load(Ordering::Acquire) {
             WorkerServiceSignal::Stop
         } else {
@@ -241,14 +256,52 @@ impl WorkerServiceDriver for SystemWorkerServiceDriver {
 #[cfg(unix)]
 pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> {
     ensure_root()?;
-    let config = WorkerConfig::load(&runtime.root().join("config/nethop.json"))
+    let config_store = ConfigStore::new(runtime.root().join("config/nethop.toml"))
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
-    let inbound_port = config
-        .capture()
-        .inbound_port()
-        .ok_or(ApplicationError::WorkerInitializationFailed)?;
+    let config_snapshot = config_store
+        .load()
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let config = config_snapshot.effective().clone();
     let store = GenerationStore::new(runtime.root())
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    #[cfg(feature = "subscription-update")]
+    let source_registry = SourceRegistry::new(runtime.root().join("state/source-registry.v1.json"))
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    #[cfg(feature = "subscription-update")]
+    let source_config = source_registry
+        .reconcile(&config_snapshot, &mut SystemSourceIdEntropy)
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    #[cfg(feature = "subscription-update")]
+    let restore_current = store
+        .current_manifest()
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?
+        .and_then(|manifest| manifest.source_config_digest)
+        .is_some_and(|digest| digest == source_config.source_config_digest());
+    #[cfg(feature = "subscription-update")]
+    let mut config_runtime = ConfigRuntime::new(
+        config_store,
+        source_registry,
+        config_snapshot,
+        &source_config,
+    )
+    .with_module_entry("/data/adb/modules/nethop/config/nethop.toml")
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let mut package_backend = CommandProbeBackend::new(
+        AndroidToolPaths::from_system()
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+        ProbeLimits::default(),
+    );
+    if let Ok(catalog) = AppCatalog::load_primary_user(&mut package_backend) {
+        config_runtime = config_runtime
+            .with_app_catalog(catalog)
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    }
+    let capture = config_runtime
+        .capture_policy()
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let inbound_port = capture
+        .inbound_port()
+        .ok_or(ApplicationError::WorkerInitializationFailed)?;
     let executable = std::env::current_exe().map_err(|_| ApplicationError::InvalidExecutable)?;
     let binary = executable
         .parent()
@@ -263,7 +316,12 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         CoreProcessLimits::default(),
     )
     .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
-    let core_health = StartupLivenessProbe::default();
+    let mut core_health = StartupLivenessProbe::new(
+        Duration::from_secs(u64::from(config.advanced().health_timeout_seconds())),
+        Duration::from_millis(200),
+        Duration::from_millis(20),
+    )
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     let capability_source = CapabilityProbe::new(
         CommandProbeBackend::new(
             AndroidToolPaths::from_system()
@@ -302,16 +360,88 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         &store,
         &checker,
         &launcher,
-        &core_health,
+        &mut core_health,
         capability_source,
         data_plane_health,
     );
+    #[cfg(feature = "subscription-update")]
+    let (watcher, wake_receiver) = {
+        let mut paths = vec![runtime.root().join("config")];
+        let module_config = PathBuf::from("/data/adb/modules/nethop/config");
+        if module_config.is_dir() && !paths.contains(&module_config) {
+            paths.push(module_config);
+        }
+        ConfigWatcher::start(&paths).map_err(|_| ApplicationError::WorkerInitializationFailed)?
+    };
+    #[cfg(feature = "subscription-update")]
+    let watcher_dirty = watcher.dirty();
+    #[cfg(feature = "subscription-update")]
+    let watcher_healthy = watcher.healthy();
+    #[cfg(feature = "subscription-update")]
+    let mut application = {
+        let secret = ApiSecretStore::new(runtime.root().join("state/api.secret"))
+            .and_then(|store| store.load_or_create())
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+        let clash_api = ClashApi::new("127.0.0.1:9090", secret.expose_for_composer().to_owned())
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+        let limits = ParserLimits::default();
+        let matrix = CapabilityMatrix::default();
+        let fetcher = HttpSourceBodyFetcher::new(limits, matrix.clone())
+            .with_cache_root(runtime.root().join("subscriptions/cache"))
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+        let service = SourceUpdateService::new(
+            &store,
+            fetcher,
+            &checker,
+            limits,
+            matrix,
+            UpdateRuntimePolicy::new(
+                capture.clone(),
+                clash_api,
+                config.managed_tun_stack(),
+                config
+                    .managed_options()
+                    .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+            ),
+        );
+        let updater = ConfiguredSourceUpdater::new(service, source_config);
+        let schedule = PersistentUpdateSchedule::load(
+            StatsStore::open(runtime.root().join("state/nethop.db"))
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+        )
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+        WorkerApplication::new(
+            recovery,
+            network,
+            verifier,
+            MonotonicClock::start(),
+            capture.clone(),
+            PlanSlot::A,
+            WorkerRuntimeLimits::new(
+                Duration::from_millis(250),
+                Duration::from_secs(u64::from(config.advanced().reconcile_interval_seconds())),
+                Duration::from_secs(5 * 60),
+            )
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+        )
+        .with_updater(OptionalRuntimeUpdateSource::new(Some(updater)))
+        .with_configuration(config_runtime, restore_current)
+        .with_update_schedule(schedule)
+        .with_log_retention(
+            FileLogRetention::new(runtime.root().join("logs"))
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+        )
+        .with_event_log_directory(runtime.root().join("logs"))
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?
+        .with_config_wake(watcher_dirty, watcher_healthy)
+    };
+    #[cfg(not(feature = "subscription-update"))]
     let mut application = WorkerApplication::new(
         recovery,
         network,
         verifier,
         MonotonicClock::start(),
-        config.capture().clone(),
+        capture,
         PlanSlot::A,
         WorkerRuntimeLimits::default(),
     );
@@ -320,7 +450,12 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         ControlServerLimits::default(),
     )
     .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
-    let mut driver = SystemWorkerServiceDriver::install()?;
+    #[cfg(feature = "subscription-update")]
+    let mut driver = SystemWorkerServiceDriver::install(wake_receiver)?;
+    #[cfg(not(feature = "subscription-update"))]
+    let mut driver = SystemWorkerServiceDriver::install(std::sync::mpsc::channel().1)?;
+    #[cfg(feature = "subscription-update")]
+    let _watcher = watcher;
     run_worker_service(&server, &mut application, &mut driver).map_err(ApplicationError::Worker)
 }
 

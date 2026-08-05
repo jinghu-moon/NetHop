@@ -179,6 +179,10 @@ pub enum HealthProbeError {
 
 pub trait HealthProbe<P: CandidateProcess> {
     fn wait_healthy(&self, process: &mut P) -> Result<(), HealthProbeError>;
+
+    fn replace_timeout(&mut self, _timeout: Duration) -> Result<(), HealthProbeError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +238,14 @@ impl<P: CandidateProcess> HealthProbe<P> for StartupLivenessProbe {
                 Err(_) => return Err(HealthProbeError::ObserveFailed),
             }
         }
+        Ok(())
+    }
+
+    fn replace_timeout(&mut self, timeout: Duration) -> Result<(), HealthProbeError> {
+        if timeout.is_zero() || timeout > MAX_STARTUP_TIMEOUT || timeout < self.stable_window {
+            return Err(HealthProbeError::TimedOut);
+        }
+        self.timeout = timeout;
         Ok(())
     }
 }

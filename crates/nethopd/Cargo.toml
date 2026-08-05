@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["subscription-update"]
+subscription-update = ["nethop-subscription/fetch"]
+
 [dependencies]
 libc = "0.2"
 nethop-android = { version = "0.1.0", path = "../nethop-android" }
@@ -15,8 +19,14 @@ nethop-core = { version = "0.1.0", path = "../nethop-core" }
 nethop-protocol = { version = "0.1.0", path = "../nethop-protocol" }
 nethop-subscription = { version = "0.1.0", path = "../nethop-subscription", default-features = false, features = ["parser", "format-uri", "format-base64", "format-clash-yaml", "format-singbox-json"] }
 rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"
+toml = { version = "1.1.4", default-features = false, features = ["std", "serde", "parse", "display"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "subscription_candidate_probe"
+required-features = ["subscription-update"]

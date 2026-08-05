@@ -3,7 +3,9 @@ use nethop_android::{
     NetworkCommandBackend, NetworkExecutor, NetworkHealthVerifier, NetworkPlan, NetworkPlanError,
     NetworkPlanner, PlanSlot, ProbeBackend,
 };
-use nethop_core::{Candidate, CapturePolicy, GenerationId, GenerationStore, RuntimeState};
+use nethop_core::{
+    Candidate, CapturePolicy, GenerationId, GenerationStore, RuntimeState, SealedGeneration,
+};
 use thiserror::Error;
 
 use crate::{
@@ -13,11 +15,27 @@ use crate::{
 
 pub trait CapabilitySource {
     fn probe(&mut self) -> Result<CapabilityReport, CapabilityError>;
+
+    fn replace_policy(
+        &mut self,
+        _candidates: Vec<nethop_android::ResourceCandidate>,
+        _inbound_port: u16,
+    ) -> Result<(), CapabilityError> {
+        Ok(())
+    }
 }
 
 impl<B: ProbeBackend> CapabilitySource for CapabilityProbe<B> {
     fn probe(&mut self) -> Result<CapabilityReport, CapabilityError> {
         CapabilityProbe::probe(self)
+    }
+
+    fn replace_policy(
+        &mut self,
+        candidates: Vec<nethop_android::ResourceCandidate>,
+        inbound_port: u16,
+    ) -> Result<(), CapabilityError> {
+        CapabilityProbe::replace_policy(self, candidates, inbound_port)
     }
 }
 
@@ -76,6 +94,10 @@ pub trait DataPlaneHealthProbe<P: CandidateProcess> {
         plan: &NetworkPlan,
         capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError>;
+
+    fn replace_inbound_port(&mut self, _inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -111,6 +133,12 @@ where
         }
         self.verifier
             .verify(plan)
+            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+    }
+
+    fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        self.verifier
+            .replace_inbound_port(inbound_port)
             .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
     }
 }
@@ -323,6 +351,28 @@ where
         else {
             return Ok(None);
         };
+        self.recover_sealed(generation, policy, slot).map(Some)
+    }
+
+    pub fn recover_generation(
+        &mut self,
+        generation: GenerationId,
+        policy: &CapturePolicy,
+        slot: PlanSlot,
+    ) -> WorkerRecovery<L::Process, N::Receipt> {
+        let generation = self
+            .store
+            .sealed_generation(generation)
+            .map_err(|_| WorkerRecoveryError::InvalidCurrentGeneration)?;
+        self.recover_sealed(generation, policy, slot).map(Some)
+    }
+
+    fn recover_sealed(
+        &mut self,
+        generation: SealedGeneration,
+        policy: &CapturePolicy,
+        slot: PlanSlot,
+    ) -> Result<ActiveRuntime<L::Process, N::Receipt>, WorkerRecoveryError> {
         self.checker
             .check(&generation.config_path())
             .map_err(|_| WorkerRecoveryError::CoreCheckFailed)?;
@@ -358,12 +408,12 @@ where
                 self.network.rollback(&plan, &mut receipt).is_err() || process.stop().is_err();
             return Err(WorkerRecoveryError::DataPlaneHealthFailed { cleanup_failed });
         }
-        Ok(Some(ActiveRuntime {
+        Ok(ActiveRuntime {
             active: ActiveGeneration::recovered(generation, process),
             plan,
             receipt,
             capabilities,
-        }))
+        })
     }
 }
 

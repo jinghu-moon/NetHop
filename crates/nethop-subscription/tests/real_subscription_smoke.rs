@@ -95,13 +95,14 @@ fn authorized_real_sources_are_downloaded_without_logging_secrets() {
                 source.label
             );
             println!(
-                "source={} bytes={} digest={} format={:?} accepted={} rejected={}",
+                "source={} bytes={} digest={} format={:?} accepted={} rejected={} diagnostics={:?}",
                 source.label,
                 outcome.body().len(),
                 &digest[..12],
                 expected,
                 summary.accepted,
                 summary.rejected,
+                conversion.report.diagnostic_counts,
             );
         } else {
             println!(

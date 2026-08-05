@@ -8,7 +8,7 @@ use crate::{
     protocol::{
         BoundedText, Capabilities, Credentials, DisplayName, Endpoint, Hysteria2Obfs, PluginSpec,
         ProtocolOptions, ProxyNode, ProxyProtocol, RealityOptions, SourceRef, TlsOptions,
-        TransportKind, TransportOptions, UuidValue,
+        TransportKind, TransportOptions, UdpOverTcpOptions, UuidValue,
     },
     secret::SecretString,
     uri::{UriNodeCandidate, UriScheme, percent_decode_field},
@@ -41,6 +41,7 @@ pub struct NodeSpec {
     pub service_name: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub udp: bool,
+    pub udp_over_tcp: Option<UdpOverTcpOptions>,
     pub obfs: Option<String>,
     pub obfs_password: Option<String>,
     pub congestion_control: Option<String>,
@@ -77,6 +78,7 @@ impl NodeSpec {
             service_name: None,
             headers: BTreeMap::new(),
             udp: false,
+            udp_over_tcp: None,
             obfs: None,
             obfs_password: None,
             congestion_control: None,
@@ -153,6 +155,9 @@ pub fn validate_node_spec(
                 .transpose()
                 .map_err(|_| SemanticError::UnsupportedSemantics)?,
         },
+        ProxyProtocol::Shadowsocks => ProtocolOptions::Shadowsocks {
+            udp_over_tcp: spec.udp_over_tcp,
+        },
         ProxyProtocol::Tuic => ProtocolOptions::Tuic {
             congestion_control: spec
                 .congestion_control
@@ -163,6 +168,9 @@ pub fn validate_node_spec(
         },
         _ => ProtocolOptions::None,
     };
+    if spec.udp_over_tcp.is_some() && protocol != ProxyProtocol::Shadowsocks {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
     if let Some(congestion) = spec.congestion_control.as_deref()
         && (protocol != ProxyProtocol::Tuic || !matches!(congestion, "bbr" | "cubic" | "new_reno"))
     {

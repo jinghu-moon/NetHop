@@ -302,6 +302,10 @@ struct ClashNode {
     alter_id: Option<u16>,
     security: Option<String>,
     plugin: Option<String>,
+    #[serde(rename = "plugin-opts")]
+    plugin_options: Option<ClashPluginOptions>,
+    #[serde(rename = "udp-over-tcp")]
+    udp_over_tcp: Option<bool>,
     obfs: Option<String>,
     #[serde(rename = "obfs-password")]
     obfs_password: Option<String>,
@@ -326,6 +330,14 @@ struct WsOptions {
     headers: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ClashPluginOptions {
+    mode: Option<String>,
+    host: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde::de::IgnoredAny>,
+}
+
 fn clash_node_spec(
     node: ClashNode,
     source_id: Option<&SourceId>,
@@ -348,7 +360,25 @@ fn clash_node_spec(
     spec.flow = node.flow;
     spec.alter_id = node.alter_id;
     spec.vmess_security = node.security;
-    spec.plugin = node.plugin;
+    spec.plugin = node.plugin.map(|plugin| match plugin.as_str() {
+        "obfs" => "obfs-local".to_owned(),
+        _ => plugin,
+    });
+    spec.udp_over_tcp = node.udp_over_tcp.map(|enabled| crate::UdpOverTcpOptions {
+        enabled,
+        version: 0,
+    });
+    if let Some(plugin_options) = node.plugin_options {
+        if let Some(mode) = plugin_options.mode {
+            spec.plugin_options.insert("obfs".into(), mode);
+        }
+        if let Some(host) = plugin_options.host {
+            spec.plugin_options.insert("obfs-host".into(), host);
+        }
+        if let Some(field) = plugin_options.unknown.keys().next() {
+            spec.unknown_critical_field = Some(format!("plugin-opts.{field}"));
+        }
+    }
     spec.obfs = node.obfs;
     spec.obfs_password = node.obfs_password;
     if let Some(grpc) = node.grpc_options {
@@ -365,10 +395,11 @@ fn clash_node_spec(
         line: None,
     });
     spec.location = location;
-    if let Some(field) = node
-        .unknown
-        .keys()
-        .find(|field| is_critical_unknown_field(field))
+    if spec.unknown_critical_field.is_none()
+        && let Some(field) = node
+            .unknown
+            .keys()
+            .find(|field| is_critical_unknown_field(field))
     {
         spec.unknown_critical_field = Some(field.to_owned());
     }
@@ -383,7 +414,7 @@ fn clash_node_spec(
 fn is_critical_unknown_field(field: &str) -> bool {
     matches!(
         field,
-        "xhttp-opts" | "reality-opts" | "plugin-opts" | "port-range" | "tfo" | "smux"
+        "xhttp-opts" | "reality-opts" | "port-range" | "tfo" | "smux"
     )
 }
 

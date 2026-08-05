@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use nethop_core::{
     Candidate, CaptureMode, CapturePolicy, CapturePolicyError, ClashApi, CoreDiagnosticCode,
-    CoreError, GenerationId, GenerationStore, ManagedConfig, ManagedProfile, RuntimeState,
+    CoreError, GenerationId, GenerationStore, InterfacePolicy, ManagedConfig, ManagedLogLevel,
+    ManagedOptions, ManagedOutboundMode, ManagedProfile, ManagedSelectorMode, RuntimeState,
     StateTransitionError, TerminalOutbound, TunStack,
 };
 use serde_json::json;
@@ -108,8 +109,106 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
     assert_eq!(value["outbounds"][1]["tag"], "block");
     assert_eq!(value["outbounds"][2]["tag"], "nethop-auto");
     assert_eq!(value["outbounds"][3]["tag"], "nethop-select");
-    assert!(value["dns"]["servers"].is_array());
+    assert_eq!(value["dns"]["servers"][0]["type"], "https");
+    assert_eq!(value["dns"]["servers"][0]["tag"], "dns-bootstrap");
+    assert_eq!(value["dns"]["servers"][0]["server"], "223.5.5.5");
+    assert_eq!(value["dns"]["servers"][0]["server_port"], 443);
+    assert_eq!(value["dns"]["servers"][0]["path"], "/dns-query");
+    assert_eq!(
+        value["dns"]["servers"][0]["headers"]["Host"],
+        "dns.alidns.com"
+    );
+    assert_eq!(
+        value["dns"]["servers"][0]["tls"]["server_name"],
+        "dns.alidns.com"
+    );
+    assert_eq!(value["dns"]["servers"][1]["type"], "https");
+    assert_eq!(value["dns"]["servers"][1]["tag"], "dns-proxy");
+    assert_eq!(value["dns"]["servers"][1]["server"], "1.1.1.1");
+    assert_eq!(value["dns"]["servers"][1]["detour"], "nethop-select");
+    assert_eq!(value["dns"]["final"], "dns-proxy");
+    assert_eq!(value["dns"]["strategy"], "prefer_ipv4");
+    assert_eq!(value["dns"]["disable_cache"], false);
+    assert_eq!(value["dns"]["cache_capacity"], 4096);
+    assert_eq!(value["route"]["default_domain_resolver"], "dns-bootstrap");
+    assert!(
+        value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule["action"] == "hijack-dns"
+                && rule["type"] == "logical"
+                && rule["mode"] == "or"
+                && rule["rules"].as_array().is_some_and(|rules| {
+                    rules.iter().any(|item| item["protocol"] == "dns")
+                        && rules.iter().any(|item| item["port"] == 53)
+                }))
+    );
     assert_eq!(config.node_count(), 2);
+}
+
+#[test]
+fn managed_options_control_urltest_logging_and_route_without_raw_json() {
+    let capture = CapturePolicy::new(
+        CaptureMode::Tproxy,
+        true,
+        Some(7893),
+        Some(0x4e48),
+        vec![],
+        vec![0],
+    )
+    .unwrap();
+    let profile = ManagedProfile::new(
+        capture,
+        vec![outbound("node-b"), outbound("node-a")],
+        ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+    )
+    .unwrap()
+    .with_options(
+        ManagedOptions::new(
+            ManagedOutboundMode::Rule,
+            ManagedSelectorMode::Manual,
+            15,
+            75,
+            1,
+            ManagedLogLevel::Debug,
+            true,
+            vec!["203.0.113.0/24".to_owned()],
+            vec!["192.0.2.0/24".to_owned()],
+        )
+        .unwrap(),
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(ManagedConfig::from_profile(profile).unwrap().bytes()).unwrap();
+
+    assert_eq!(value["log"]["level"], "debug");
+    assert_eq!(value["outbounds"][2]["interval"], "15m");
+    assert_eq!(value["outbounds"][2]["tolerance"], 75);
+    assert_eq!(
+        value["outbounds"][2]["outbounds"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(value["outbounds"][3]["default"], "node-a");
+    assert!(
+        value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| {
+                rule["ip_cidr"] == serde_json::json!(["203.0.113.0/24"])
+                    && rule["outbound"] == "nethop-select"
+            })
+    );
+    assert!(
+        value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| {
+                rule["ip_cidr"] == serde_json::json!(["192.0.2.0/24"])
+                    && rule["outbound"] == "direct"
+            })
+    );
 }
 
 #[test]
@@ -273,6 +372,46 @@ fn generation_store_publishes_manifest_and_current_pointer_atomically() {
     assert_eq!(manifest["node_count"], 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn generation_store_enforces_private_directory_and_file_modes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("store");
+    let store = GenerationStore::new(&root).unwrap();
+    let candidate = Candidate::new(
+        GenerationId::new(1).unwrap(),
+        ManagedConfig::from_outbounds(vec![outbound("one")]).unwrap(),
+    );
+    store.publish(&candidate, |_| Ok(())).unwrap();
+
+    for path in [
+        &root,
+        &root.join("generations"),
+        &root.join("generations/1"),
+    ] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "{} must be private",
+            path.display()
+        );
+    }
+    for path in [
+        root.join("generations/1/config.json"),
+        root.join("generations/1/manifest.json"),
+        root.join("generations/current"),
+    ] {
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "{} must be private",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn generation_lifecycle_does_not_activate_before_explicit_commit() {
     let directory = tempfile::tempdir().unwrap();
@@ -411,5 +550,23 @@ fn capture_policy_rejects_missing_tproxy_primitives_and_overlap() {
         )
         .unwrap_err(),
         CapturePolicyError::OverlappingUidPolicy
+    );
+}
+
+#[test]
+fn interface_policy_is_bounded_and_cannot_disable_every_interface() {
+    let policy =
+        InterfacePolicy::new(false, true, vec!["wlan*".into()], vec!["wlan-test".into()]).unwrap();
+    assert!(!policy.mobile());
+    assert!(policy.wifi());
+    assert_eq!(policy.include(), ["wlan*"]);
+    assert_eq!(policy.exclude(), ["wlan-test"]);
+    assert_eq!(
+        InterfacePolicy::new(false, false, Vec::new(), Vec::new()).unwrap_err(),
+        CapturePolicyError::InvalidInterfacePolicy
+    );
+    assert_eq!(
+        InterfacePolicy::new(true, true, vec!["bad/name".into()], Vec::new()).unwrap_err(),
+        CapturePolicyError::InvalidInterfacePolicy
     );
 }

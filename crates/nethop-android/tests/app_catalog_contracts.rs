@@ -1,4 +1,25 @@
-use nethop_android::{AppCatalog, AppCatalogError, AppClass, AppSelectionMode, PackageSnapshot};
+use nethop_android::{
+    AppCatalog, AppCatalogError, AppClass, AppSelectionMode, CapabilityError, PackageListKind,
+    PackageSnapshot, ProbeBackend, ProbeCommand, ProbeOutput,
+};
+
+struct PackageBackend;
+
+impl ProbeBackend for PackageBackend {
+    fn run(&mut self, command: ProbeCommand) -> Result<ProbeOutput, CapabilityError> {
+        let output = match command {
+            ProbeCommand::PackageList(PackageListKind::All) => {
+                "package:android uid:1000\npackage:com.example.user uid:10123\n"
+            }
+            ProbeCommand::PackageList(PackageListKind::System) => "package:android uid:1000\n",
+            ProbeCommand::PackageList(PackageListKind::User) => {
+                "package:com.example.user uid:10123\n"
+            }
+            _ => return Err(CapabilityError::InvalidPolicy),
+        };
+        Ok(ProbeOutput::new(true, output, ""))
+    }
+}
 
 fn snapshot() -> PackageSnapshot<'static> {
     PackageSnapshot::new(
@@ -118,4 +139,11 @@ fn mixed_shared_uid_is_classified_as_system_and_expands_atomically() {
         compiled.expansions()[0].affected_packages(),
         ["android", "com.vendor.shared"]
     );
+}
+
+#[test]
+fn primary_user_catalog_uses_only_bounded_probe_commands() {
+    let catalog = AppCatalog::load_primary_user(&mut PackageBackend).unwrap();
+    assert_eq!(catalog.app(0, "android").unwrap().uid(), 1000);
+    assert_eq!(catalog.app(0, "com.example.user").unwrap().uid(), 10_123);
 }

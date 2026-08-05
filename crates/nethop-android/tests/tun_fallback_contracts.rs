@@ -17,6 +17,7 @@ fn family(family: IpFamily) -> FamilyCapability {
         CapabilityStatus::Supported,
         CapabilityStatus::Supported,
         CapabilityStatus::Supported,
+        CapabilityStatus::Supported,
     )
 }
 

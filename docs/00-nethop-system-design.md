@@ -252,39 +252,43 @@ NetHop/
 ```text
 /data/adb/modules/nethop/       # 可被模块更新替换
 |-- bin/
+|-- config/
+|   `-- nethop.toml -> /data/adb/nethop/config/nethop.toml
 |-- service.sh
 |-- action.sh
 `-- module.prop
 
 /data/adb/nethop/               # 持久、0700、root:root
 |-- config/
-|   |-- nethop.json             # 用户托管配置，0600
-|   |-- expert.json             # 专家模式源，未启用时不存在
-|   `-- source.digest
+|   `-- nethop.toml             # 唯一用户配置 ABI，0600
 |-- generations/
 |   |-- <generation>/config.json
 |   |-- <generation>/manifest.json
 |   `-- current
 |-- subscriptions/
-|   |-- sources.json
 |   |-- cache/<source-id>/body
 |   `-- reports/<generation>.json
 |-- rulesets/
-|-- stats/traffic.db
-|-- state/runtime.json
+|-- stats/                     # 预留历史统计导出目录
+|-- state/
+|   |-- runtime.json
+|   |-- source-registry.v1.json # daemon-owned source ID，0600
+|   |-- nethop.db               # 自动更新调度与运行统计
+|   `-- api.secret              # 256-bit 随机值，0600
 |-- run/
 |   |-- supervisor.pid
 |   |-- worker.pid
 |   |-- sing-box.pid
 |   |-- nethopd.sock
 |   |-- stats.sock                 # 方案 A，0600；方案 B 时不存在
-|   `-- api.secret
 `-- logs/
 ```
 
 目录规则：
 
 - secret、订阅 URL、节点凭据、数据库和生成配置一律 `0600`。
+- `config/nethop.toml` 必须是 root 所有的绝对路径 `0600` 普通文件；模块只附带不含真实 URL 的 `defaults/nethop.toml`，首装复制，覆盖安装不改用户文件。
+- 模块目录中的 `config/nethop.toml` 只是指向持久文件的受控 symlink；daemon 同时监听两个固定目录，并对编辑器写断链接后的普通文件候选执行完整 admission 后再导入。
 - UDS 和 PID 目录不得允许普通 App 写入。
 - 活动文件名不能由订阅或 IPC 调用方指定。
 - 所有临时文件必须在目标目录内创建，`fsync(file) -> rename -> fsync(parent)` 后发布。
@@ -320,23 +324,21 @@ NetHop 不修改 `/system`，KernelSU 不需要 metamodule/OverlayFS 才能运�
 
 ### 8.3 Action 与 CLI
 
-`action.sh` 调用 `nethopctl service toggle`，并输出当前模式、核心状态、节点、最近错误和更新提示。
+`action.sh` 依次调用 `nethopctl config reload --wait`、`nethopctl update --if-needed --wait` 和 `nethopctl status`。它是 watch 降级和手动重试入口，不承担含糊的 toggle；持久启停只有 TOML 中的 `service.enabled`。
 
 首版 CLI 至少包括：
 
 ```text
 nethopctl status [--json]
-nethopctl service start|stop|restart|toggle
+nethopctl start|stop [--wait]
 nethopctl probe [--json]
-nethopctl subscription add|remove|list|update
-nethopctl node list|select|test
-nethopctl app list --system|--user [--android-user ID]
-nethopctl app mode blacklist|whitelist
-nethopctl app add|remove PACKAGE --android-user ID
-nethopctl traffic live|summary|history
-nethopctl config validate|apply|export
-nethopctl core version|check-update
-nethopctl diagnose
+nethopctl update [--if-needed] [--wait]
+nethopctl config get|schema
+nethopctl config validate|apply|mutate --expected-digest DIGEST  # JSON stdin
+nethopctl config reload [--wait]
+nethopctl capability get
+nethopctl hello --manager-version VERSION --protocol-min 1 --protocol-max 1
+nethopctl events [--kinds config,runtime,subscription,generation,network] --jsonl
 ```
 
 ### 8.4 停止与卸载
@@ -423,6 +425,12 @@ PREROUTING
   -> reply/socket divert
   -> TPROXY to sing-box inbound
 ```
+
+TPROXY 自有链必须把 `-m conntrack --ctdir REPLY -j ACCEPT` 放在所有 socket、mark、TPROXY 捕获规则之前，并同时安装在 `OUTPUT` 与 `PREROUTING`。这不是可选的性能优化：本地应用首个 SYN 经策略路由进入 loopback 后，sing-box 返回的 SYN-ACK 仍会经过 netfilter；若回包再次被 mark/TPROXY 捕获，客户端会永久停留在 `SYN-SENT`。该规则依赖 `NETFILTER_XT_MATCH_CONNTRACK`，能力探测失败时 TPROXY 必须拒绝发布，不能等待 `iptables-restore` 在运行时失败。
+
+`PREROUTING` 的精确顺序为 `reply bypass -> transparent socket divert -> -i lo -j RETURN -> mark-based TPROXY`。本机 OUTPUT 经策略路由送入 loopback 的包先由透明 socket 接收，其余 loopback 流量不能再次作为普通入站流量递归捕获；热点、USB 和中继流量另走未来独立入口，不得借删除 loopback bypass 实现。
+
+健康检查除了确认自有链、policy rule、local route 和 inbound listener，还必须读取活动族的 netfilter snapshot，验证 `OUTPUT` 与 `PREROUTING` 两条 reply bypass 位于全部捕获规则之前，并验证 PREROUTING 的 loopback bypass 位于 transparent socket divert 之后、mark-based TPROXY 之前。仅凭核心进程存活、7893 监听或策略规则存在，不能声明数据面健康。
 
 sing-box 所有出站 socket 必须设置独立 bypass mark。核心防环路优先依赖 mark，不以“进程恰好运行在 root UID”作为唯一保证。`nethopd` 经代理下载时显式连接 loopback SOCKS/mixed inbound，直连下载则使用 bypass mark。
 
@@ -609,6 +617,16 @@ YAML parser 必须限制 alias、节点数量、深度和展开后字节数，�
 - 核心运行时优先经 loopback proxy inbound 下载；允许配置直连回退并记录是否发生。
 - URL、Authorization、Cookie 和 query token 在日志中脱敏。
 
+当前手动更新入口为 `nethopctl update`，通过 root-only UDS 发送 `subscription.update`。worker 按以下顺序执行：
+
+1. 下载并解析全部 source，完成统一去重和托管配置生成；
+2. 写入 sealed candidate 并调用固定版本 `sing-box check`，不修改 `current`；
+3. 完整撤销旧网络接管并停止旧 core；
+4. 直接启动指定 sealed candidate，等待 core、网络规则和数据面健康；
+5. 健康后才原子提交 `current`；激活失败则删除候选并从未变化的旧 `current` 恢复。
+
+source 配置缺失时 worker 正常保持 fail-open/缓存 generation 能力，`subscription.update` 返回 `NH-SUB-UPDATE-UNAVAILABLE`。source 配置存在但不是 root-owned `0600` 普通文件，或 schema/URL 不合法时，worker fail-closed 拒绝初始化更新组件。同步 fetch 是当前明确的低频实现；24 小时调度接线完成前只提供手动触发，不把定时更新声明为已实现。
+
 ### 16.4 支持格式
 
 | 格式 | 行为 |
@@ -758,7 +776,7 @@ badlinkname,tfogo_checklinkname0
 
 ### 19.1 单写和乐观并发
 
-CLI/App 的配置保存请求包含 `expected_source_digest` 和完整替换文档。worker 在编译前后各检查一次 digest，拒绝覆盖并发修改。客户端不能直接写 `current` generation。
+CLI/App 的配置保存请求包含 `expected_config_digest` 和完整 typed document。该 digest 覆盖最近稳定读取的 TOML exact bytes；worker 在准备和提交阶段检查 CAS，拒绝覆盖并发修改。source/generation 内容身份另用 `source_config_digest`，两者不能混用。客户端不能直接写 `current` generation。
 
 ### 19.2 generation 发布
 
@@ -885,6 +903,8 @@ NH-AUTH-*         IPC 调用者与权限
 
 订阅、规则集和 sing-box 版本检查均支持手动触发；默认周期 24 小时。worker 使用持久 `next_run`、失败退避和稳定 jitter，不依赖 Android `crond`。
 
+实现状态：订阅手动触发、持久 schedule 数据结构、退避与 jitter 已分别完成；将 schedule 到期事件接入订阅 update worker 仍是后续独立组件。完成前不得在 release notes 中宣称自动 24 小时订阅更新。
+
 ### 22.2 sing-box 更新
 
 版本检查只查询上游正式 release，忽略 prerelease。发现高于当前 pin 的稳定版时：
@@ -941,6 +961,8 @@ NH-AUTH-*         IPC 调用者与权限
 4. 每种模式至少 5 次，报告中位数、P10/P90、CPU、RSS、温度和重传。
 5. UDP、DNS、TCP_RR 和 QUIC 单独测试，不混入 TCP streaming 百分比。
 6. 报告写明设备型号、SoC、Android build、Root 管理器、内核、netfilter backend、网络接口、sing-box/NetHop commit 和 build manifest，不用“高端/中端”替代可复现 fixture。
+
+数据面 smoke 还必须覆盖普通 shell/app UID 的 IPv4 TCP HTTPS 204（至少一次新建连接和一次复用连接）、UDP DNS/QUIC 可达性、IPv6 captured 或 guard 语义，以及核心出站不回环。抓包或计数器应证明代理回包没有再次命中自有捕获链；只检查 `running_tproxy`、监听端口和规则计数不足以通过验收。
 
 ### 24.2 发布闸门
 

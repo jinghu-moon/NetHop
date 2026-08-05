@@ -1,10 +1,12 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
+use serde::Deserialize;
 use ureq::config::Config;
-use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::resolver::{ArrayVec, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{
     Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, RustlsConnector, Transport,
 };
@@ -13,7 +15,7 @@ use ureq::{Agent, Error as UreqError};
 use super::{
     ContentEncoding, FetchEndpoint, FetchError, FetchOutcome, FetchPolicy, FetchPolicyError,
     ParserLimits, RequestProfile, SourceCache, decode_response_body, is_denied_ssrf_address,
-    next_redirect,
+    next_redirect, read_bounded,
 };
 
 #[derive(Debug)]
@@ -33,29 +35,138 @@ impl fmt::Display for SecurityAdapterError {
 
 impl std::error::Error for SecurityAdapterError {}
 
-#[derive(Debug, Default)]
-struct SafeResolver {
-    inner: DefaultResolver,
+const DOH_HOST: &str = "dns.alidns.com";
+const DOH_ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(223, 5, 5, 5)), 443);
+const MAX_DOH_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_RESOLVED_ADDRESSES: usize = 16;
+
+#[derive(Debug)]
+struct SafeDohResolver {
+    agent: Agent,
 }
 
-impl Resolver for SafeResolver {
+impl Default for SafeDohResolver {
+    fn default() -> Self {
+        Self {
+            agent: build_doh_agent(),
+        }
+    }
+}
+
+impl Resolver for SafeDohResolver {
     fn resolve(
         &self,
         uri: &ureq::http::Uri,
-        config: &Config,
-        timeout: ureq::unversioned::transport::NextTimeout,
+        _config: &Config,
+        _timeout: ureq::unversioned::transport::NextTimeout,
     ) -> Result<ResolvedSocketAddrs, UreqError> {
-        let addresses = self.inner.resolve(uri, config, timeout)?;
-        if addresses.is_empty()
-            || addresses
-                .iter()
-                .any(|address| is_denied_ssrf_address(address.ip()))
-        {
+        let host = uri.host().ok_or(UreqError::HostNotFound)?;
+        let port = uri.port_u16().unwrap_or(443);
+        if let Ok(address) = host.parse::<IpAddr>() {
+            return resolved_addresses([address], port);
+        }
+
+        let mut addresses = BTreeSet::new();
+        self.resolve_record_type(host, "A", &mut addresses)?;
+        self.resolve_record_type(host, "AAAA", &mut addresses)?;
+        resolved_addresses(addresses, port)
+    }
+}
+
+impl SafeDohResolver {
+    fn resolve_record_type(
+        &self,
+        host: &str,
+        record_type: &str,
+        addresses: &mut BTreeSet<IpAddr>,
+    ) -> Result<(), UreqError> {
+        let mut endpoint = url::Url::parse(&format!("https://{DOH_HOST}/resolve"))
+            .map_err(|_| UreqError::HostNotFound)?;
+        endpoint
+            .query_pairs_mut()
+            .append_pair("name", host)
+            .append_pair("type", record_type);
+        let response = self
+            .agent
+            .get(endpoint.as_str())
+            .header("Accept", "application/dns-json")
+            .call()?;
+        if response.status().as_u16() != 200 {
+            return Err(UreqError::HostNotFound);
+        }
+        let body = read_bounded(response.into_body().into_reader(), MAX_DOH_RESPONSE_BYTES)
+            .map_err(|_| UreqError::HostNotFound)?;
+        extend_doh_addresses(&body, addresses)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DohResponse {
+    #[serde(rename = "Status")]
+    status: u16,
+    #[serde(rename = "Answer", default)]
+    answers: Vec<DohRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DohRecord {
+    #[serde(rename = "type")]
+    record_type: u16,
+    data: String,
+}
+
+fn extend_doh_addresses(body: &[u8], addresses: &mut BTreeSet<IpAddr>) -> Result<(), UreqError> {
+    let answer: DohResponse = serde_json::from_slice(body).map_err(|_| UreqError::HostNotFound)?;
+    if answer.status != 0 {
+        return Err(UreqError::HostNotFound);
+    }
+    for record in answer.answers {
+        if !matches!(record.record_type, 1 | 28) {
+            continue;
+        }
+        let address = record
+            .data
+            .parse::<IpAddr>()
+            .map_err(|_| UreqError::HostNotFound)?;
+        addresses.insert(address);
+        if addresses.len() > MAX_RESOLVED_ADDRESSES {
+            return Err(UreqError::HostNotFound);
+        }
+    }
+    Ok(())
+}
+
+fn resolved_addresses(
+    addresses: impl IntoIterator<Item = IpAddr>,
+    port: u16,
+) -> Result<ResolvedSocketAddrs, UreqError> {
+    let mut resolved: ResolvedSocketAddrs =
+        ArrayVec::from_fn(|_| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
+    for address in addresses {
+        if is_denied_ssrf_address(address) {
             return Err(UreqError::Other(Box::new(
                 SecurityAdapterError::DeniedAddress,
             )));
         }
-        Ok(addresses)
+        resolved.push(SocketAddr::new(address, port));
+    }
+    if resolved.is_empty() {
+        return Err(UreqError::HostNotFound);
+    }
+    Ok(resolved)
+}
+
+#[derive(Debug)]
+struct FixedResolver(SocketAddr);
+
+impl Resolver for FixedResolver {
+    fn resolve(
+        &self,
+        _uri: &ureq::http::Uri,
+        _config: &Config,
+        _timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, UreqError> {
+        resolved_addresses([self.0.ip()], self.0.port())
     }
 }
 
@@ -242,8 +353,31 @@ pub(super) fn fetch_endpoint(
     debug_assert!(config.tls_config().use_sni());
 
     let connector = ().chain(SafeTcpConnector).chain(RustlsConnector::default());
-    let agent = Agent::with_parts(config, connector, SafeResolver::default());
+    let agent = Agent::with_parts(config, connector, SafeDohResolver::default());
     fetch_with_agent(&agent, endpoint, profile, cache, policy, limits)
+}
+
+fn build_doh_agent() -> Agent {
+    let config = Agent::config_builder()
+        .http_status_as_error(false)
+        .https_only(true)
+        .proxy(None)
+        .max_redirects(0)
+        .user_agent("NetHop/0.1")
+        .accept("application/dns-json")
+        .max_response_header_size(16 * 1024)
+        .input_buffer_size(8 * 1024)
+        .output_buffer_size(4 * 1024)
+        .max_idle_connections(0)
+        .max_idle_connections_per_host(0)
+        .timeout_global(Some(Duration::from_secs(10)))
+        .timeout_per_call(Some(Duration::from_secs(10)))
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_recv_response(Some(Duration::from_secs(5)))
+        .timeout_recv_body(Some(Duration::from_secs(5)))
+        .build();
+    let connector = ().chain(SafeTcpConnector).chain(RustlsConnector::default());
+    Agent::with_parts(config, connector, FixedResolver(DOH_ADDRESS))
 }
 
 fn build_ureq_config(policy: &FetchPolicy) -> Config {
@@ -416,6 +550,55 @@ mod tests {
 
     const CERT_DER_BASE64: &str = "MIIDWzCCAkOgAwIBAgIUbYFcSzns6cFOyzu9oy3S6SWUiWgwDQYJKoZIhvcNAQELBQAwHDEaMBgGA1UEAwwRc3Vic2NyaXB0aW9uLnRlc3QwHhcNMjYwODAyMDYzMzA2WhcNMzYwNzMwMDYzMzA2WjAcMRowGAYDVQQDDBFzdWJzY3JpcHRpb24udGVzdDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALgMCmEB+O1pcJvfKt8g3JMuWe6aUU26dtBDWO4kmG7cGQD4+aXendfwB7DJ4NxVhJMiM/i/THjeWi43BQPuOHZA3U8AzhRKsPjorCe5fAi1CUbXUrF2BnxjAQlMBBYkXSLObGZPQ6CycGXDrYcXrPwKftkZpy8q8FEHmMnXRidGuWVgpPs7ng4DwohrxuJCmD5WL37pxX+Ulx09SHfCZz0+yL4uSGenwP2JMk16ciRJYPzD5ZmOjugtFuTCSQhuRs8XaLqvswRngFBqYXeX/nPK2KJ5jOPHJr+4OAeeu5F6CAmMu19CsE6plet+tevopfY6vBJ/5D4mEVIohmwXGaECAwEAAaOBlDCBkTAdBgNVHQ4EFgQUAACdEg5Vxr8hkb/eE0e5zc7VOeYwHwYDVR0jBBgwFoAUAACdEg5Vxr8hkb/eE0e5zc7VOeYwHAYDVR0RBBUwE4IRc3Vic2NyaXB0aW9uLnRlc3QwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDQYJKoZIhvcNAQELBQADggEBAIbAykBaX9kKuWdZCfAGfhddILCp5K80RRtdAwLp9hCVjhtdywps3F3d9Fp8gsAY3VR4xQQ1yrZb/mCjSIBSPIcW5V3RvyXtZeMQQumm60ANQErEOhDJmaMfmxertLJhZPuorwLy1FZw0DCstupyxI0Vk4tqAEjCHiKDnHrkAFG7Q8gkD4lsA4Zc2wI3t8f0q1CBlScBNHZnhC7m3dMfQIdWc0eF9giXONm1Fqt6yftwUGHUfdu8Vit5XvbxNS2h09o9yYMWSa0gZM7v1+H6D8eREwXUL5RDd4erv/ENKuE2TaSO+gptfcrs990wO9yql3A5Hha+N4vjSA6wlb+k/Uw=";
     const KEY_DER_BASE64: &str = "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC4DAphAfjtaXCb3yrfINyTLlnumlFNunbQQ1juJJhu3BkA+Pml3p3X8AewyeDcVYSTIjP4v0x43louNwUD7jh2QN1PAM4USrD46KwnuXwItQlG11KxdgZ8YwEJTAQWJF0izmxmT0OgsnBlw62HF6z8Cn7ZGacvKvBRB5jJ10YnRrllYKT7O54OA8KIa8biQpg+Vi9+6cV/lJcdPUh3wmc9Psi+Lkhnp8D9iTJNenIkSWD8w+WZjo7oLRbkwkkIbkbPF2i6r7MEZ4BQamF3l/5zytiieYzjxya/uDgHnruReggJjLtfQrBOqZXrfrXr6KX2OrwSf+Q+JhFSKIZsFxmhAgMBAAECggEAGdpnItVaGE91aA/jP9Cn62zZaTD4Nsj4o6yyM1Gkr/3u7ToMJ4ar+YdYLTdOhOTmaJynXEvS/C+Pz2ofJDw0ZjgaXlyoliUf0vcsJ7BgggCcOv1IOnFv2800eg/Zixq0ko0YoQ6FW291ZnYkTBPBUu5Of0ShPXj0pQ1CIyhATIffIwv5XDNASXf0pliXkKtSwouOfIhGgysWeIAjIg85DCB2OeLdGiensOoo6XGtoWgBS2WJX8R7eQnhzcD5n5ELEEDnqO+b4/eLkAU7u4ctGLvHnQDIpK4PohyJcoB3g70Ubp7GkFH0jCgkkDNFkrmrJiLPj1rsi+4o03k+/5KWOQKBgQD7Y+FkvlqYQeBW1BoDf6ax0pUIyUuqTb005mPGRAVvlY+PuaJf10MZbKchYz9IhKlSexthkMBjnaAzd9yV3x6nAuqBrQAJnfafcAGnxSFKdidMOVUPfr3W9/1PlofQ1nUKoxRyYBZ2d2okvOAudGglF6oamo1TQBMOJteuXJZ5swKBgQC7bAa4TsUzfmFt3XDMo1I5kgJqZDr4Ok5bKZidcsvz8mPost8/zAxJAMlSYso7gG9RUVxM8DokBNNxCJmididXPQVcr35Advl78iDgYnZ2l+ScBFsA1HiXIW8PZk1riADQXBd7BUasy7dUeYnYqoXYlMOHGhwreD4mN6kX4oVNWwKBgCSHX/IWou1q7SFQ0rLdcqh2NAfB0Eff4fV04Nynd66+Kc01qT2J9wsTubllRYXRGRWOI+1qbjpLZkL0UM5KTJbyGodbTx0WogaK7QKm5259erpdvllxDj7VbC6LbhLPhtRT3B2+jqUKNxc9hsnZSmTRantRJ+YH8nzk8gQ5Gfh3AoGAcY52U92GJjkAlyyAV7zs6OzKgePQxu2s5BdD3MHdSSUn26nlEiZzmxfa4wvwNDURPVfqcMNstr4lzmrDi2fDVlwmj43VFQIBD1QZD1sZI6nMXatV6B7UId2kCNSXO/vfYl8p6uO7ep7DqW8qUhifmCYqggUT5FKqdUVsMoiQ89kCgYA21jRCIqCw8skWhFOK6iLDbCsLxc5p3NaMoRTwumPDVQG8TGaxTfV6rdAHPQdeS3iVPNmnhKI1tlqTunOOFc7HBhRRuhffHKvKYNZxW0jX/hV/Mn6ZGIqA9oFB1oAsNPRFP/naGgL1TctSCHXqlo5Xpa5U+xlZMQ850uNgFRh4Sg==";
+
+    #[test]
+    fn doh_response_accepts_only_bounded_ip_answers() {
+        let mut addresses = BTreeSet::new();
+        extend_doh_addresses(
+            br#"{"Status":0,"Answer":[{"type":5,"data":"alias.example."},{"type":1,"data":"35.78.253.2"},{"type":28,"data":"2001:db8::1"}]}"#,
+            &mut addresses,
+        )
+        .unwrap();
+
+        assert_eq!(addresses.len(), 2);
+        assert!(addresses.contains(&"35.78.253.2".parse().unwrap()));
+        assert!(addresses.contains(&"2001:db8::1".parse().unwrap()));
+        assert!(extend_doh_addresses(br#"{"Status":3}"#, &mut addresses).is_err());
+        assert!(
+            extend_doh_addresses(
+                br#"{"Status":0,"Answer":[{"type":1,"data":"not-an-ip"}]}"#,
+                &mut addresses
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn resolved_addresses_reject_fake_ip_and_preserve_https_port() {
+        let denied = resolved_addresses(["198.18.0.5".parse().unwrap()], 443).unwrap_err();
+        assert!(matches!(denied, UreqError::Other(_)));
+
+        let resolved = resolved_addresses(
+            [
+                "35.78.253.2".parse().unwrap(),
+                "2606:4700::6810:84e5".parse().unwrap(),
+            ],
+            8443,
+        )
+        .unwrap();
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.iter().all(|address| address.port() == 8443));
+    }
+
+    #[test]
+    fn doh_response_rejects_more_than_resolver_capacity() {
+        let answers = (1..=MAX_RESOLVED_ADDRESSES + 1)
+            .map(|index| serde_json::json!({"type": 1, "data": format!("8.8.8.{index}")}))
+            .collect::<Vec<_>>();
+        let body =
+            serde_json::to_vec(&serde_json::json!({"Status": 0, "Answer": answers})).unwrap();
+        assert!(extend_doh_addresses(&body, &mut BTreeSet::new()).is_err());
+    }
 
     #[derive(Debug)]
     struct FixedResolver(SocketAddr);

@@ -1,0 +1,334 @@
+use std::{
+    collections::{BTreeSet, VecDeque},
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{Arc, Condvar, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use nethop_protocol::{EventKind, RequestId, StreamFrame};
+use serde_json::{Value, json};
+use thiserror::Error;
+
+const DEFAULT_CAPACITY: usize = 128;
+const MAX_CAPACITY: usize = 1_024;
+const MAX_SUBSCRIBERS: usize = 4;
+const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
+const MAX_LOG_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
+
+#[derive(Debug, Clone)]
+pub struct EventHub {
+    shared: Arc<Shared>,
+}
+
+#[derive(Debug)]
+struct Shared {
+    state: Mutex<State>,
+    changed: Condvar,
+    capacity: usize,
+    log: Mutex<Option<FileEventLog>>,
+}
+
+#[derive(Debug)]
+struct State {
+    next_sequence: u64,
+    subscribers: usize,
+    snapshot: Value,
+    events: VecDeque<EventRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct EventRecord {
+    sequence: u64,
+    kind: EventKind,
+    payload: Value,
+}
+
+impl EventHub {
+    pub fn new(snapshot: Value, capacity: usize) -> Result<Self, EventError> {
+        if capacity == 0 || capacity > MAX_CAPACITY || !snapshot.is_object() {
+            return Err(EventError::InvalidPolicy);
+        }
+        Ok(Self {
+            shared: Arc::new(Shared {
+                state: Mutex::new(State {
+                    next_sequence: 1,
+                    subscribers: 0,
+                    snapshot,
+                    events: VecDeque::with_capacity(capacity),
+                }),
+                changed: Condvar::new(),
+                capacity,
+                log: Mutex::new(None),
+            }),
+        })
+    }
+
+    pub fn install_file_log(&self, directory: impl Into<PathBuf>) -> Result<(), EventError> {
+        let log = FileEventLog::new(directory.into())?;
+        let mut installed = self
+            .shared
+            .log
+            .lock()
+            .map_err(|_| EventError::Unavailable)?;
+        *installed = Some(log);
+        Ok(())
+    }
+
+    pub fn publish(&self, kind: EventKind, payload: Value) {
+        if !payload.is_object() {
+            return;
+        }
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let sequence = state.next_sequence;
+        state.next_sequence = state.next_sequence.saturating_add(1).max(1);
+        if state.events.len() == self.shared.capacity {
+            state.events.pop_front();
+        }
+        state.events.push_back(EventRecord {
+            sequence,
+            kind,
+            payload: payload.clone(),
+        });
+        self.shared.changed.notify_all();
+        drop(state);
+        if let Ok(mut log) = self.shared.log.lock()
+            && let Some(log) = log.as_mut()
+        {
+            let _ = log.write(sequence, kind, &payload);
+        }
+    }
+
+    pub fn replace_snapshot(&self, snapshot: Value) {
+        if !snapshot.is_object() {
+            return;
+        }
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.snapshot = snapshot;
+    }
+
+    pub fn subscribe(
+        &self,
+        request_id: RequestId,
+        kinds: &[EventKind],
+    ) -> Result<EventSubscription, EventError> {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| EventError::Unavailable)?;
+        if state.subscribers >= MAX_SUBSCRIBERS {
+            return Err(EventError::Busy);
+        }
+        state.subscribers += 1;
+        let snapshot_sequence = state.next_sequence;
+        state.next_sequence = state.next_sequence.saturating_add(1).max(1);
+        let cursor = state.next_sequence;
+        let snapshot = state.snapshot.clone();
+        Ok(EventSubscription {
+            shared: Arc::clone(&self.shared),
+            request_id,
+            kinds: kinds.iter().copied().collect(),
+            cursor,
+            initial_snapshot: Some((snapshot_sequence, snapshot)),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct FileEventLog {
+    directory: PathBuf,
+    day: Option<u64>,
+    file: Option<File>,
+    bytes: u64,
+}
+
+impl FileEventLog {
+    fn new(directory: PathBuf) -> Result<Self, EventError> {
+        if !directory.is_absolute() {
+            return Err(EventError::InvalidLogDirectory);
+        }
+        let metadata =
+            fs::symlink_metadata(&directory).map_err(|_| EventError::InvalidLogDirectory)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(EventError::InvalidLogDirectory);
+        }
+        Ok(Self {
+            directory,
+            day: None,
+            file: None,
+            bytes: 0,
+        })
+    }
+
+    fn write(&mut self, sequence: u64, kind: EventKind, payload: &Value) -> Result<(), EventError> {
+        let day = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| EventError::Unavailable)?
+            .as_secs()
+            / SECONDS_PER_DAY;
+        if self.day != Some(day) {
+            let path = self.directory.join(format!("events-{day:010}.log"));
+            let (file, bytes) = open_private_append(&path)?;
+            self.file = Some(file);
+            self.day = Some(day);
+            self.bytes = bytes;
+        }
+        if self.bytes >= MAX_LOG_FILE_BYTES {
+            return Ok(());
+        }
+        let mut line = serde_json::to_vec(&json!({
+            "seq": sequence,
+            "kind": kind,
+            "payload": payload,
+        }))
+        .map_err(|_| EventError::Unavailable)?;
+        line.push(b'\n');
+        if line.len() > MAX_LOG_LINE_BYTES
+            || self.bytes.saturating_add(line.len() as u64) > MAX_LOG_FILE_BYTES
+        {
+            return Ok(());
+        }
+        let file = self.file.as_mut().ok_or(EventError::Unavailable)?;
+        file.write_all(&line).map_err(|_| EventError::Unavailable)?;
+        self.bytes += line.len() as u64;
+        Ok(())
+    }
+}
+
+fn open_private_append(path: &Path) -> Result<(File, u64), EventError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(EventError::Unavailable),
+    };
+    if metadata
+        .as_ref()
+        .is_some_and(|metadata| !metadata.is_file() || metadata.file_type().is_symlink())
+    {
+        return Err(EventError::InvalidLogDirectory);
+    }
+    let mut options = OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options.open(path).map_err(|_| EventError::Unavailable)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|_| EventError::Unavailable)?;
+    }
+    let bytes = file.metadata().map_err(|_| EventError::Unavailable)?.len();
+    Ok((file, bytes))
+}
+
+impl Default for EventHub {
+    fn default() -> Self {
+        Self::new(json!({"kind":"snapshot","state":"init"}), DEFAULT_CAPACITY)
+            .expect("default event policy is valid")
+    }
+}
+
+pub struct EventSubscription {
+    shared: Arc<Shared>,
+    request_id: RequestId,
+    kinds: BTreeSet<EventKind>,
+    cursor: u64,
+    initial_snapshot: Option<(u64, Value)>,
+}
+
+impl EventSubscription {
+    pub fn next_frame(&mut self) -> Result<StreamFrame, EventError> {
+        if let Some((sequence, snapshot)) = self.initial_snapshot.take() {
+            return Ok(StreamFrame::item(
+                self.request_id.clone(),
+                sequence,
+                snapshot,
+            ));
+        }
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| EventError::Unavailable)?;
+        loop {
+            if let Some(oldest) = state.events.front().map(|event| event.sequence)
+                && self.cursor < oldest
+            {
+                let resync_sequence = state.next_sequence;
+                state.next_sequence = state.next_sequence.saturating_add(1).max(1);
+                let snapshot_sequence = state.next_sequence;
+                state.next_sequence = state.next_sequence.saturating_add(1).max(1);
+                self.cursor = state.next_sequence;
+                self.initial_snapshot = Some((snapshot_sequence, state.snapshot.clone()));
+                return Ok(StreamFrame::item(
+                    self.request_id.clone(),
+                    resync_sequence,
+                    json!({"kind":"resync_required"}),
+                ));
+            }
+            if let Some(event) = state
+                .events
+                .iter()
+                .find(|event| event.sequence >= self.cursor && self.accepts(event.kind))
+                .cloned()
+            {
+                self.cursor = event.sequence.saturating_add(1);
+                return Ok(StreamFrame::item(
+                    self.request_id.clone(),
+                    event.sequence,
+                    event.payload,
+                ));
+            }
+            self.cursor = self.cursor.max(state.next_sequence);
+            state = self
+                .shared
+                .changed
+                .wait(state)
+                .map_err(|_| EventError::Unavailable)?;
+        }
+    }
+
+    fn accepts(&self, kind: EventKind) -> bool {
+        self.kinds.is_empty() || self.kinds.contains(&kind)
+    }
+}
+
+impl Drop for EventSubscription {
+    fn drop(&mut self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.subscribers = state.subscribers.saturating_sub(1);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EventError {
+    #[error("event stream policy is invalid")]
+    InvalidPolicy,
+    #[error("event log directory is invalid")]
+    InvalidLogDirectory,
+    #[error("event subscriber limit is reached")]
+    Busy,
+    #[error("event stream is unavailable")]
+    Unavailable,
+}

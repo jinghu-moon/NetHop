@@ -1,4 +1,4 @@
-use nethop_core::{CaptureMode, CapturePolicy, GenerationId};
+use nethop_core::{CaptureMode, CapturePolicy, GenerationId, InterfacePolicy};
 use thiserror::Error;
 
 use crate::capability::{CapabilityReport, CapabilityStatus, IpFamily, ResourceCandidate};
@@ -83,6 +83,10 @@ impl NetworkPlan {
             format!("NH_OUT_{}", self.slot.suffix())
         }
     }
+
+    pub(crate) fn prerouting_chain(&self) -> String {
+        format!("NH_PRE_{}", self.slot.suffix())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +168,7 @@ impl NetworkPlanner {
         if bypass_mark & allocation.mask() == allocation.mark() {
             return Err(NetworkPlanError::BypassMarkConflict);
         }
+        let interfaces = resolve_interfaces(policy.interface_policy(), capabilities.interfaces())?;
 
         let ipv6_tproxy = capabilities.ipv6().supports_tproxy();
         let ipv6_present = match capabilities.ipv6().address() {
@@ -201,6 +206,7 @@ impl NetworkPlanner {
             allocation,
             inbound_port,
             &owner,
+            interfaces.as_deref(),
         );
         steps.push(restore_step(
             NetworkOperationKind::NetfilterRestore,
@@ -216,6 +222,7 @@ impl NetworkPlanner {
                 allocation,
                 inbound_port,
                 &owner,
+                interfaces.as_deref(),
             );
             steps.push(restore_step(
                 NetworkOperationKind::NetfilterRestore,
@@ -248,6 +255,7 @@ pub enum PlanDiagnosticCode {
     Ipv6LeakRisk,
     ResourceConflict,
     BypassMarkConflict,
+    InterfaceSelectionEmpty,
 }
 
 impl PlanDiagnosticCode {
@@ -263,6 +271,7 @@ impl PlanDiagnosticCode {
             Self::Ipv6LeakRisk => "network_plan_ipv6_leak_risk",
             Self::ResourceConflict => "network_plan_resource_conflict",
             Self::BypassMarkConflict => "network_plan_bypass_mark_conflict",
+            Self::InterfaceSelectionEmpty => "network_plan_interface_selection_empty",
         }
     }
 }
@@ -289,6 +298,8 @@ pub enum NetworkPlanError {
     ResourceConflict,
     #[error("capture mark conflicts with the core bypass mark")]
     BypassMarkConflict,
+    #[error("configured interface scope matches no safe Android interface")]
+    InterfaceSelectionEmpty,
 }
 
 impl NetworkPlanError {
@@ -304,6 +315,7 @@ impl NetworkPlanError {
             Self::Ipv6LeakRisk => PlanDiagnosticCode::Ipv6LeakRisk,
             Self::ResourceConflict => PlanDiagnosticCode::ResourceConflict,
             Self::BypassMarkConflict => PlanDiagnosticCode::BypassMarkConflict,
+            Self::InterfaceSelectionEmpty => PlanDiagnosticCode::InterfaceSelectionEmpty,
         }
     }
 }
@@ -369,6 +381,7 @@ fn tproxy_payloads(
     allocation: ResourceCandidate,
     inbound_port: u16,
     owner: &str,
+    interfaces: Option<&[String]>,
 ) -> (String, String) {
     let suffix = slot.suffix();
     let output_chain = format!("NH_OUT_{suffix}");
@@ -386,11 +399,28 @@ fn tproxy_payloads(
             policy.bypass_mark().expect("validated TPROXY policy"),
             allocation.mask()
         ),
+        format!("-A {output_chain} -m conntrack --ctdir REPLY -j ACCEPT"),
+        format!("-A {prerouting_chain} -m conntrack --ctdir REPLY -j ACCEPT"),
     ];
+    apply.extend([
+        format!(
+            "-A {output_chain} -p tcp --dport 53 -j MARK --set-xmark 0x{:x}/0x{:x}",
+            allocation.mark(),
+            allocation.mask()
+        ),
+        format!(
+            "-A {output_chain} -p udp --dport 53 -j MARK --set-xmark 0x{:x}/0x{:x}",
+            allocation.mark(),
+            allocation.mask()
+        ),
+    ]);
+    // Android's netd emits app DNS queries as UID 0. Capture DNS before the
+    // core UID bypass; sing-box's own upstream connections use non-DNS ports.
+    append_output_uid_bypasses(&mut apply, &output_chain, policy);
     for destination in reserved_destinations(family) {
         apply.push(format!("-A {output_chain} -d {destination} -j RETURN"));
     }
-    append_output_uid_rules(&mut apply, &output_chain, policy, allocation);
+    append_output_capture_rules(&mut apply, &output_chain, policy, allocation, interfaces);
     apply.extend([
         format!(
             "-A {divert_chain} -j MARK --set-xmark 0x{:x}/0x{:x}",
@@ -398,25 +428,50 @@ fn tproxy_payloads(
             allocation.mask()
         ),
         format!("-A {divert_chain} -j ACCEPT"),
-        format!(
+    ]);
+    if policy.proxy_tcp() {
+        apply.push(format!(
             "-A {prerouting_chain} -p tcp -m socket --transparent -j {divert_chain}"
-        ),
-        format!(
+        ));
+    }
+    apply.push(format!(
+        "-A {prerouting_chain} -i lo -m mark ! --mark 0x{:x}/0x{:x} -j RETURN",
+        allocation.mark(),
+        allocation.mask()
+    ));
+    apply.push(format!(
+        "-A {prerouting_chain} -p tcp --dport 53 -m mark --mark 0x{:x}/0x{:x} -j TPROXY --on-port {inbound_port} --tproxy-mark 0x{:x}/0x{:x}",
+        allocation.mark(),
+        allocation.mask(),
+        allocation.mark(),
+        allocation.mask()
+    ));
+    apply.push(format!(
+        "-A {prerouting_chain} -p udp --dport 53 -m mark --mark 0x{:x}/0x{:x} -j TPROXY --on-port {inbound_port} --tproxy-mark 0x{:x}/0x{:x}",
+        allocation.mark(),
+        allocation.mask(),
+        allocation.mark(),
+        allocation.mask()
+    ));
+    if policy.proxy_tcp() {
+        apply.push(format!(
             "-A {prerouting_chain} -p tcp -m mark --mark 0x{:x}/0x{:x} -j TPROXY --on-port {inbound_port} --tproxy-mark 0x{:x}/0x{:x}",
             allocation.mark(),
             allocation.mask(),
             allocation.mark(),
             allocation.mask()
-        ),
-        format!(
+        ));
+    }
+    if policy.proxy_udp() {
+        apply.push(format!(
             "-A {prerouting_chain} -p udp -m mark --mark 0x{:x}/0x{:x} -j TPROXY --on-port {inbound_port} --tproxy-mark 0x{:x}/0x{:x}",
             allocation.mark(),
             allocation.mask(),
             allocation.mark(),
             allocation.mask()
-        ),
-        "COMMIT".to_owned(),
-    ]);
+        ));
+    }
+    apply.push("COMMIT".to_owned());
 
     let rollback = [
         "*mangle".to_owned(),
@@ -435,16 +490,38 @@ fn tproxy_payloads(
     (apply.join("\n") + "\n", rollback)
 }
 
-fn append_output_uid_rules(
+fn append_output_uid_bypasses(rules: &mut Vec<String>, chain: &str, policy: &CapturePolicy) {
+    for uid in policy.exclude_uids() {
+        rules.push(format!("-A {chain} -m owner --uid-owner {uid} -j RETURN"));
+    }
+}
+
+fn append_output_capture_rules(
     rules: &mut Vec<String>,
     chain: &str,
     policy: &CapturePolicy,
     allocation: ResourceCandidate,
+    interfaces: Option<&[String]>,
 ) {
-    for uid in policy.exclude_uids() {
-        rules.push(format!("-A {chain} -m owner --uid-owner {uid} -j RETURN"));
-    }
-    if policy.include_uids().is_empty() {
+    if let Some(interfaces) = interfaces {
+        for interface in interfaces {
+            if policy.include_uids().is_empty() {
+                rules.push(format!(
+                    "-A {chain} -o {interface} -j MARK --set-xmark 0x{:x}/0x{:x}",
+                    allocation.mark(),
+                    allocation.mask()
+                ));
+            } else {
+                for uid in policy.include_uids() {
+                    rules.push(format!(
+                        "-A {chain} -o {interface} -m owner --uid-owner {uid} -j MARK --set-xmark 0x{:x}/0x{:x}",
+                        allocation.mark(),
+                        allocation.mask()
+                    ));
+                }
+            }
+        }
+    } else if policy.include_uids().is_empty() {
         rules.push(format!(
             "-A {chain} -j MARK --set-xmark 0x{:x}/0x{:x}",
             allocation.mark(),
@@ -459,6 +536,87 @@ fn append_output_uid_rules(
             ));
         }
     }
+}
+
+fn resolve_interfaces(
+    policy: &InterfacePolicy,
+    available: &[String],
+) -> Result<Option<Vec<String>>, NetworkPlanError> {
+    if policy.is_unrestricted() {
+        return Ok(None);
+    }
+    let mut selected = available
+        .iter()
+        .filter(|name| name.as_str() != "lo")
+        .filter(|name| {
+            if policy.include().is_empty() {
+                (policy.mobile() && is_mobile_interface(name))
+                    || (policy.wifi() && is_wifi_interface(name))
+            } else {
+                policy
+                    .include()
+                    .iter()
+                    .any(|pattern| glob_matches(pattern, name))
+            }
+        })
+        .filter(|name| {
+            !policy
+                .exclude()
+                .iter()
+                .any(|pattern| glob_matches(pattern, name))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    selected.sort();
+    selected.dedup();
+    if selected.is_empty() {
+        Err(NetworkPlanError::InterfaceSelectionEmpty)
+    } else {
+        Ok(Some(selected))
+    }
+}
+
+fn is_wifi_interface(name: &str) -> bool {
+    ["wlan", "wifi", "swlan"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+fn is_mobile_interface(name: &str) -> bool {
+    [
+        "rmnet", "ccmni", "pdp", "wwan", "v4-rmnet", "r_rmnet", "clat",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let (mut pattern_index, mut value_index) = (0, 0);
+    let (mut star, mut retry_value) = (None, 0);
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star = Some(pattern_index);
+            pattern_index += 1;
+            retry_value = value_index;
+        } else if let Some(star_index) = star {
+            pattern_index = star_index + 1;
+            retry_value += 1;
+            value_index = retry_value;
+        } else {
+            return false;
+        }
+    }
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
 }
 
 fn ipv6_guard_payloads(slot: PlanSlot, policy: &CapturePolicy, owner: &str) -> (String, String) {

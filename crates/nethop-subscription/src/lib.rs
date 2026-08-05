@@ -75,7 +75,7 @@ pub use pipeline::{
 pub use protocol::{
     BoundedText, Capabilities, Credentials, DisplayName, Endpoint, Hysteria2Obfs, PluginSpec,
     ProtocolOptions, ProxyNode, ProxyProtocol, RealityOptions, SourceRef, TlsOptions,
-    TransportKind, TransportOptions, UnvalidatedNode, UuidValue,
+    TransportKind, TransportOptions, UdpOverTcpOptions, UnvalidatedNode, UuidValue,
 };
 pub use secret::SecretString;
 pub use semantic::{

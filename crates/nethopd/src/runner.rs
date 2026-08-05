@@ -131,7 +131,7 @@ pub enum RunnerError {
     InvalidPolicy,
     #[error("sing-box binary must be an absolute regular non-symlink file")]
     InvalidBinary,
-    #[error("config must be a regular config.json inside a candidate generation")]
+    #[error("config must be a regular config.json inside a managed candidate or sealed generation")]
     InvalidCandidatePath,
     #[error("sing-box check could not be started")]
     SpawnFailed,
@@ -286,7 +286,7 @@ impl SingBoxCheckRunner {
             .file_name()
             .and_then(OsStr::to_str)
             .ok_or(RunnerError::InvalidCandidatePath)?;
-        if !parent_name.starts_with(".candidate-") {
+        if !is_managed_generation_directory(parent_name) {
             return Err(RunnerError::InvalidCandidatePath);
         }
         let parent_metadata =
@@ -318,6 +318,19 @@ impl SingBoxCheckRunner {
             config_path.into_os_string(),
         ])
     }
+}
+
+fn is_managed_generation_directory(name: &str) -> bool {
+    if name
+        .strip_prefix(".candidate-")
+        .is_some_and(|suffix| !suffix.is_empty())
+    {
+        return true;
+    }
+    name.parse::<u64>()
+        .ok()
+        .filter(|generation| *generation != 0)
+        .is_some_and(|generation| generation.to_string() == name)
 }
 
 fn terminate_child(child: &mut std::process::Child) {
@@ -428,13 +441,19 @@ mod tests {
     }
 
     #[test]
-    fn stable_generation_and_outside_paths_are_rejected() {
+    fn sealed_generation_is_accepted_but_unmanaged_paths_are_rejected() {
         let (directory, runner, _config) = runner_fixture();
         let stable = directory.path().join("generations/1/config.json");
         fs::create_dir_all(stable.parent().unwrap()).unwrap();
         fs::write(&stable, b"{}").unwrap();
+        let args = runner.command_arguments(&stable).unwrap();
+        assert_eq!(args[2], stable.canonicalize().unwrap());
+
+        let malformed = directory.path().join("generations/01/config.json");
+        fs::create_dir_all(malformed.parent().unwrap()).unwrap();
+        fs::write(&malformed, b"{}").unwrap();
         assert_eq!(
-            runner.check_candidate(&stable).unwrap_err(),
+            runner.check_candidate(&malformed).unwrap_err(),
             RunnerError::InvalidCandidatePath
         );
 

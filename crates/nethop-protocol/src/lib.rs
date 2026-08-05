@@ -53,8 +53,10 @@ impl<'de> Deserialize<'de> for RequestId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ControlMethod {
+    #[serde(rename = "protocol.hello")]
+    ProtocolHello,
     #[serde(rename = "status.get")]
     StatusGet,
     #[serde(rename = "service.start")]
@@ -63,11 +65,202 @@ pub enum ControlMethod {
     ServiceStop,
     #[serde(rename = "capability.probe")]
     CapabilityProbe,
+    #[serde(rename = "subscription.update")]
+    SubscriptionUpdate,
+    #[serde(rename = "config.reload")]
+    ConfigReload,
+    #[serde(rename = "config.get")]
+    ConfigGet,
+    #[serde(rename = "config.validate")]
+    ConfigValidate,
+    #[serde(rename = "config.apply")]
+    ConfigApply,
+    #[serde(rename = "config.schema")]
+    ConfigSchema,
+    #[serde(rename = "capability.get")]
+    CapabilityGet,
+    #[serde(rename = "config.mutate")]
+    ConfigMutate,
+    #[serde(rename = "events.subscribe")]
+    EventsSubscribe,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConfigMutation {
+    SetServiceEnabled {
+        enabled: bool,
+    },
+    AddSource {
+        name: String,
+        url: String,
+    },
+    UpdateSource {
+        source_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+    },
+    RemoveSource {
+        source_id: String,
+    },
+    MoveSource {
+        source_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_source_id: Option<String>,
+    },
+    AddPackage {
+        package: String,
+    },
+    RemovePackage {
+        package: String,
+    },
+    ReplacePackages {
+        packages: Vec<String>,
+    },
+    AddRoutingCidr {
+        list: RoutingCidrList,
+        cidr: String,
+    },
+    RemoveRoutingCidr {
+        list: RoutingCidrList,
+        cidr: String,
+    },
+    SetScalarField {
+        field_id: String,
+        value: Value,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingCidrList {
+    ForceProxy,
+    Bypass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    Config,
+    Runtime,
+    Subscription,
+    Generation,
+    Network,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EmptyParams {}
+pub struct ControlParams {
+    #[serde(default, skip_serializing_if = "is_false")]
+    wait: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    if_needed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_config_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    document: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manager_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manager_protocol_min: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manager_protocol_max: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mutation: Option<ConfigMutation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event_kinds: Option<Vec<EventKind>>,
+}
+
+impl ControlParams {
+    pub const fn new(wait: bool, if_needed: bool) -> Self {
+        Self {
+            wait,
+            if_needed,
+            expected_config_digest: None,
+            document: None,
+            manager_version: None,
+            manager_protocol_min: None,
+            manager_protocol_max: None,
+            mutation: None,
+            event_kinds: None,
+        }
+    }
+
+    pub const fn wait(&self) -> bool {
+        self.wait
+    }
+
+    pub const fn if_needed(&self) -> bool {
+        self.if_needed
+    }
+
+    pub fn config_document(expected_config_digest: String, document: Value) -> Self {
+        Self {
+            expected_config_digest: Some(expected_config_digest),
+            document: Some(document),
+            ..Self::default()
+        }
+    }
+
+    pub fn hello(
+        manager_version: String,
+        manager_protocol_min: u8,
+        manager_protocol_max: u8,
+    ) -> Self {
+        Self {
+            manager_version: Some(manager_version),
+            manager_protocol_min: Some(manager_protocol_min),
+            manager_protocol_max: Some(manager_protocol_max),
+            ..Self::default()
+        }
+    }
+
+    pub fn mutation(expected_config_digest: String, mutation: ConfigMutation) -> Self {
+        Self {
+            expected_config_digest: Some(expected_config_digest),
+            mutation: Some(mutation),
+            ..Self::default()
+        }
+    }
+
+    pub fn event_subscription(event_kinds: Vec<EventKind>) -> Self {
+        Self {
+            event_kinds: Some(event_kinds),
+            ..Self::default()
+        }
+    }
+
+    pub fn expected_config_digest(&self) -> Option<&str> {
+        self.expected_config_digest.as_deref()
+    }
+
+    pub const fn document(&self) -> Option<&Value> {
+        self.document.as_ref()
+    }
+
+    pub fn manager_version(&self) -> Option<&str> {
+        self.manager_version.as_deref()
+    }
+
+    pub const fn manager_protocol_range(&self) -> Option<(u8, u8)> {
+        match (self.manager_protocol_min, self.manager_protocol_max) {
+            (Some(min), Some(max)) => Some((min, max)),
+            _ => None,
+        }
+    }
+
+    pub const fn mutation_value(&self) -> Option<&ConfigMutation> {
+        self.mutation.as_ref()
+    }
+
+    pub fn event_kinds(&self) -> Option<&[EventKind]> {
+        self.event_kinds.as_deref()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,7 +268,7 @@ pub struct ControlRequest {
     version: u8,
     request_id: RequestId,
     method: ControlMethod,
-    params: EmptyParams,
+    params: ControlParams,
 }
 
 impl ControlRequest {
@@ -84,8 +277,14 @@ impl ControlRequest {
             version: PROTOCOL_VERSION,
             request_id,
             method,
-            params: EmptyParams {},
+            params: ControlParams::default(),
         }
+    }
+
+    pub fn with_params(mut self, params: ControlParams) -> Result<Self, ProtocolError> {
+        self.params = params;
+        self.validate()?;
+        Ok(self)
     }
 
     pub const fn version(&self) -> u8 {
@@ -100,16 +299,148 @@ impl ControlRequest {
         self.method
     }
 
-    fn validate(&self) -> Result<(), ProtocolError> {
-        (self.version == PROTOCOL_VERSION)
-            .then_some(())
-            .ok_or(ProtocolError::UnsupportedVersion)
+    pub const fn params(&self) -> &ControlParams {
+        &self.params
     }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        if self.version != PROTOCOL_VERSION {
+            return Err(ProtocolError::UnsupportedVersion);
+        }
+        let wait_allowed = matches!(
+            self.method,
+            ControlMethod::ServiceStart
+                | ControlMethod::ServiceStop
+                | ControlMethod::SubscriptionUpdate
+                | ControlMethod::ConfigReload
+        );
+        if (self.params.wait && !wait_allowed)
+            || (self.params.if_needed && self.method != ControlMethod::SubscriptionUpdate)
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let document_method = matches!(
+            self.method,
+            ControlMethod::ConfigValidate | ControlMethod::ConfigApply
+        );
+        let mutation_method = self.method == ControlMethod::ConfigMutate;
+        if self.params.document.is_some() != document_method
+            || self.params.mutation.is_some() != mutation_method
+            || self.params.expected_config_digest.is_some() != (document_method || mutation_method)
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if let Some(digest) = &self.params.expected_config_digest
+            && (digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if self
+            .params
+            .document
+            .as_ref()
+            .is_some_and(|document| !document.is_object())
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if let Some(mutation) = &self.params.mutation {
+            validate_mutation(mutation)?;
+        }
+        let events_method = self.method == ControlMethod::EventsSubscribe;
+        if self.params.event_kinds.is_some() != events_method
+            || self.params.event_kinds.as_ref().is_some_and(|kinds| {
+                kinds.len() > 5 || {
+                    let mut unique = kinds.clone();
+                    unique.sort_by_key(|kind| *kind as u8);
+                    unique.dedup();
+                    unique.len() != kinds.len()
+                }
+            })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let hello = self.method == ControlMethod::ProtocolHello;
+        if self.params.manager_version.is_some() != hello
+            || self.params.manager_protocol_min.is_some() != hello
+            || self.params.manager_protocol_max.is_some() != hello
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if hello {
+            let version = self.params.manager_version.as_deref().unwrap_or_default();
+            let min = self.params.manager_protocol_min.unwrap_or_default();
+            let max = self.params.manager_protocol_max.unwrap_or_default();
+            if version.is_empty()
+                || version.len() > 64
+                || version.chars().any(char::is_control)
+                || min == 0
+                || min > max
+            {
+                return Err(ProtocolError::InvalidEnvelope);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
+    let bounded = |value: &str, max: usize| {
+        !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+    };
+    let source_id = |value: &str| {
+        value.len() == 36
+            && value.starts_with("src_")
+            && value[4..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    let valid = match mutation {
+        ConfigMutation::SetServiceEnabled { .. } => true,
+        ConfigMutation::AddSource { name, url } => bounded(name, 128) && url.len() <= 16 * 1024,
+        ConfigMutation::UpdateSource {
+            source_id: id,
+            name,
+            url,
+            enabled,
+        } => {
+            source_id(id)
+                && (name.is_some() || url.is_some() || enabled.is_some())
+                && name.as_ref().is_none_or(|value| bounded(value, 128))
+                && url.as_ref().is_none_or(|value| value.len() <= 16 * 1024)
+        }
+        ConfigMutation::RemoveSource { source_id: id } => source_id(id),
+        ConfigMutation::MoveSource {
+            source_id: id,
+            before_source_id,
+        } => {
+            source_id(id)
+                && before_source_id
+                    .as_ref()
+                    .is_none_or(|value| source_id(value) && value != id)
+        }
+        ConfigMutation::AddPackage { package } | ConfigMutation::RemovePackage { package } => {
+            bounded(package, 255)
+        }
+        ConfigMutation::ReplacePackages { packages } => {
+            packages.len() <= 2_000 && packages.iter().all(|value| bounded(value, 255))
+        }
+        ConfigMutation::AddRoutingCidr { cidr, .. }
+        | ConfigMutation::RemoveRoutingCidr { cidr, .. } => bounded(cidr, 64),
+        ConfigMutation::SetScalarField { field_id, value } => {
+            bounded(field_id, 128)
+                && matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_))
+        }
+    };
+    valid.then_some(()).ok_or(ProtocolError::InvalidEnvelope)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorDomain {
     Config,
+    Source,
     Subscription,
     Capability,
     Network,
@@ -122,6 +453,7 @@ impl ErrorDomain {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Config => "CONFIG",
+            Self::Source => "SOURCE",
             Self::Subscription => "SUB",
             Self::Capability => "CAP",
             Self::Network => "NET",
@@ -164,6 +496,7 @@ impl ErrorCode {
             .ok_or(ProtocolError::InvalidErrorCode)?;
         let domain = match domain {
             "CONFIG" => ErrorDomain::Config,
+            "SOURCE" => ErrorDomain::Source,
             "SUB" => ErrorDomain::Subscription,
             "CAP" => ErrorDomain::Capability,
             "NET" => ErrorDomain::Network,
@@ -203,13 +536,33 @@ impl<'de> Deserialize<'de> for ErrorCode {
 pub struct ControlError {
     code: ErrorCode,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Value>,
 }
 
 impl ControlError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Result<Self, ProtocolError> {
         let message = message.into();
         validate_message(&message)?;
-        Ok(Self { code, message })
+        Ok(Self {
+            code,
+            message,
+            details: None,
+        })
+    }
+
+    pub fn with_details(
+        code: ErrorCode,
+        message: impl Into<String>,
+        details: Value,
+    ) -> Result<Self, ProtocolError> {
+        let message = message.into();
+        validate_message(&message)?;
+        Ok(Self {
+            code,
+            message,
+            details: Some(details),
+        })
     }
 
     pub fn code(&self) -> &ErrorCode {
@@ -218,6 +571,10 @@ impl ControlError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub const fn details(&self) -> Option<&Value> {
+        self.details.as_ref()
     }
 
     fn validate(&self) -> Result<(), ProtocolError> {
@@ -359,6 +716,10 @@ impl StreamFrame {
         self.kind
     }
 
+    pub const fn payload(&self) -> Option<&Value> {
+        self.payload.as_ref()
+    }
+
     fn validate(&self) -> Result<(), ProtocolError> {
         if self.version != PROTOCOL_VERSION || self.sequence == 0 {
             return Err(ProtocolError::InvalidEnvelope);
@@ -486,4 +847,8 @@ fn validate_message(message: &str) -> Result<(), ProtocolError> {
         return Err(ProtocolError::InvalidMessage);
     }
     Ok(())
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }

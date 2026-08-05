@@ -221,6 +221,10 @@ where
         self.records.get(key)
     }
 
+    pub fn set_policy(&mut self, policy: SchedulePolicy) {
+        self.policy = policy;
+    }
+
     fn update(
         &mut self,
         key: &ScheduleKey,

@@ -70,6 +70,10 @@ impl Default for ControlServerLimits {
 
 pub trait ControlRequestHandler {
     fn handle(&mut self, request: ControlRequest) -> ControlResponse;
+
+    fn subscribe_events(&mut self, _request: &ControlRequest) -> Option<crate::EventSubscription> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -130,7 +134,7 @@ mod unix {
             let socket_path = socket_path.into();
             validate_socket_path(&socket_path)?;
             match fs::symlink_metadata(&socket_path) {
-                Ok(_) => return Err(ControlServerError::SocketPathOccupied),
+                Ok(metadata) => reclaim_stale_socket(&socket_path, &metadata)?,
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                     return Err(ControlServerError::BindFailed);
                 }
@@ -209,6 +213,22 @@ mod unix {
                 Ok(WireFrame::Request(request)) => request,
                 _ => return Err(ControlServerError::InvalidRequest),
             };
+            if request.method() == nethop_protocol::ControlMethod::EventsSubscribe
+                && let Some(mut subscription) = handler.subscribe_events(&request)
+            {
+                std::thread::Builder::new()
+                    .name("nethop-events".into())
+                    .spawn(move || {
+                        while let Ok(frame) = subscription.next_frame() {
+                            if FrameCodec::write_to(&mut stream, &WireFrame::Stream(frame)).is_err()
+                            {
+                                break;
+                            }
+                        }
+                    })
+                    .map_err(|_| ControlServerError::ResponseFailed)?;
+                return Ok(peer);
+            }
             let response = WireFrame::Response(handler.handle(request));
             FrameCodec::write_to(&mut stream, &response)
                 .map_err(|_| ControlServerError::ResponseFailed)?;
@@ -267,6 +287,32 @@ mod unix {
         }
         let pid = u32::try_from(credentials.pid).ok().filter(|pid| *pid != 0);
         Ok(PeerCredentials::new(pid, credentials.uid, credentials.gid))
+    }
+
+    fn reclaim_stale_socket(
+        path: &Path,
+        metadata: &fs::Metadata,
+    ) -> Result<(), ControlServerError> {
+        if !metadata.file_type().is_socket() || socket_inode_is_live(metadata.ino())? {
+            return Err(ControlServerError::SocketPathOccupied);
+        }
+        remove_owned_socket(path, Some((metadata.dev(), metadata.ino())))
+            .map_err(|_| ControlServerError::BindFailed)?;
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(ControlServerError::SocketPathOccupied),
+        }
+    }
+
+    fn socket_inode_is_live(inode: u64) -> Result<bool, ControlServerError> {
+        let sockets = fs::read_to_string("/proc/net/unix")
+            .map_err(|_| ControlServerError::SocketPathOccupied)?;
+        Ok(sockets.lines().skip(1).any(|line| {
+            line.split_ascii_whitespace()
+                .nth(6)
+                .and_then(|value| value.parse::<u64>().ok())
+                == Some(inode)
+        }))
     }
 
     fn remove_owned_socket(

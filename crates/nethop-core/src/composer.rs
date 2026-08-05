@@ -13,6 +13,8 @@ const MAX_FIELD_NAME_BYTES: usize = 64;
 const MAX_CONFIG_BYTES: usize = 5 * 1024 * 1024;
 const MAX_MANAGED_NODES: usize = 2_000;
 const MAX_AUTO_NODES: usize = 64;
+const MAX_ROUTING_CIDRS: usize = 512;
+const MAX_CIDR_BYTES: usize = 64;
 const MIN_API_SECRET_BYTES: usize = 32;
 const MAX_API_SECRET_BYTES: usize = 128;
 
@@ -62,6 +64,8 @@ pub enum ComposerError {
     InvalidApiEndpoint,
     #[error("Clash API secret does not meet the bounded policy")]
     InvalidApiSecret,
+    #[error("managed options are outside the bounded policy")]
+    InvalidManagedOptions,
 }
 
 #[derive(Clone, PartialEq)]
@@ -149,6 +153,108 @@ impl TunStack {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedOutboundMode {
+    Rule,
+    Global,
+    Direct,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedSelectorMode {
+    Urltest,
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedLogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl ManagedLogLevel {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedOptions {
+    outbound_mode: ManagedOutboundMode,
+    selector_mode: ManagedSelectorMode,
+    urltest_interval_minutes: u16,
+    urltest_tolerance_ms: u16,
+    urltest_max_candidates: usize,
+    log_level: ManagedLogLevel,
+    bypass_private: bool,
+    force_proxy_cidrs: Vec<String>,
+    bypass_cidrs: Vec<String>,
+}
+
+impl Default for ManagedOptions {
+    fn default() -> Self {
+        Self {
+            outbound_mode: ManagedOutboundMode::Rule,
+            selector_mode: ManagedSelectorMode::Urltest,
+            urltest_interval_minutes: 10,
+            urltest_tolerance_ms: 50,
+            urltest_max_candidates: MAX_AUTO_NODES,
+            log_level: ManagedLogLevel::Warn,
+            bypass_private: true,
+            force_proxy_cidrs: Vec::new(),
+            bypass_cidrs: Vec::new(),
+        }
+    }
+}
+
+impl ManagedOptions {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        outbound_mode: ManagedOutboundMode,
+        selector_mode: ManagedSelectorMode,
+        urltest_interval_minutes: u16,
+        urltest_tolerance_ms: u16,
+        urltest_max_candidates: usize,
+        log_level: ManagedLogLevel,
+        bypass_private: bool,
+        force_proxy_cidrs: Vec<String>,
+        bypass_cidrs: Vec<String>,
+    ) -> Result<Self, ComposerError> {
+        if !(5..=1440).contains(&urltest_interval_minutes)
+            || urltest_tolerance_ms > 1000
+            || !(1..=256).contains(&urltest_max_candidates)
+            || force_proxy_cidrs.len() > MAX_ROUTING_CIDRS
+            || bypass_cidrs.len() > MAX_ROUTING_CIDRS
+            || force_proxy_cidrs
+                .iter()
+                .chain(&bypass_cidrs)
+                .any(|cidr| cidr.is_empty() || cidr.len() > MAX_CIDR_BYTES || !cidr.contains('/'))
+        {
+            return Err(ComposerError::InvalidManagedOptions);
+        }
+        Ok(Self {
+            outbound_mode,
+            selector_mode,
+            urltest_interval_minutes,
+            urltest_tolerance_ms,
+            urltest_max_candidates,
+            log_level,
+            bypass_private,
+            force_proxy_cidrs,
+            bypass_cidrs,
+        })
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClashApi {
     endpoint: String,
@@ -193,6 +299,7 @@ pub struct ManagedProfile {
     outbounds: Vec<TerminalOutbound>,
     clash_api: ClashApi,
     tun_stack: TunStack,
+    options: ManagedOptions,
 }
 
 impl ManagedProfile {
@@ -215,11 +322,17 @@ impl ManagedProfile {
             outbounds,
             clash_api,
             tun_stack: TunStack::System,
+            options: ManagedOptions::default(),
         })
     }
 
     pub fn with_tun_stack(mut self, tun_stack: TunStack) -> Self {
         self.tun_stack = tun_stack;
+        self
+    }
+
+    pub fn with_options(mut self, options: ManagedOptions) -> Self {
+        self.options = options;
         self
     }
 }
@@ -232,6 +345,7 @@ impl fmt::Debug for ManagedProfile {
             .field("node_count", &self.outbounds.len())
             .field("clash_api_endpoint", &self.clash_api.endpoint)
             .field("tun_stack", &self.tun_stack)
+            .field("options", &self.options)
             .finish()
     }
 }
@@ -261,7 +375,7 @@ impl ManagedConfig {
             .collect::<Vec<_>>();
         let auto_tags = node_tags
             .iter()
-            .take(MAX_AUTO_NODES)
+            .take(profile.options.urltest_max_candidates)
             .cloned()
             .collect::<Vec<_>>();
         let mut selector_tags = Vec::with_capacity(node_tags.len() + 1);
@@ -276,16 +390,20 @@ impl ManagedConfig {
             "tag": AUTO_TAG,
             "outbounds": auto_tags,
             "url": "https://www.gstatic.com/generate_204",
-            "interval": "10m",
-            "tolerance": 50,
+            "interval": format!("{}m", profile.options.urltest_interval_minutes),
+            "tolerance": profile.options.urltest_tolerance_ms,
             "idle_timeout": "30m",
             "interrupt_exist_connections": false
         }));
+        let selector_default = match profile.options.selector_mode {
+            ManagedSelectorMode::Urltest => AUTO_TAG,
+            ManagedSelectorMode::Manual => node_tags[0].as_str(),
+        };
         outbounds.push(serde_json::json!({
             "type": "selector",
             "tag": SELECT_TAG,
             "outbounds": selector_tags,
-            "default": AUTO_TAG,
+            "default": selector_default,
             "interrupt_exist_connections": false
         }));
         outbounds.extend(
@@ -296,14 +414,65 @@ impl ManagedConfig {
                 .map(Value::Object),
         );
 
+        let mut route_rules = vec![
+            serde_json::json!({ "inbound": [INBOUND_TAG], "action": "sniff" }),
+            serde_json::json!({
+                "type": "logical",
+                "mode": "or",
+                "rules": [
+                    { "protocol": "dns" },
+                    { "port": 53 }
+                ],
+                "action": "hijack-dns"
+            }),
+        ];
+        if profile.options.bypass_private {
+            route_rules.push(serde_json::json!({ "ip_is_private": true, "outbound": DIRECT_TAG }));
+        }
+        if !profile.options.force_proxy_cidrs.is_empty() {
+            route_rules.push(serde_json::json!({
+                "ip_cidr": profile.options.force_proxy_cidrs,
+                "outbound": SELECT_TAG
+            }));
+        }
+        if !profile.options.bypass_cidrs.is_empty() {
+            route_rules.push(serde_json::json!({
+                "ip_cidr": profile.options.bypass_cidrs,
+                "outbound": DIRECT_TAG
+            }));
+        }
+        let route_final = match profile.options.outbound_mode {
+            ManagedOutboundMode::Rule | ManagedOutboundMode::Global => SELECT_TAG,
+            ManagedOutboundMode::Direct => DIRECT_TAG,
+        };
         let value = serde_json::json!({
             "log": {
-                "level": "warn",
+                "level": profile.options.log_level.as_str(),
                 "timestamp": true
             },
             "dns": {
-                "servers": [{ "type": "local", "tag": "dns-local" }],
-                "final": "dns-local",
+                "servers": [
+                    {
+                        "type": "https",
+                        "tag": "dns-bootstrap",
+                        "server": "223.5.5.5",
+                        "server_port": 443,
+                        "path": "/dns-query",
+                        "headers": { "Host": "dns.alidns.com" },
+                        "tls": { "server_name": "dns.alidns.com" }
+                    },
+                    {
+                        "type": "https",
+                        "tag": "dns-proxy",
+                        "server": "1.1.1.1",
+                        "server_port": 443,
+                        "path": "/dns-query",
+                        "headers": { "Host": "cloudflare-dns.com" },
+                        "tls": { "server_name": "cloudflare-dns.com" },
+                        "detour": SELECT_TAG
+                    }
+                ],
+                "final": "dns-proxy",
                 "strategy": "prefer_ipv4",
                 "disable_cache": false,
                 "cache_capacity": 4096
@@ -312,11 +481,9 @@ impl ManagedConfig {
             "outbounds": outbounds,
             "route": {
                 "auto_detect_interface": true,
-                "rules": [
-                    { "inbound": [INBOUND_TAG], "action": "sniff" },
-                    { "ip_is_private": true, "outbound": DIRECT_TAG }
-                ],
-                "final": SELECT_TAG
+                "default_domain_resolver": "dns-bootstrap",
+                "rules": route_rules,
+                "final": route_final
             },
             "experimental": {
                 "clash_api": {
