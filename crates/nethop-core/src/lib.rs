@@ -6,7 +6,9 @@ pub mod diagnostics;
 pub mod generation;
 pub mod state;
 
-pub use capture::{CaptureMode, CapturePolicy, CapturePolicyError, InterfacePolicy};
+pub use capture::{
+    CaptureMode, CapturePolicy, CapturePolicyError, ForwardingPolicy, InterfacePolicy,
+};
 pub use composer::{
     ClashApi, ComposerError, ManagedConfig, ManagedLogLevel, ManagedOptions, ManagedOutboundMode,
     ManagedProfile, ManagedSelectorMode, TerminalOutbound, TunStack,

@@ -54,7 +54,7 @@ NetHop 是 Android 13+ 的 root 透明代理模块。订阅解析库负责把二
 | payload | 带来源元数据和有界字节的待解析输入 |
 | 容器格式 | URI 列表、Base64 URI 列表、YAML、JSON、INI/snippet 等包装形式 |
 | 客户端方言 | Android 相关的 Mihomo/Clash、Surfboard、sing-box 字段和语法变体 |
-| 协议 | Android sing-box 数据面可验证的代理协议；首版导入白名单为 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS |
+| 协议 | Android sing-box 数据面可验证的代理协议；当前导入白名单为 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS、HTTP、SOCKS，其中 URI adapter 只覆盖前七种 |
 | `UnvalidatedNode` | 格式适配器提取但尚未完成语义校验的节点 |
 | `ProxyNode` | 通过统一语义校验、可生成 sing-box outbound 的可信节点 |
 | source | 用户配置的一条订阅来源，拥有独立缓存和状态 |
@@ -593,6 +593,8 @@ surfboard_ini
 | 稳定核心 | URI/Base64 URI、Clash/Mihomo YAML、sing-box outbounds JSON | 默认构建；每种标准 5 MiB/10,000 节点 fixture 都必须满足 300 ms 和 110 MiB 总峰值门槛 |
 | Android 兼容扩展 | Surfboard INI | 独立 Cargo feature 和 fixture；默认不扩大核心依赖；完成能力矩阵、fuzz、脱敏 golden、Android arm64 报告后才能在发布包启用 |
 
+实现状态：library 默认 feature 仍只包含三类稳定格式；Android daemon 的 `subscription-update` 构建已显式启用 `format-surfboard`，并保持 `experimental` 标记。启用只代表 adapter 可被强证据或 `surfboard_ini` hint 选择，不代表 Surfboard 全协议或所有设备已稳定支持。
+
 不为 Stash、Surge、Shadowrocket、Quantumult X 增加专用 adapter、format hint、request profile、fixture gate 或发布承诺。它们若输出标准 URI/Base64，仍由客户端无关的稳定容器解析；若只输出专用配置，返回 `unsupported_format`/`unknown_format`。兼容扩展的目的仅是覆盖 Android 上实际使用的 Surfboard，同时隔离 INI 方言长尾。启用扩展后同样不得放宽 nodes-only、协议白名单、资源限制、SSRF、脱敏、active limit 或事务发布规则。
 
 ### 7.2 `FormatAdapter` 与共享能力矩阵
@@ -625,7 +627,7 @@ NetHop 只导入可作为终端代理 outbound 的节点。以下字段永远不
 - inbound/listen/address/port；
 - Clash/Mihomo `rules`、`proxy-groups`、`proxy-providers`、`rule-providers`；
 - Surfboard `[General]`、`[Proxy Group]`、`[Rule]`、`[Script]`、`[MITM]`、`[URL Rewrite]`；
-- sing-box `route`、`dns`、`inbounds`、`services`、`experimental`、`certificate`、本地 path；
+- sing-box `route`、`dns`、`inbounds`、`endpoints`、`services`、`experimental`、`certificate`、本地 path；
 - 脚本、正则执行体、模板、外部 include、provider URL 和文件路径；
 - 客户端 UI、图标、测速 URL、更新周期和策略组成员。
 
@@ -643,7 +645,7 @@ NetHop 只导入可作为终端代理 outbound 的节点。以下字段永远不
 
 ### 9.1 支持的 URI scheme
 
-Android sing-box 数据面可能还支持 Naive、WireGuard、HTTP/SOCKS、Mieru 等其他 outbound；这些能力不自动进入 NetHop parser。首版协议白名单：
+Android sing-box 数据面还可能支持 Naive、Mieru 等其他 outbound，以及 WireGuard endpoint；这些能力不自动进入 NetHop parser。URI/Base64 容器的 scheme 白名单保持：
 
 | Scheme | 协议 |
 |---|---|
@@ -655,7 +657,15 @@ Android sing-box 数据面可能还支持 Naive、WireGuard、HTTP/SOCKS、Mieru
 | `tuic://` | TUIC |
 | `anytls://` | AnyTLS |
 
-`socks://`、`socks5://`、`http://`、`wireguard://`、`naive+https://`、`mieru://` 等可作为诊断识别，但如果未纳入首版协议白名单，不得生成活动 outbound。是否加入首版必须通过独立协议 ADR，至少证明 sing-box 版本能力、Android arm64 连通性、统计归因、资源预算和安全边界；不能因为 SFA 或其他客户端能导入就默认支持。
+HTTP 和 SOCKS 已进入 Clash/Mihomo YAML 与 sing-box JSON 的受控 terminal outbound 白名单，但暂不接入 URI：`http://`/`https://` 与订阅 URL 载体存在歧义，`socks://`/`socks5://` 又没有覆盖认证、TLS 和 UDP 语义的统一分享契约。URI adapter 在独立 fixture 和 carrier UX 冻结前不得猜测这些行。`wireguard://`、`naive+https://`、`mieru://` 等只作诊断识别，不生成活动 outbound。
+
+sing-box 1.13.15 将 WireGuard 建模为顶层 `endpoints`，而不是 terminal `outbounds`。其最小配置包含本地 `address`、`private_key` 和 peer 集合，peer 又可控制 `allowed_ips`、预共享密钥与 keepalive；这会扩展当前 `ProxyNode -> TerminalOutbound` 契约，并涉及 L3 地址和路由所有权。NetHop 因此只把 endpoint-only 配置识别为 sing-box JSON，返回零节点和 `non_node_section_ignored`；若配置同时含普通 outbounds，只导入普通终端节点。不得读取、fingerprint、报告或 compose WireGuard 私钥/peer。后续若要支持，必须先用独立 ADR 定义 `ManagedEndpoint`、secret 生命周期、路由冲突和 composer 单写边界，不能把它伪装成普通代理节点。
+
+Naive 在 sing-box 1.13.15 中属于 terminal outbound，但真实实现受 `with_naive_outbound` build tag 控制。NetHop 当前使用的官方 Android arm64 CLI 二进制及候选构建 tags 均不含该标签；alioth 上执行最小脱敏 Naive 配置的 `sing-box check` 返回 `naive outbound is not included in this build`。因此 parser 不接受 Naive，不能只根据 `option.NaiveOutboundOptions` 存在就生成无法启动的配置。只有数据面重新构建并携带该 tag、完成 Cronet 依赖/体积/许可证审计、Android 连通性和性能验证后，才可另开协议 ADR。
+
+Mieru 虽存在于 Mihomo 输入生态，但 sing-box 1.13.15 源码没有 Mieru outbound 或 option。NetHop 不运行 Mihomo 内核，因此不得按 Mihomo 字段生成 sing-box 配置；Mieru 保持 `unsupported_protocol`，直到固定的数据面版本原生实现并完成独立证据链。
+
+后续协议必须通过独立 ADR，至少证明 sing-box 版本能力、Android arm64 连通性、统计归因、资源预算和安全边界；不能因为 SFA 或其他客户端能导入就默认支持。
 
 ### 9.2 行处理
 
@@ -741,6 +751,7 @@ YAML tag 不触发对象构造、命令、网络或文件读取；`!include`/自
 | Reality | `reality-opts.public-key/short-id`、fingerprint | 仅 VLESS/已验证协议映射 |
 | transport | `network`、`ws-opts`、`grpc-opts`、`h2-opts`、`http-opts` | 只接受首版 transport |
 | UDP | `udp`、协议专用 UDP 字段 | 转为 capability，不改变 root 捕获策略 |
+| HTTP/SOCKS | `username`、`password`、HTTP TLS/path/headers、SOCKS version/UDP | 仅映射 sing-box 1.13.15 可等价表达的窄字段；认证必须成对 |
 | 客户端控制 | `proxy-groups`、`rules`、`script` | 忽略并产生一次 source warning |
 
 未知字段本身不失败；未知但会改变连接语义的 `type`、transport、TLS mode 或协议枚举必须拒绝节点。
@@ -803,7 +814,7 @@ Tokenizer 负责：
 
 Surfboard 的 `ProxyVMess`、`ProxySS`、`ProxyTrojan` 等参数名和布尔字段有自己的约定。`SurfboardIniAdapter` 只复用本地 tokenizer 和公共协议语义校验器，不引入或复用其他客户端方言映射。
 
-首版 tokenizer 应能识别机场常见的 `http`/`https`、`socks5`/`socks5-tls`、`ss`、`vmess`、`trojan` 等行式类型，但只把七协议白名单的交集转换为 `ProxyNode`。因此首版实际映射重点是 Shadowsocks、VMess、Trojan 以及经 fixture 验证的 Hysteria2、TUIC、AnyTLS；HTTP/SOCKS 节点返回 `unsupported_protocol`，不能因为 Surfboard 能运行就绕开 NetHop 的协议范围。
+tokenizer 应能识别机场常见的 `http`/`https`、`socks5`/`socks5-tls`、`ss`、`vmess`、`trojan` 等行式类型。HTTP/SOCKS 虽已进入公共协议模型，但 Surfboard 的字段语义尚未完成独立 fixture 审计，因此该方言中的 HTTP/SOCKS 继续返回 `unsupported_semantics`；不能因为同名协议已在 Clash/sing-box adapter 中支持，就跨方言复用未验证映射。
 
 Surfboard 的 Shadowsocks `obfs`/`obfs-host` 只允许窄映射为 sing-box 内置 `obfs-local`：`obfs` 必须为 `http` 或 `tls`，`obfs-host` 可选且有界，composer 生成 `plugin="obfs-local"` 与确定性的 `plugin_opts`。任意其他 plugin、plugin option 或缺少 `obfs` 的组合继续返回 `unsupported_semantics`。此白名单由 sing-box 1.13.15 的 `transport/sip003/obfs.go`、`test/ss_plugin_test.go` 和官方 Shadowsocks outbound 文档共同证明，不代表开放任意 SIP003 透传。
 
@@ -856,7 +867,7 @@ ProxyNode {
 | `display_name` | 清洗控制字符、长度有界；原始名称只存脱敏/受控报告 |
 | `endpoint.server` | 规范化域名或 IP；拒绝空值、控制字符和非法地址 |
 | `endpoint.port` | `1..65535` |
-| `protocol` | 首版七协议白名单 |
+| `protocol` | 九协议白名单；URI adapter 只覆盖其中七种无载体歧义的 scheme |
 | `source_refs` | source ID、原始索引、检测格式、原始行号 |
 | `capabilities` | UDP、IPv6、QUIC、TLS 等可证明能力，不由名称猜测 |
 | `warnings` | 不影响连接的字段损失或方言差异 |
@@ -1016,6 +1027,14 @@ Phase 0-B 先 profile SHA-256 基线。只有 `fingerprint + dedupe` 在标准 1
 
 去重必须稳定于 source 输入顺序变化。合并后排序使用 source 配置顺序、首次出现索引和 node ID，不能按不稳定 HashMap 遍历顺序。
 
+### 16.3 Source 级节点过滤
+
+节点过滤在单 source 完成 parse/normalize/validate 之后、fingerprint/跨 source 去重和 compose 之前执行。默认空过滤必须与过滤功能引入前的转换结果保持一致；过滤不得改变节点 canonical fingerprint、source last-known-good 或 duplicate 合并语义。
+
+每个 source 可配置三类有界规则：名称包含、名称排除和协议白名单。名称规则合计最多 32 项、单项最多 128 bytes、禁止空值和控制字符，匹配仅对 ASCII 做大小写折叠，不引入 regex。协议值必须来自当前 `ProxyProtocol` 枚举并去重。排除规则优先于包含规则；协议白名单为空表示不限制协议。
+
+被过滤节点使用 compact `node_filtered_out` 记录，不进入 outbound；若 source 原本存在有效节点但过滤后为零，返回稳定 `source_filtered_empty` 诊断并判定该 source 本次不可发布。其他 source 仍可按部分成功规则继续，不能因一个 source 过滤为空破坏已有 generation。
+
 ## 17. 诊断与部分成功
 
 ### 17.1 诊断模型
@@ -1064,6 +1083,8 @@ NodeDiagnostic {
 | `invalid_tls_combination` | TLS/Reality/transport 冲突 |
 | `invalid_credential` | 凭据格式或约束错误 |
 | `duplicate_node` | 与已接受节点 fingerprint 相同 |
+| `node_filtered_out` | source 级过滤规则排除节点 |
+| `source_filtered_empty` | source 存在有效节点但过滤后为空 |
 | `source_all_failed` | source 内无可用节点 |
 | `active_limit_exceeded` | active outbounds 超过 2,000 |
 | `ssrf_blocked` | URL 目标违反下载安全策略 |
@@ -1169,7 +1190,7 @@ parser 输出 `ProxyNode` 或只含节点的中间 fragment，不输出完整运
 detect + decode + parse + normalize + validate + dedupe + compose + serialize <= 300 ms
 ```
 
-不得用只含简单 Shadowsocks URI 的 fixture；必须覆盖七种协议、重复节点和 10% 非法节点。Clash YAML 不获得额外 400 ms 宽限。
+不得用只含简单 Shadowsocks URI 的 fixture；当前冻结性能 fixture 必须覆盖七种 URI-capable 协议、重复节点和 10% 非法节点。HTTP/SOCKS 进入稳定性能声明前必须补充同规模 YAML/JSON fixture。Clash YAML 不获得额外 400 ms 宽限。
 
 ### 20.2 有界分配
 
@@ -1333,6 +1354,8 @@ nethopctl subscription update [<source-id>]
 nethopctl subscription diagnose --source <source-id>
 ```
 
+当前 root CLI 已将本地导入实现为两步事务：`subscription import preview` 只执行受限内容的探测、解析、过滤、组合和候选摘要计算；`subscription import apply` 必须携带 preview 返回的 `candidate_digest`，随后通过 daemon 的 generation activation 发布。输入由 CLI 读取并限制为 768 KiB，可使用 `--file` 或 `--text`，不会把任意路径交给 daemon。该导入是一次性的活动 generation 替换，响应明确返回 `persistence = until_next_subscription_update`；需要永久保留时应把 URL 写入 TOML source 后执行 `subscription update`。
+
 CLI 输出默认只显示摘要：格式、节点计数、协议计数、warning/error 计数、digest 和状态。详细报告写到 root-only 受控目录，凭据永不输出。
 
 `nethopctl` 在调用方上下文中读取并限制文件大小，再把 bytes 交给 daemon；daemon 不接受普通客户端提供的任意绝对路径。`--dry-run` 执行完整 detect/parse/validate/dedupe/compose 和报告生成，但不保存 source、不写 candidate、不调用发布事务。未来 App 使用 Android 文件选择器读取 content URI 后采用相同 bytes/stream IPC。
@@ -1371,7 +1394,7 @@ daemon 返回 `ConversionReport` 摘要和候选 generation 状态；导入请�
 - URI/Base64、Clash YAML、sing-box JSON 三类稳定格式完成最小 golden；
 - 建立统一 IR、fingerprint、去重和脱敏诊断模型；
 - `ParserLimits`、YAML `Budget/Options/AliasLimits`、重复 key、merge-key reject、Base64 深度和 nodes-only 边界有确定性攻击回归；
-- 七协议各有字段模型与最小有效/拒绝 host fixture，但未完成真实连通的协议不得标为参考设备稳定支持；
+- 九协议各有字段模型与最小有效/拒绝 host fixture，但未完成真实连通的协议不得标为参考设备稳定支持；
 - 不执行外部 rules/script/provider/path；
 - parser-only 依赖闭包可复核，且不包含 URL/ICU、HTTP/TLS/gzip；YAML 只启用 `deserialize`；
 - parser schema、diagnostic code 和 mapping digest 写入 manifest。
@@ -1382,7 +1405,7 @@ Phase 0-A 不要求 5 MiB/10,000 节点 Android 性能、110 MiB 总峰值、任
 
 - 在当前 `reference_verified` arm64 真机 release build 上，稳定三格式的 5 MiB/10,000 节点标准 fixture 满足 `detect..serialize <=300 ms`；
 - parser/fetch 候选窗口与模块合计更新峰值满足 `<=110 MiB`；
-- 七协议中计划在 Alpha 启用的每项完成 mapping、`sing-box check`、最小连通和资源报告；未完成者保持 `experimental`/`unsupported`；
+- 九协议中计划在 Alpha 启用的每项完成 mapping、`sing-box check`、最小连通和资源报告；未完成者保持 `experimental`/`unsupported`；
 - parser-only、fetch-enabled 和 dev/test 依赖闭包分别归档；确认发布 feature tree 不含 `base64/simd-unsafe`；
 - 使用冻结的 workspace release profile 采集阶段 profile；fingerprint 阶段只有触发 16.1 节阈值时才比较 BLAKE3，并在冻结 schema 前删除落选实现；
 - 输出精确到设备、ROM、内核、Root 管理器和 fixture digest 的解析性能报告。

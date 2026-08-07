@@ -198,7 +198,7 @@ fn m012_support_matrix_is_evidence_derived_and_android_scoped() {
     assert_eq!(surfboard["default_enabled"], false);
 
     let protocols = matrix["protocols"].as_array().expect("protocol matrix");
-    assert_eq!(protocols.len(), 7);
+    assert_eq!(protocols.len(), 9);
     for name in [
         "vless",
         "vmess",
@@ -207,11 +207,32 @@ fn m012_support_matrix_is_evidence_derived_and_android_scoped() {
         "hysteria2",
         "tuic",
         "anytls",
+        "http",
+        "socks",
     ] {
         let entry = find_named(protocols, "protocol", name);
         assert_eq!(entry["parser_support"], "reference_verified");
         assert_eq!(entry["android_data_plane"], "best_effort");
     }
+
+    let unsupported = matrix["unsupported_protocols"]
+        .as_array()
+        .expect("unsupported protocol matrix");
+    let wireguard = find_named(unsupported, "protocol", "wireguard");
+    assert_eq!(wireguard["support_level"], "unsupported");
+    assert_eq!(
+        wireguard["reason"],
+        "sing_box_1_13_15_endpoint_outside_terminal_outbound_contract"
+    );
+    let naive = find_named(unsupported, "protocol", "naive");
+    assert_eq!(naive["support_level"], "unsupported");
+    assert_eq!(
+        naive["reason"],
+        "android_sing_box_1_13_15_missing_with_naive_outbound"
+    );
+    let mieru = find_named(unsupported, "protocol", "mieru");
+    assert_eq!(mieru["support_level"], "unsupported");
+    assert_eq!(mieru["reason"], "not_implemented_by_sing_box_1_13_15");
 
     assert_eq!(matrix["environments"].as_array().map(Vec::len), Some(3));
     let serialized = serde_json::to_string(&matrix).unwrap();

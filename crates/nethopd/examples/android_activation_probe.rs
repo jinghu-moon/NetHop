@@ -3,16 +3,16 @@ use std::{env, path::PathBuf, process};
 
 #[cfg(unix)]
 use nethop_android::{
-    AndroidToolPaths, CapabilityProbe, CommandProbeBackend, NetworkExecutor, NetworkPlanVerifier,
-    PlanSlot, ProbeLimits, SystemCommandBackend, SystemCommandLimits,
+    AndroidToolPaths, CapabilityProbe, CommandProbeBackend, NetworkExecutor, NetworkHealthVerifier,
+    NetworkPlanVerifier, NetworkPlanner, PlanSlot, ProbeLimits, SystemCommandBackend,
+    SystemCommandLimits,
 };
 #[cfg(unix)]
 use nethop_core::{GenerationId, GenerationStore};
 #[cfg(unix)]
 use nethopd::{
-    ConfigStore, CoreProcessLimits, CoreProcessRunner, CurrentGenerationActivator,
-    NetworkDataPlaneHealthProbe, RunnerLimits, SingBoxCheckRunner, StartupLivenessProbe,
-    WorkerRecoveryError,
+    CandidateChecker, ConfigStore, CoreProcessLimits, CoreProcessRunner, HealthProbe, RunnerLimits,
+    SingBoxCheckRunner, StartupLivenessProbe,
 };
 
 #[cfg(unix)]
@@ -72,28 +72,51 @@ fn run() -> Result<(), &'static str> {
         SystemCommandBackend::from_system(SystemCommandLimits::default())
             .map_err(|error| error.code().as_str())?,
     );
-    let verifier = NetworkPlanVerifier::new(
+    let mut verifier = NetworkPlanVerifier::new(
         CommandProbeBackend::new(tools, ProbeLimits::default()),
         inbound_port,
     )
     .map_err(|error| error.code().as_str())?;
-    let mut data_plane = NetworkDataPlaneHealthProbe::new(verifier);
     let liveness = StartupLivenessProbe::default();
-    let mut activator = CurrentGenerationActivator::new(
-        &store,
-        &checker,
-        &launcher,
-        &liveness,
-        &mut capabilities,
-        &mut network,
-        &mut data_plane,
-    );
-
-    let active = activator
-        .recover_generation(generation, config.capture(), PlanSlot::A)
-        .map_err(recovery_code)?
-        .ok_or("generation_missing")?;
-    let allocation = active.plan().allocation();
+    let sealed = store
+        .sealed_generation(generation)
+        .map_err(|_| "invalid_current_generation")?;
+    checker
+        .check(&sealed.config_path())
+        .map_err(|_| "core_check_failed")?;
+    let report = capabilities
+        .probe()
+        .map_err(|error| error.code().as_str())?;
+    let plan = NetworkPlanner
+        .build_tproxy(generation, PlanSlot::A, config.capture(), &report)
+        .map_err(|error| error.code().as_str())?;
+    let mut process = launcher
+        .start(&sealed.config_path())
+        .map_err(|error| error.code().as_str())?;
+    if liveness.wait_healthy(&mut process).is_err() {
+        let _ = process.stop();
+        return Err("core_health_failed");
+    }
+    let mut receipt = match network.apply(&plan) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let _ = process.stop();
+            return Err(error.code().as_str());
+        }
+    };
+    let verification = verifier
+        .verify(&plan)
+        .map_err(|error| error.code().as_str());
+    let network_cleanup_failed = network.rollback(&plan, &mut receipt).is_err();
+    let core_cleanup_failed = process.stop().is_err();
+    verification?;
+    if network_cleanup_failed {
+        return Err("rollback_network_failed");
+    }
+    if core_cleanup_failed {
+        return Err("rollback_core_failed");
+    }
+    let allocation = plan.allocation();
     let result = serde_json::json!({
         "ok": true,
         "stage": "activated",
@@ -102,42 +125,6 @@ fn run() -> Result<(), &'static str> {
         "route_table": allocation.route_table(),
         "rule_priority": allocation.rule_priority(),
     });
-    active.stop(&mut network).map_err(|error| {
-        if error.network_failed() {
-            "rollback_network_failed"
-        } else {
-            "rollback_core_failed"
-        }
-    })?;
     println!("{result}");
     Ok(())
-}
-
-#[cfg(unix)]
-const fn recovery_code(error: WorkerRecoveryError) -> &'static str {
-    match error {
-        WorkerRecoveryError::InvalidCurrentGeneration => "invalid_current_generation",
-        WorkerRecoveryError::CapabilityProbeFailed => "capability_probe_failed",
-        WorkerRecoveryError::CoreCheckFailed => "core_check_failed",
-        WorkerRecoveryError::NetworkPlanRejected => "network_plan_rejected",
-        WorkerRecoveryError::CoreStartFailed => "core_start_failed",
-        WorkerRecoveryError::CoreHealthFailed {
-            cleanup_failed: false,
-        } => "core_health_failed",
-        WorkerRecoveryError::CoreHealthFailed {
-            cleanup_failed: true,
-        } => "core_health_cleanup_failed",
-        WorkerRecoveryError::NetworkApplyFailed {
-            cleanup_failed: false,
-        } => "network_apply_failed",
-        WorkerRecoveryError::NetworkApplyFailed {
-            cleanup_failed: true,
-        } => "network_apply_cleanup_failed",
-        WorkerRecoveryError::DataPlaneHealthFailed {
-            cleanup_failed: false,
-        } => "data_plane_health_failed",
-        WorkerRecoveryError::DataPlaneHealthFailed {
-            cleanup_failed: true,
-        } => "data_plane_health_cleanup_failed",
-    }
 }

@@ -138,6 +138,12 @@ fn surfboard_node_spec(
     location: Option<SourceLocation>,
 ) -> Result<NodeSpec, DiagnosticCode> {
     let protocol = line.fields[0].trim().to_ascii_lowercase();
+    if matches!(
+        protocol.as_str(),
+        "http" | "https" | "socks" | "socks5" | "socks5-tls"
+    ) {
+        return Err(DiagnosticCode::UnsupportedSemantics);
+    }
     let server = line.fields[1].trim();
     let port = line.fields[2]
         .trim()

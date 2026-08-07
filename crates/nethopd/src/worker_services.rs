@@ -137,12 +137,14 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlCommand {
     Start,
     Stop,
     Probe,
     Update,
+    UpdateSource(String),
+    RuleSetUpdate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,7 +255,11 @@ impl ControlRequestHandler for WorkerControlHandler {
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
             }
             ControlMethod::SubscriptionUpdate if self.update_available => {
-                self.queue_command(ControlCommand::Update);
+                if let Some(source_id) = request.params().source_id() {
+                    self.queue_command(ControlCommand::UpdateSource(source_id.to_owned()));
+                } else {
+                    self.queue_command(ControlCommand::Update);
+                }
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
             }
             ControlMethod::SubscriptionUpdate => ControlResponse::failure(
@@ -268,15 +274,37 @@ impl ControlRequestHandler for WorkerControlHandler {
             ),
             ControlMethod::ProtocolHello
             | ControlMethod::ConfigGet
+            | ControlMethod::ConfigExport
+            | ControlMethod::CoreVersionCheck
+            | ControlMethod::RuleSetStatus
+            | ControlMethod::RuleSetUpdate
             | ControlMethod::ConfigValidate
             | ControlMethod::ConfigApply
             | ControlMethod::ConfigSchema
             | ControlMethod::CapabilityGet
             | ControlMethod::ConfigMutate
+            | ControlMethod::SubscriptionImportPreview
+            | ControlMethod::SubscriptionImportApply
             | ControlMethod::EventsSubscribe => ControlResponse::failure(
                 request_id,
                 generation,
                 unavailable_control_error(ErrorDomain::Config, "MANAGER-UNAVAILABLE"),
+            ),
+            ControlMethod::NodeList
+            | ControlMethod::NodeTest
+            | ControlMethod::NodeSelect
+            | ControlMethod::NodeExport
+            | ControlMethod::ConnectionsGet
+            | ControlMethod::ConnectionClose
+            | ControlMethod::ConnectionsCloseAll
+            | ControlMethod::LogsGet
+            | ControlMethod::LogsClear
+            | ControlMethod::DiagnosticsBundle
+            | ControlMethod::TopologyGet
+            | ControlMethod::TrafficGet => ControlResponse::failure(
+                request_id,
+                generation,
+                unavailable_control_error(ErrorDomain::Core, "CONTROL-UNAVAILABLE"),
             ),
         }
     }

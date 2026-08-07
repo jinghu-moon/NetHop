@@ -39,6 +39,32 @@ verify_asset() {
   [ "$actual" = "$expected" ] || fail "checksum mismatch: $relative"
 }
 
+publish_persistent_asset() {
+  relative=$1
+  destination=$2
+  source="$MODPATH/$relative"
+  temporary="${destination}.new"
+
+  if [ -e "$destination" ] || [ -L "$destination" ]; then
+    [ -f "$destination" ] && [ ! -L "$destination" ] || fail "persistent asset target is invalid: ${destination##*/}"
+  fi
+  if [ -e "$temporary" ] || [ -L "$temporary" ]; then
+    [ -f "$temporary" ] && [ ! -L "$temporary" ] || fail "persistent asset staging path is invalid: ${temporary##*/}"
+    rm -f "$temporary" || fail "could not clear stale persistent asset staging file"
+  fi
+
+  cp "$source" "$temporary" || fail "could not stage persistent asset: ${destination##*/}"
+  chown 0:0 "$temporary" || fail "could not secure persistent asset: ${destination##*/}"
+  chmod 0600 "$temporary" || fail "could not secure persistent asset: ${destination##*/}"
+  expected=$(expected_digest "$relative")
+  actual=$(actual_digest "$temporary")
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$temporary"
+    fail "persistent asset checksum mismatch: ${destination##*/}"
+  fi
+  mv -f "$temporary" "$destination" || fail "could not publish persistent asset: ${destination##*/}"
+}
+
 [ "${API:-0}" -ge 33 ] || fail "Android API 33 or later is required"
 [ "${ARCH:-}" = "arm64" ] || fail "only arm64 is supported"
 if [ -z "${MAGISK_VER_CODE:-}" ] && [ -z "${KSU_VER_CODE:-}" ] && [ "${KSU:-false}" != "true" ]; then
@@ -46,10 +72,12 @@ if [ -z "${MAGISK_VER_CODE:-}" ] && [ -z "${KSU_VER_CODE:-}" ] && [ "${KSU:-fals
 fi
 
 require_regular_file "$CHECKSUMS"
-[ "$(wc -l < "$CHECKSUMS" | tr -d ' ')" -eq 4 ] || fail "checksum manifest must contain four entries"
+[ "$(wc -l < "$CHECKSUMS" | tr -d ' ')" -eq 6 ] || fail "checksum manifest must contain six entries"
 verify_asset "bin/nethopd"
 verify_asset "bin/nethopctl"
 verify_asset "bin/sing-box"
+verify_asset "rulesets/cn-domain.srs"
+verify_asset "rulesets/cn-ip.srs"
 verify_asset "build-manifest.json"
 
 for directory in \
@@ -61,6 +89,7 @@ for directory in \
   "$DATA_ROOT/rulesets" \
   "$DATA_ROOT/stats" \
   "$DATA_ROOT/state" \
+  "$DATA_ROOT/state/ruleset-cache" \
   "$DATA_ROOT/run" \
   "$DATA_ROOT/logs"
 do
@@ -70,11 +99,21 @@ do
   chmod 0700 "$directory"
 done
 
+publish_persistent_asset "rulesets/cn-domain.srs" "$DATA_ROOT/rulesets/cn-domain.srs"
+publish_persistent_asset "rulesets/cn-ip.srs" "$DATA_ROOT/rulesets/cn-ip.srs"
+
+require_regular_file "$MODPATH/defaults/nethop.toml"
 if [ ! -e "$DATA_ROOT/config/nethop.toml" ]; then
-  require_regular_file "$MODPATH/defaults/nethop.toml"
   cp "$MODPATH/defaults/nethop.toml" "$DATA_ROOT/config/nethop.toml"
 elif [ -L "$DATA_ROOT/config/nethop.toml" ] || [ ! -f "$DATA_ROOT/config/nethop.toml" ]; then
   fail "existing managed config is not a regular file"
+elif ! grep -Eq '^[[:space:]]*schema_version[[:space:]]*=[[:space:]]*2[[:space:]]*$' "$DATA_ROOT/config/nethop.toml"; then
+  if [ ! -e "$DATA_ROOT/config/nethop.toml.pre-v2" ]; then
+    cp "$DATA_ROOT/config/nethop.toml" "$DATA_ROOT/config/nethop.toml.pre-v2"
+    chown 0:0 "$DATA_ROOT/config/nethop.toml.pre-v2"
+    chmod 0600 "$DATA_ROOT/config/nethop.toml.pre-v2"
+  fi
+  cp "$MODPATH/defaults/nethop.toml" "$DATA_ROOT/config/nethop.toml"
 fi
 chown 0:0 "$DATA_ROOT/config/nethop.toml"
 chmod 0600 "$DATA_ROOT/config/nethop.toml"
@@ -96,6 +135,8 @@ set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/bin/nethopd" 0 0 0755
 set_perm "$MODPATH/bin/nethopctl" 0 0 0755
 set_perm "$MODPATH/bin/sing-box" 0 0 0755
+set_perm "$MODPATH/rulesets/cn-domain.srs" 0 0 0644
+set_perm "$MODPATH/rulesets/cn-ip.srs" 0 0 0644
 set_perm "$MODPATH/defaults/nethop.toml" 0 0 0644
 set_perm "$BUILD_MANIFEST" 0 0 0644
 set_perm "$CHECKSUMS" 0 0 0644

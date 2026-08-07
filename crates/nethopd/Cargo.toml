@@ -10,7 +10,7 @@ publish = false
 
 [features]
 default = ["subscription-update"]
-subscription-update = ["nethop-subscription/fetch"]
+subscription-update = ["nethop-subscription/fetch", "nethop-subscription/format-surfboard"]
 
 [dependencies]
 libc = "0.2"
@@ -23,6 +23,8 @@ serde = { version = "1", default-features = false, features = ["derive", "std"] 
 serde_json = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"
 toml = { version = "1.1.4", default-features = false, features = ["std", "serde", "parse", "display"] }
+ureq = { version = "=3.3.0", default-features = false }
+url = { version = "2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

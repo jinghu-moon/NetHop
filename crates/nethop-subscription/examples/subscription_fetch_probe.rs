@@ -1,13 +1,15 @@
-#![cfg(feature = "fetch")]
-
+#[cfg(feature = "fetch")]
 use std::{env, fs, process};
 
+#[cfg(feature = "fetch")]
 use nethop_subscription::{
     CandidateAcceptance, CapabilityMatrix, FetchClient, FetchPolicy, FetchRequest, FormatHint,
     ParserLimits, RequestProfile, SourceCache, SourceId, SourceInput, convert_stable_sources,
 };
+#[cfg(feature = "fetch")]
 use serde::Deserialize;
 
+#[cfg(feature = "fetch")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceConfig {
@@ -15,6 +17,7 @@ struct SourceConfig {
     sources: Vec<Source>,
 }
 
+#[cfg(feature = "fetch")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Source {
@@ -26,6 +29,7 @@ struct Source {
     request_profile: RequestProfile,
 }
 
+#[cfg(feature = "fetch")]
 fn main() {
     let Some(path) = env::args_os().nth(1) else {
         emit_error("missing_config_path");
@@ -77,10 +81,16 @@ fn main() {
     );
 }
 
+#[cfg(feature = "fetch")]
 fn emit_error(code: impl AsRef<str>) -> ! {
     println!(
         "{}",
         serde_json::json!({ "ok": false, "code": code.as_ref() })
     );
     process::exit(2);
+}
+
+#[cfg(not(feature = "fetch"))]
+fn main() {
+    eprintln!("subscription_fetch_probe requires the `fetch` feature");
 }

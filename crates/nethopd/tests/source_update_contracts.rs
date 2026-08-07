@@ -5,11 +5,11 @@ use std::{cell::Cell, collections::BTreeMap, fs, rc::Rc};
 use nethop_core::{
     CaptureMode, CapturePolicy, ClashApi, GenerationId, GenerationStore, ManagedOptions, TunStack,
 };
-use nethop_subscription::{CapabilityMatrix, ParserLimits};
+use nethop_subscription::{CapabilityMatrix, FormatHint, ParserLimits};
 use nethopd::{
-    CandidateChecker, ConfigStore, RunnerError, SourceBodyFetcher, SourceConfig, SourceDefinition,
-    SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceUpdateError, SourceUpdateService,
-    UpdateRuntimePolicy,
+    CandidateChecker, ConfigStore, ManualSourceStore, RunnerError, SourceBody, SourceBodyFetcher,
+    SourceBodyOrigin, SourceConfig, SourceDefinition, SourceIdEntropy, SourceRegistry,
+    SourceRegistryError, SourceUpdateError, SourceUpdateService, UpdateRuntimePolicy,
 };
 use tempfile::tempdir;
 
@@ -30,7 +30,7 @@ impl SourceIdEntropy for FixedEntropy {
 }
 
 impl SourceBodyFetcher for FakeFetcher {
-    fn fetch(&mut self, source: &SourceDefinition) -> Result<Vec<u8>, SourceUpdateError> {
+    fn fetch(&mut self, source: &SourceDefinition) -> Result<SourceBody, SourceUpdateError> {
         if self.fail {
             return Err(SourceUpdateError::Fetch);
         }
@@ -40,7 +40,16 @@ impl SourceBodyFetcher for FakeFetcher {
         self.bodies
             .get(source.id().as_str())
             .cloned()
+            .map(|bytes| SourceBody::new(bytes, SourceBodyOrigin::Fresh))
             .ok_or(SourceUpdateError::Fetch)
+    }
+
+    fn cached(&mut self, source: &SourceDefinition) -> Result<SourceBody, SourceUpdateError> {
+        self.bodies
+            .get(source.id().as_str())
+            .cloned()
+            .map(|bytes| SourceBody::new(bytes, SourceBodyOrigin::LastKnownGood))
+            .ok_or(SourceUpdateError::Cache)
     }
 }
 
@@ -64,7 +73,7 @@ impl CandidateChecker for FakeChecker {
 fn write_sources(path: &std::path::Path) -> SourceConfig {
     fs::write(
         path,
-        br#"schema_version = 1
+        br#"schema_version = 2
 [service]
 enabled = true
 [subscriptions]
@@ -119,6 +128,64 @@ fn bodies(config: &SourceConfig) -> BTreeMap<String, Vec<u8>> {
                 .to_vec(),
         ),
     ])
+}
+
+#[test]
+fn surfboard_source_reaches_the_existing_nodes_only_candidate_pipeline() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        br#"schema_version = 2
+[service]
+enabled = true
+[subscriptions]
+[[subscriptions.sources]]
+name = "Surfboard"
+url = "https://surfboard.example/sub"
+request_profile = "surfboard"
+format_hint = "surfboard_ini"
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let snapshot = ConfigStore::new(&config_path).unwrap().load().unwrap();
+    let config = SourceRegistry::new(directory.path().join("source-registry.v1.json"))
+        .unwrap()
+        .reconcile(&snapshot, &mut FixedEntropy(1))
+        .unwrap();
+    assert_eq!(
+        config.sources()[0].expected_format(),
+        FormatHint::SurfboardIni
+    );
+
+    let body = include_bytes!("../../nethop-subscription/tests/fixtures/surfboard/basic.conf");
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let checker = FakeChecker {
+        calls: Rc::clone(&calls),
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: BTreeMap::from([(config.sources()[0].id().as_str().to_owned(), body.to_vec())]),
+            fail: false,
+            failed_source: None,
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    );
+    let report = service.update(&config).unwrap();
+    assert_eq!(report.accepted, 3);
+    assert_eq!(report.node_count, 3);
+    assert_eq!(calls.get(), 1);
 }
 
 #[test]
@@ -252,4 +319,183 @@ fn one_unavailable_source_does_not_discard_other_publishable_sources() {
     assert_eq!(report.accepted, 1);
     assert_eq!(report.node_count, 1);
     assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn selected_source_update_uses_only_cached_bodies_for_other_sources() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let selected = config.sources()[0].id().clone();
+    let unselected = config.sources()[1].id().as_str().to_owned();
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let checker = FakeChecker {
+        calls,
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: bodies(&config),
+            fail: false,
+            failed_source: Some(unselected),
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    );
+
+    let report = service.update_source(&config, &selected).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert_eq!(report.sources[0].origin, Some(SourceBodyOrigin::Fresh));
+    assert_eq!(
+        report.sources[1].origin,
+        Some(SourceBodyOrigin::LastKnownGood)
+    );
+    assert_eq!(report.node_count, 2);
+}
+
+#[test]
+fn selected_source_update_fails_closed_when_another_source_has_no_cache() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let selected = config.sources()[0].id().clone();
+    let mut available = bodies(&config);
+    available.remove(config.sources()[1].id().as_str());
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let checker = FakeChecker {
+        calls: Rc::new(Cell::new(0)),
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: available,
+            fail: false,
+            failed_source: None,
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    );
+
+    assert!(matches!(
+        service.update_source(&config, &selected),
+        Err(SourceUpdateError::Cache)
+    ));
+    assert_eq!(store.current_generation().unwrap(), None);
+}
+
+#[test]
+fn source_local_filter_runs_before_candidate_composition() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        br#"schema_version = 2
+[service]
+enabled = true
+[subscriptions]
+[[subscriptions.sources]]
+name = "Filtered"
+url = "https://one.example/s"
+filter = { include_names = ["keep"], protocols = ["vless"] }
+"#,
+    )
+    .unwrap();
+    let snapshot = ConfigStore::new(&config_path).unwrap().load().unwrap();
+    let config = SourceRegistry::new(config_path.with_file_name("source-registry.v1.json"))
+        .unwrap()
+        .reconcile(&snapshot, &mut FixedEntropy(1))
+        .unwrap();
+    let source_id = config.sources()[0].id().as_str().to_owned();
+    let bodies = BTreeMap::from([(
+        source_id,
+        b"trojan://secret@drop.example:443?security=tls#keep-trojan\n\
+vless://550e8400-e29b-41d4-a716-446655440000@keep.example:443?security=tls#keep-vless\n\
+vless://550e8400-e29b-41d4-a716-446655440001@drop.example:443?security=tls#drop-vless\n"
+            .to_vec(),
+    )]);
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let checker = FakeChecker {
+        calls: calls.clone(),
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies,
+            fail: false,
+            failed_source: None,
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    );
+
+    let report = service.update(&config).unwrap();
+    assert_eq!(report.node_count, 1);
+    assert_eq!(report.accepted, 1);
+    let generated = fs::read_to_string(store.generations_root().join("1/config.json")).unwrap();
+    assert!(generated.contains("keep.example"));
+    assert!(!generated.contains("drop.example"));
+}
+
+#[test]
+fn local_import_requires_preview_digest_and_does_not_publish_before_commit() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let checker = FakeChecker {
+        calls: calls.clone(),
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: bodies(&config),
+            fail: false,
+            failed_source: None,
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    )
+    .with_manual_source_store(
+        ManualSourceStore::new(directory.path().join("manual-source.body")).unwrap(),
+    );
+    let payload = b"trojan://local-secret@local.example:443#local\n";
+    let preview = service
+        .preview_import(&config, payload, FormatHint::UriList)
+        .unwrap();
+    assert_eq!(preview.node_count, 3);
+    assert_eq!(calls.get(), 0);
+    assert!(matches!(
+        service.prepare_import(&config, payload, FormatHint::UriList, &"0".repeat(64)),
+        Err(SourceUpdateError::CandidateDigestMismatch)
+    ));
+    let prepared = service
+        .prepare_import(
+            &config,
+            payload,
+            FormatHint::UriList,
+            &preview.candidate_digest,
+        )
+        .unwrap();
+    assert_eq!(store.current_generation().unwrap(), None);
+    let report = service.commit(prepared).unwrap();
+    assert_eq!(store.current_generation().unwrap(), Some(report.generation));
+    assert_eq!(calls.get(), 1);
+    assert!(directory.path().join("manual-source.body").is_file());
+
+    let refreshed = service.update(&config).unwrap();
+    assert_eq!(refreshed.node_count, 3);
+    let generated = fs::read_to_string(store.generations_root().join("2/config.json")).unwrap();
+    assert!(generated.contains("local.example"));
 }

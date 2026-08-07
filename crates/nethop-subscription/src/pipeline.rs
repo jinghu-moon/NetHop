@@ -411,7 +411,13 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
     object.insert("type".into(), json!(node.node.protocol().as_str()));
     object.insert("tag".into(), json!(node.node_id.as_str()));
     object.insert("server".into(), json!(node.node.endpoint().server()));
-    object.insert("server_port".into(), json!(node.node.endpoint().port()));
+    let has_hysteria2_port_hopping = matches!(
+        node.node.protocol_options(),
+        ProtocolOptions::Hysteria2(options) if !options.server_ports.is_empty()
+    );
+    if !has_hysteria2_port_hopping {
+        object.insert("server_port".into(), json!(node.node.endpoint().port()));
+    }
     match node.node.credentials() {
         Credentials::Vless { uuid } => {
             object.insert("uuid".into(), json!(uuid.expose()));
@@ -453,6 +459,14 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
             object.insert("uuid".into(), json!(uuid.expose()));
             object.insert("password".into(), json!(password.expose()));
         }
+        Credentials::Http { username, password } | Credentials::Socks { username, password } => {
+            if let Some(username) = username {
+                object.insert("username".into(), json!(username.expose()));
+            }
+            if let Some(password) = password {
+                object.insert("password".into(), json!(password.expose()));
+            }
+        }
     }
     if node.node.tls().enabled {
         object.insert("tls".into(), tls_json(node.node.tls()));
@@ -469,14 +483,87 @@ pub fn compose_outbound(node: &DedupedNode) -> Value {
     {
         object.insert("udp_over_tcp".into(), udp_over_tcp_json(*options));
     }
-    if let ProtocolOptions::Tuic {
-        congestion_control: Some(congestion_control),
-    } = node.node.protocol_options()
-    {
+    if let ProtocolOptions::Tuic(options) = node.node.protocol_options() {
+        if let Some(value) = &options.congestion_control {
+            object.insert("congestion_control".into(), json!(value.as_str()));
+        }
+        if let Some(value) = &options.udp_relay_mode {
+            object.insert("udp_relay_mode".into(), json!(value.as_str()));
+        }
+        if options.udp_over_stream {
+            object.insert("udp_over_stream".into(), json!(true));
+        }
+        if options.zero_rtt_handshake {
+            object.insert("zero_rtt_handshake".into(), json!(true));
+        }
+        if let Some(value) = &options.heartbeat {
+            object.insert("heartbeat".into(), json!(value.as_str()));
+        }
+    }
+    if let ProtocolOptions::Hysteria2(options) = node.node.protocol_options() {
+        if !options.server_ports.is_empty() {
+            object.insert(
+                "server_ports".into(),
+                json!(
+                    options
+                        .server_ports
+                        .iter()
+                        .map(|value| value.as_str())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        if let Some(value) = &options.hop_interval {
+            object.insert("hop_interval".into(), json!(value.as_str()));
+        }
+        if let Some(value) = options.up_mbps {
+            object.insert("up_mbps".into(), json!(value));
+        }
+        if let Some(value) = options.down_mbps {
+            object.insert("down_mbps".into(), json!(value));
+        }
+    }
+    if let ProtocolOptions::AnyTls(options) = node.node.protocol_options() {
+        if let Some(value) = &options.idle_session_check_interval {
+            object.insert("idle_session_check_interval".into(), json!(value.as_str()));
+        }
+        if let Some(value) = &options.idle_session_timeout {
+            object.insert("idle_session_timeout".into(), json!(value.as_str()));
+        }
+        if let Some(value) = options.min_idle_session {
+            object.insert("min_idle_session".into(), json!(value));
+        }
+    }
+    if let ProtocolOptions::Http(options) = node.node.protocol_options() {
+        if let Some(path) = &options.path {
+            object.insert("path".into(), json!(path.as_str()));
+        }
+        if !options.headers.is_empty() {
+            object.insert(
+                "headers".into(),
+                json!(
+                    options
+                        .headers
+                        .iter()
+                        .map(|(key, value)| (key, value.expose()))
+                        .collect::<BTreeMap<_, _>>()
+                ),
+            );
+        }
+    }
+    if let ProtocolOptions::Socks(options) = node.node.protocol_options() {
+        object.insert("version".into(), json!(options.version.as_str()));
         object.insert(
-            "congestion_control".into(),
-            json!(congestion_control.as_str()),
+            "network".into(),
+            if node.node.capabilities().udp {
+                json!(["tcp", "udp"])
+            } else {
+                json!(["tcp"])
+            },
         );
+        if let Some(options) = options.udp_over_tcp {
+            object.insert("udp_over_tcp".into(), udp_over_tcp_json(options));
+        }
     }
     serde_json::to_value(object).expect("outbound object must serialize")
 }
@@ -493,16 +580,160 @@ pub struct SourceInput {
     pub bytes: Vec<u8>,
 }
 
+const MAX_FILTER_RULES: usize = 32;
+const MAX_FILTER_PATTERN_BYTES: usize = 128;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeFilter {
+    include_names: Vec<String>,
+    exclude_names: Vec<String>,
+    excluded_node_ids: Vec<String>,
+    protocols: Vec<ProxyProtocol>,
+}
+
+impl NodeFilter {
+    pub fn new(
+        mut include_names: Vec<String>,
+        mut exclude_names: Vec<String>,
+        mut protocols: Vec<ProxyProtocol>,
+    ) -> Result<Self, NodeFilterError> {
+        if include_names.len() + exclude_names.len() > MAX_FILTER_RULES
+            || include_names.iter().chain(&exclude_names).any(|pattern| {
+                pattern.is_empty()
+                    || pattern.len() > MAX_FILTER_PATTERN_BYTES
+                    || pattern.chars().any(char::is_control)
+            })
+            || protocols.len() > ProxyProtocol::ALL.len()
+        {
+            return Err(NodeFilterError::InvalidRule);
+        }
+        include_names.sort();
+        exclude_names.sort();
+        protocols.sort();
+        if include_names.windows(2).any(|pair| pair[0] == pair[1])
+            || exclude_names.windows(2).any(|pair| pair[0] == pair[1])
+            || protocols.windows(2).any(|pair| pair[0] == pair[1])
+        {
+            return Err(NodeFilterError::DuplicateRule);
+        }
+        Ok(Self {
+            include_names,
+            exclude_names,
+            excluded_node_ids: Vec::new(),
+            protocols,
+        })
+    }
+
+    pub fn new_with_node_ids(
+        include_names: Vec<String>,
+        exclude_names: Vec<String>,
+        mut excluded_node_ids: Vec<String>,
+        protocols: Vec<ProxyProtocol>,
+    ) -> Result<Self, NodeFilterError> {
+        let mut filter = Self::new(include_names, exclude_names, protocols)?;
+        if excluded_node_ids.len() > MAX_FILTER_RULES
+            || excluded_node_ids.iter().any(|id| {
+                id.len() != 21
+                    || !id.starts_with("nh1s-")
+                    || !id[5..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+        {
+            return Err(NodeFilterError::InvalidRule);
+        }
+        excluded_node_ids.sort();
+        if excluded_node_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(NodeFilterError::DuplicateRule);
+        }
+        filter.excluded_node_ids = excluded_node_ids;
+        Ok(filter)
+    }
+
+    pub fn include_names(&self) -> &[String] {
+        &self.include_names
+    }
+
+    pub fn exclude_names(&self) -> &[String] {
+        &self.exclude_names
+    }
+
+    pub fn protocols(&self) -> &[ProxyProtocol] {
+        &self.protocols
+    }
+
+    pub fn excluded_node_ids(&self) -> &[String] {
+        &self.excluded_node_ids
+    }
+
+    fn accepts(&self, node: &ProxyNode) -> bool {
+        let name = node.display_name().as_str();
+        let node_id = fingerprint_node(node).display_id().to_string();
+        (self.protocols.is_empty() || self.protocols.binary_search(&node.protocol()).is_ok())
+            && (self.include_names.is_empty()
+                || self
+                    .include_names
+                    .iter()
+                    .any(|pattern| contains_ascii_case_insensitive(name, pattern)))
+            && !self
+                .exclude_names
+                .iter()
+                .any(|pattern| contains_ascii_case_insensitive(name, pattern))
+            && !self.excluded_node_ids.binary_search(&node_id).is_ok()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum NodeFilterError {
+    #[error("node filter rule is invalid or exceeds its bound")]
+    InvalidRule,
+    #[error("node filter contains a duplicate rule")]
+    DuplicateRule,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilteredSourceInput {
+    pub source: SourceInput,
+    pub filter: NodeFilter,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StableConversion {
     pub nodes: Vec<DedupedNode>,
     pub outbounds_json: String,
     pub report: ConversionReport,
+    pub source_outcomes: BTreeMap<SourceId, SourceOutcome>,
     pub elapsed_micros: u128,
 }
 
 pub fn convert_stable_sources(
     inputs: Vec<SourceInput>,
+    limits: &ParserLimits,
+    matrix: &CapabilityMatrix,
+) -> StableConversion {
+    convert_sources(
+        inputs
+            .into_iter()
+            .map(|source| FilteredSourceInput {
+                source,
+                filter: NodeFilter::default(),
+            })
+            .collect(),
+        limits,
+        matrix,
+    )
+}
+
+pub fn convert_filtered_sources(
+    inputs: Vec<FilteredSourceInput>,
+    limits: &ParserLimits,
+    matrix: &CapabilityMatrix,
+) -> StableConversion {
+    convert_sources(inputs, limits, matrix)
+}
+
+fn convert_sources(
+    inputs: Vec<FilteredSourceInput>,
     limits: &ParserLimits,
     matrix: &CapabilityMatrix,
 ) -> StableConversion {
@@ -516,13 +747,25 @@ pub fn convert_stable_sources(
         diagnostic_counts: BTreeMap::new(),
     };
     for input in inputs {
-        let mut output = parse_source(&input, limits, matrix);
-        detected = input.format_hint;
-        let rejected = output.rejected_count();
+        let mut output = parse_source(&input.source, limits, matrix);
+        detected = input.source.format_hint;
+        let parsed_accepted = output.accepted_count();
+        let mut rejected = output.rejected_count();
         let source_warnings = output.diagnostics.len();
         let mut nodes = Vec::with_capacity(output.accepted_count());
         for mut item in output.nodes.drain(..) {
             if let Some(node) = item.node.take() {
+                if !input.filter.accepts(&node) {
+                    rejected += 1;
+                    report.items.push(CompactItemReport {
+                        index: item.item_index,
+                        status: CompactStatus::Rejected,
+                        protocol: Some(node.protocol()),
+                        node_id: None,
+                        codes: vec![DiagnosticCode::NodeFilteredOut],
+                    });
+                    continue;
+                }
                 let fingerprint = fingerprint_node(&node);
                 let codes = item
                     .warnings
@@ -561,8 +804,15 @@ pub fn convert_stable_sources(
             report.summary.warnings += 1;
             push_diagnostic(&mut report, diagnostic, limits);
         }
+        if parsed_accepted > 0 && nodes.is_empty() {
+            push_diagnostic(
+                &mut report,
+                NodeDiagnostic::new(DiagnosticCode::SourceFilteredEmpty, Severity::Error),
+                limits,
+            );
+        }
         batches.push(SourceBatch {
-            source_id: input.source_id,
+            source_id: input.source.source_id,
             nodes,
             rejected,
             warnings: source_warnings,
@@ -580,8 +830,22 @@ pub fn convert_stable_sources(
         nodes,
         outbounds_json,
         report,
+        source_outcomes: outcomes,
         elapsed_micros: started.elapsed().as_micros(),
     }
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    !needle.is_empty()
+        && needle.len() <= haystack.len()
+        && haystack.windows(needle.len()).any(|window| {
+            window
+                .iter()
+                .zip(needle)
+                .all(|(left, right)| left.eq_ignore_ascii_case(right))
+        })
 }
 
 fn parse_source(
@@ -742,6 +1006,18 @@ fn encode_credentials(out: &mut Vec<u8>, credentials: &Credentials) {
             field(out, "uuid", uuid.expose());
             field(out, "password", password.expose());
         }
+        Credentials::Http { username, password } | Credentials::Socks { username, password } => {
+            field(
+                out,
+                "username",
+                username.as_ref().map_or("", |value| value.expose()),
+            );
+            field(
+                out,
+                "password",
+                password.as_ref().map_or("", |value| value.expose()),
+            );
+        }
     }
 }
 
@@ -809,18 +1085,106 @@ fn encode_protocol_options(out: &mut Vec<u8>, options: &ProtocolOptions) {
             "flow",
             flow.as_ref().map_or("", |value| value.as_str()),
         ),
-        ProtocolOptions::Tuic { congestion_control } => field(
-            out,
-            "congestion_control",
-            congestion_control
-                .as_ref()
-                .map_or("", |value| value.as_str()),
-        ),
+        ProtocolOptions::Tuic(options) => {
+            field(
+                out,
+                "congestion_control",
+                options
+                    .congestion_control
+                    .as_ref()
+                    .map_or("", |value| value.as_str()),
+            );
+            field(
+                out,
+                "udp_relay_mode",
+                options
+                    .udp_relay_mode
+                    .as_ref()
+                    .map_or("", |value| value.as_str()),
+            );
+            field(out, "udp_over_stream", &options.udp_over_stream.to_string());
+            field(
+                out,
+                "zero_rtt_handshake",
+                &options.zero_rtt_handshake.to_string(),
+            );
+            field(
+                out,
+                "heartbeat",
+                options
+                    .heartbeat
+                    .as_ref()
+                    .map_or("", |value| value.as_str()),
+            );
+        }
+        ProtocolOptions::Hysteria2(options) => {
+            for value in &options.server_ports {
+                field(out, "server_port", value.as_str());
+            }
+            field(
+                out,
+                "hop_interval",
+                options
+                    .hop_interval
+                    .as_ref()
+                    .map_or("", |value| value.as_str()),
+            );
+            field(
+                out,
+                "up_mbps",
+                &options.up_mbps.map_or(0, u32::from).to_string(),
+            );
+            field(
+                out,
+                "down_mbps",
+                &options.down_mbps.map_or(0, u32::from).to_string(),
+            );
+        }
+        ProtocolOptions::AnyTls(options) => {
+            field(
+                out,
+                "idle_session_check_interval",
+                options
+                    .idle_session_check_interval
+                    .as_ref()
+                    .map_or("", |value| value.as_str()),
+            );
+            field(
+                out,
+                "idle_session_timeout",
+                options
+                    .idle_session_timeout
+                    .as_ref()
+                    .map_or("", |value| value.as_str()),
+            );
+            field(
+                out,
+                "min_idle_session",
+                &options.min_idle_session.map_or(0, u32::from).to_string(),
+            );
+        }
         ProtocolOptions::Shadowsocks {
             udp_over_tcp: Some(options),
         } => {
             field(out, "udp_over_tcp_enabled", &options.enabled.to_string());
             field(out, "udp_over_tcp_version", &options.version.to_string());
+        }
+        ProtocolOptions::Http(options) => {
+            field(
+                out,
+                "http_path",
+                options.path.as_ref().map_or("", |value| value.as_str()),
+            );
+            for (key, value) in &options.headers {
+                field(out, key, value.expose());
+            }
+        }
+        ProtocolOptions::Socks(options) => {
+            field(out, "socks_version", options.version.as_str());
+            if let Some(options) = options.udp_over_tcp {
+                field(out, "udp_over_tcp_enabled", &options.enabled.to_string());
+                field(out, "udp_over_tcp_version", &options.version.to_string());
+            }
         }
         _ => {}
     }

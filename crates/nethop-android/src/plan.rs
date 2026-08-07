@@ -1,4 +1,4 @@
-use nethop_core::{CaptureMode, CapturePolicy, GenerationId, InterfacePolicy};
+use nethop_core::{CaptureMode, CapturePolicy, ForwardingPolicy, GenerationId, InterfacePolicy};
 use thiserror::Error;
 
 use crate::capability::{CapabilityReport, CapabilityStatus, IpFamily, ResourceCandidate};
@@ -21,6 +21,8 @@ impl PlanSlot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkOperationKind {
     Ipv6GuardRestore,
+    DnsGuardRestore,
+    ForwardingRestore,
     PolicyRouteAdd,
     PolicyRuleAdd,
     NetfilterRestore,
@@ -31,8 +33,11 @@ pub struct NetworkPlan {
     generation: GenerationId,
     slot: PlanSlot,
     allocation: ResourceCandidate,
+    bypass_mark: u32,
     ipv6_captured: bool,
     ipv6_guarded: bool,
+    dns_guarded: bool,
+    forwarding_interfaces: Vec<String>,
     steps: Vec<PlanStep>,
 }
 
@@ -45,8 +50,16 @@ impl NetworkPlan {
         self.slot
     }
 
+    pub const fn slot_suffix(&self) -> &'static str {
+        self.slot.suffix()
+    }
+
     pub const fn allocation(&self) -> ResourceCandidate {
         self.allocation
+    }
+
+    pub(crate) const fn bypass_mark(&self) -> u32 {
+        self.bypass_mark
     }
 
     pub const fn ipv6_guarded(&self) -> bool {
@@ -55,6 +68,18 @@ impl NetworkPlan {
 
     pub const fn ipv6_captured(&self) -> bool {
         self.ipv6_captured
+    }
+
+    pub const fn dns_guarded(&self) -> bool {
+        self.dns_guarded
+    }
+
+    pub fn forwarding_interfaces(&self) -> &[String] {
+        &self.forwarding_interfaces
+    }
+
+    pub fn forwarding_owner_marker(&self) -> String {
+        format!("nethop:fwd:g={}", self.generation.get())
     }
 
     pub fn owner_marker(&self) -> String {
@@ -86,6 +111,10 @@ impl NetworkPlan {
 
     pub(crate) fn prerouting_chain(&self) -> String {
         format!("NH_PRE_{}", self.slot.suffix())
+    }
+
+    pub(crate) fn dns_guard_chain(&self) -> String {
+        format!("NH_DNS_{}", self.slot.suffix())
     }
 }
 
@@ -169,6 +198,8 @@ impl NetworkPlanner {
             return Err(NetworkPlanError::BypassMarkConflict);
         }
         let interfaces = resolve_interfaces(policy.interface_policy(), capabilities.interfaces())?;
+        let forwarding_interfaces =
+            resolve_forwarding_interfaces(policy.forwarding_policy(), capabilities.interfaces())?;
 
         let ipv6_tproxy = capabilities.ipv6().supports_tproxy();
         let ipv6_present = match capabilities.ipv6().address() {
@@ -182,7 +213,7 @@ impl NetworkPlanner {
         }
 
         let owner = format!("nethop:g={}", generation.get());
-        let mut steps = Vec::with_capacity(if ipv6_tproxy { 6 } else { 4 });
+        let mut steps = Vec::with_capacity(if ipv6_tproxy { 8 } else { 5 });
 
         if ipv6_guarded {
             let (apply, rollback) = ipv6_guard_payloads(slot, policy, &owner);
@@ -214,6 +245,46 @@ impl NetworkPlanner {
             apply4,
             rollback4,
         ));
+        let (dns_apply4, dns_rollback4) = dns_guard_payloads(
+            IpFamily::Ipv4,
+            slot,
+            policy,
+            allocation,
+            &owner,
+            interfaces.as_deref(),
+        );
+        steps.push(restore_step(
+            NetworkOperationKind::DnsGuardRestore,
+            IpFamily::Ipv4,
+            dns_apply4,
+            dns_rollback4,
+        ));
+        if !forwarding_interfaces.is_empty() {
+            let (apply, rollback) = forwarding_payloads(
+                slot,
+                policy,
+                allocation,
+                &forwarding_interfaces,
+                &format!("nethop:fwd:g={}", generation.get()),
+            );
+            steps.push(restore_step(
+                NetworkOperationKind::ForwardingRestore,
+                IpFamily::Ipv4,
+                apply,
+                rollback,
+            ));
+            let (apply6, rollback6) = forwarding_ipv6_guard_payloads(
+                slot,
+                &forwarding_interfaces,
+                &format!("nethop:fwd:g={}", generation.get()),
+            );
+            steps.push(restore_step(
+                NetworkOperationKind::ForwardingRestore,
+                IpFamily::Ipv6,
+                apply6,
+                rollback6,
+            ));
+        }
         if ipv6_tproxy {
             let (apply6, rollback6) = tproxy_payloads(
                 IpFamily::Ipv6,
@@ -230,17 +301,86 @@ impl NetworkPlanner {
                 apply6,
                 rollback6,
             ));
+            let (dns_apply6, dns_rollback6) = dns_guard_payloads(
+                IpFamily::Ipv6,
+                slot,
+                policy,
+                allocation,
+                &owner,
+                interfaces.as_deref(),
+            );
+            steps.push(restore_step(
+                NetworkOperationKind::DnsGuardRestore,
+                IpFamily::Ipv6,
+                dns_apply6,
+                dns_rollback6,
+            ));
         }
 
         Ok(NetworkPlan {
             generation,
             slot,
             allocation,
+            bypass_mark,
             ipv6_captured: ipv6_tproxy,
             ipv6_guarded,
+            dns_guarded: true,
+            forwarding_interfaces,
             steps,
         })
     }
+}
+
+fn dns_guard_payloads(
+    _family: IpFamily,
+    slot: PlanSlot,
+    policy: &CapturePolicy,
+    allocation: ResourceCandidate,
+    owner: &str,
+    interfaces: Option<&[String]>,
+) -> (String, String) {
+    let chain = format!("NH_DNS_{}", slot.suffix());
+    let mut apply = vec![
+        "*filter".to_owned(),
+        format!("-N {chain}"),
+        format!("-A OUTPUT -m comment --comment {owner} -j {chain}"),
+        format!("-A {chain} -o lo -j RETURN"),
+        format!(
+            "-A {chain} -m mark --mark 0x{:x}/0x{:x} -j RETURN",
+            allocation.mark(),
+            allocation.mask()
+        ),
+        format!(
+            "-A {chain} -m mark --mark 0x{:x}/0xffffffff -j RETURN",
+            policy.bypass_mark().expect("validated TPROXY policy")
+        ),
+    ];
+    let mut append_drop = |protocol: &str, port: u16| {
+        if let Some(interfaces) = interfaces {
+            for interface in interfaces {
+                apply.push(format!(
+                    "-A {chain} -o {interface} -p {protocol} --dport {port} -j DROP"
+                ));
+            }
+        } else {
+            apply.push(format!("-A {chain} -p {protocol} --dport {port} -j DROP"));
+        }
+    };
+    append_drop("udp", 53);
+    append_drop("tcp", 53);
+    append_drop("tcp", 853);
+    apply.extend([format!("-A {chain} -j RETURN"), "COMMIT".to_owned()]);
+
+    let rollback = [
+        "*filter".to_owned(),
+        format!("-D OUTPUT -m comment --comment {owner} -j {chain}"),
+        format!("-F {chain}"),
+        format!("-X {chain}"),
+        "COMMIT".to_owned(),
+    ]
+    .join("\n")
+        + "\n";
+    (apply.join("\n") + "\n", rollback)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,6 +396,7 @@ pub enum PlanDiagnosticCode {
     ResourceConflict,
     BypassMarkConflict,
     InterfaceSelectionEmpty,
+    ForwardingInterfaceSelectionEmpty,
 }
 
 impl PlanDiagnosticCode {
@@ -272,6 +413,9 @@ impl PlanDiagnosticCode {
             Self::ResourceConflict => "network_plan_resource_conflict",
             Self::BypassMarkConflict => "network_plan_bypass_mark_conflict",
             Self::InterfaceSelectionEmpty => "network_plan_interface_selection_empty",
+            Self::ForwardingInterfaceSelectionEmpty => {
+                "network_plan_forwarding_interface_selection_empty"
+            }
         }
     }
 }
@@ -300,6 +444,8 @@ pub enum NetworkPlanError {
     BypassMarkConflict,
     #[error("configured interface scope matches no safe Android interface")]
     InterfaceSelectionEmpty,
+    #[error("requested hotspot or USB forwarding matches no safe Android interface")]
+    ForwardingInterfaceSelectionEmpty,
 }
 
 impl NetworkPlanError {
@@ -316,6 +462,9 @@ impl NetworkPlanError {
             Self::ResourceConflict => PlanDiagnosticCode::ResourceConflict,
             Self::BypassMarkConflict => PlanDiagnosticCode::BypassMarkConflict,
             Self::InterfaceSelectionEmpty => PlanDiagnosticCode::InterfaceSelectionEmpty,
+            Self::ForwardingInterfaceSelectionEmpty => {
+                PlanDiagnosticCode::ForwardingInterfaceSelectionEmpty
+            }
         }
     }
 }
@@ -355,7 +504,7 @@ fn push_policy_steps(steps: &mut Vec<PlanStep>, family: IpFamily, allocation: Re
     });
 }
 
-fn restore_step(
+pub(crate) fn restore_step(
     kind: NetworkOperationKind,
     family: IpFamily,
     apply: String,
@@ -576,6 +725,125 @@ fn resolve_interfaces(
     }
 }
 
+fn resolve_forwarding_interfaces(
+    policy: ForwardingPolicy,
+    available: &[String],
+) -> Result<Vec<String>, NetworkPlanError> {
+    if !policy.enabled() {
+        return Ok(Vec::new());
+    }
+    let mut selected = available
+        .iter()
+        .filter(|name| {
+            (policy.hotspot() && is_hotspot_interface(name))
+                || (policy.usb() && is_usb_tether_interface(name))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    selected.sort();
+    selected.dedup();
+    if selected.is_empty() || selected.len() > 8 {
+        Err(NetworkPlanError::ForwardingInterfaceSelectionEmpty)
+    } else {
+        Ok(selected)
+    }
+}
+
+fn forwarding_payloads(
+    slot: PlanSlot,
+    policy: &CapturePolicy,
+    allocation: ResourceCandidate,
+    interfaces: &[String],
+    owner: &str,
+) -> (String, String) {
+    let chain = format!("NH_FWD_{}", slot.suffix());
+    let mut apply = vec!["*mangle".to_owned(), format!("-N {chain}")];
+    for interface in interfaces {
+        apply.push(format!(
+            "-A PREROUTING -i {interface} -m comment --comment {owner} -j {chain}"
+        ));
+    }
+    apply.push(format!("-A {chain} -m conntrack --ctdir REPLY -j ACCEPT"));
+    apply.push(format!(
+        "-A {chain} -m mark --mark 0x{:x}/0x{:x} -j RETURN",
+        allocation.mark(),
+        allocation.mask()
+    ));
+    for destination in [
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+    ] {
+        apply.push(format!("-A {chain} -d {destination} -j RETURN"));
+    }
+    let inbound_port = policy
+        .inbound_port()
+        .expect("validated TPROXY policy has an inbound port");
+    if policy.proxy_tcp() {
+        apply.push(format!(
+            "-A {chain} -p tcp -j TPROXY --on-port {inbound_port} --tproxy-mark 0x{:x}/0x{:x}",
+            allocation.mark(),
+            allocation.mask()
+        ));
+    }
+    if policy.proxy_udp() {
+        apply.push(format!(
+            "-A {chain} -p udp -j TPROXY --on-port {inbound_port} --tproxy-mark 0x{:x}/0x{:x}",
+            allocation.mark(),
+            allocation.mask()
+        ));
+    }
+    apply.push("COMMIT".to_owned());
+
+    let mut rollback = vec!["*mangle".to_owned()];
+    for interface in interfaces {
+        rollback.push(format!(
+            "-D PREROUTING -i {interface} -m comment --comment {owner} -j {chain}"
+        ));
+    }
+    rollback.extend([
+        format!("-F {chain}"),
+        format!("-X {chain}"),
+        "COMMIT".to_owned(),
+    ]);
+    (apply.join("\n") + "\n", rollback.join("\n") + "\n")
+}
+
+fn forwarding_ipv6_guard_payloads(
+    slot: PlanSlot,
+    interfaces: &[String],
+    owner: &str,
+) -> (String, String) {
+    let chain = format!("NH_FWD6_{}", slot.suffix());
+    let mut apply = vec!["*filter".to_owned(), format!("-N {chain}")];
+    for interface in interfaces {
+        apply.push(format!(
+            "-A FORWARD -i {interface} -m comment --comment {owner} -j {chain}"
+        ));
+    }
+    apply.push(format!("-A {chain} -j DROP"));
+    apply.push("COMMIT".to_owned());
+
+    let mut rollback = vec!["*filter".to_owned()];
+    for interface in interfaces {
+        rollback.push(format!(
+            "-D FORWARD -i {interface} -m comment --comment {owner} -j {chain}"
+        ));
+    }
+    rollback.extend([
+        format!("-F {chain}"),
+        format!("-X {chain}"),
+        "COMMIT".to_owned(),
+    ]);
+    (apply.join("\n") + "\n", rollback.join("\n") + "\n")
+}
+
 fn is_wifi_interface(name: &str) -> bool {
     ["wlan", "wifi", "swlan"]
         .iter()
@@ -588,6 +856,24 @@ fn is_mobile_interface(name: &str) -> bool {
     ]
     .iter()
     .any(|prefix| name.starts_with(prefix))
+}
+
+fn is_hotspot_interface(name: &str) -> bool {
+    if ["ap", "softap", "swlan"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        return true;
+    }
+    name.strip_prefix("wlan")
+        .and_then(|suffix| suffix.parse::<u8>().ok())
+        .is_some_and(|index| index > 0)
+}
+
+fn is_usb_tether_interface(name: &str) -> bool {
+    ["rndis", "usb"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 fn glob_matches(pattern: &str, value: &str) -> bool {
@@ -682,12 +968,40 @@ fn reserved_destinations(family: IpFamily) -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
-    use super::reserved_destinations;
-    use crate::IpFamily;
+    use super::{PlanSlot, dns_guard_payloads, reserved_destinations};
+    use crate::{IpFamily, ResourceCandidate};
+    use nethop_core::{CaptureMode, CapturePolicy};
 
     #[test]
     fn reserved_destination_sets_are_family_specific() {
         assert!(reserved_destinations(IpFamily::Ipv4).contains(&"127.0.0.0/8"));
         assert!(reserved_destinations(IpFamily::Ipv6).contains(&"::1/128"));
+    }
+
+    #[test]
+    fn dns_guard_rollback_removes_only_the_owned_jump_and_chain() {
+        let policy = CapturePolicy::new(
+            CaptureMode::Tproxy,
+            true,
+            Some(7893),
+            Some(0x200),
+            Vec::new(),
+            vec![0],
+        )
+        .unwrap();
+        let allocation = ResourceCandidate::new(0x100, 0xff00, 100, 10_000).unwrap();
+        let (_, rollback) = dns_guard_payloads(
+            IpFamily::Ipv4,
+            PlanSlot::A,
+            &policy,
+            allocation,
+            "nethop:g=7",
+            None,
+        );
+        assert!(rollback.contains("-D OUTPUT -m comment --comment nethop:g=7 -j NH_DNS_A"));
+        assert!(rollback.contains("-F NH_DNS_A"));
+        assert!(rollback.contains("-X NH_DNS_A"));
+        assert!(!rollback.contains("-F OUTPUT"));
+        assert!(!rollback.contains("--flush"));
     }
 }

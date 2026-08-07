@@ -5,6 +5,7 @@ pub mod api_secret;
 pub mod application;
 #[cfg(feature = "subscription-update")]
 pub mod auto_update;
+pub mod clash_api;
 mod config_model;
 #[cfg(feature = "subscription-update")]
 pub mod config_reconciler;
@@ -12,7 +13,14 @@ pub mod config_reconciler;
 pub mod config_watch;
 pub mod events;
 pub mod log_retention;
+#[cfg(feature = "subscription-update")]
+pub mod manual_source;
+pub mod operational_control;
 pub mod process;
+pub mod ruleset;
+pub mod ruleset_provider;
+#[cfg(feature = "subscription-update")]
+pub mod ruleset_update;
 pub mod runner;
 pub mod scheduler;
 #[cfg(feature = "subscription-update")]
@@ -23,6 +31,7 @@ pub mod stats;
 pub mod storage;
 pub mod supervisor;
 pub mod uds;
+pub mod version_check;
 pub mod worker_activation;
 pub mod worker_application;
 pub mod worker_config;
@@ -44,7 +53,16 @@ pub use application::{
     run_system_worker,
 };
 #[cfg(feature = "subscription-update")]
-pub use auto_update::{PersistentUpdateSchedule, RuntimeUpdateSchedule, UnavailableUpdateSchedule};
+pub use auto_update::{
+    CORE_VERSION_SCHEDULE_KEY, PersistentCoreVersionSchedule, PersistentRuleSetSchedule,
+    PersistentUpdateSchedule, RULE_SET_SCHEDULE_KEY, RuntimeCoreVersionSchedule,
+    RuntimeRuleSetSchedule, RuntimeUpdateSchedule, UnavailableCoreVersionSchedule,
+    UnavailableRuleSetSchedule, UnavailableUpdateSchedule,
+};
+pub use clash_api::{
+    ClashApiClient, ClashApiError, ClashApiLimits, ConnectionSummary, DelayResult, NodeSummary,
+    TrafficSample,
+};
 pub use config_model::{
     AdvancedSettings, ApplicationMode, ApplicationSettings, ApplyImpact, CanonicalCidr,
     CaptureIntent, ChangeKind, ChangePlan, DnsMode, EffectiveConfig, Ipv6Mode, LogLevel,
@@ -63,9 +81,27 @@ pub use events::{EventError, EventHub, EventSubscription};
 pub use log_retention::{
     FileLogRetention, LogRetentionError, RuntimeLogRetention, UnavailableLogRetention,
 };
+#[cfg(feature = "subscription-update")]
+pub use manual_source::{ManualSource, ManualSourceError, ManualSourceStore};
+pub use operational_control::{
+    OperationalControl, OperationalControlError, ReplayResult, SelectorStore,
+};
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
     ProcessIdentity, RunningCore, StopReport,
+};
+pub use ruleset::{
+    PreparedRuleSet, PublishedRuleSet, RuleSetError, RuleSetLimits, RuleSetPreparation,
+    RuleSetReplaceOutcome, RuleSetStore,
+};
+pub use ruleset_provider::{
+    RuleSetManifestError, RuleSetProvider, RuleSetProviderManifest, RuleSetPurpose,
+};
+#[cfg(feature = "subscription-update")]
+pub use ruleset_update::{
+    HttpRuleSetBodyFetcher, RuleSetBodyFetcher, RuleSetDigestSnapshot, RuleSetFetchError,
+    RuleSetUpdateError, RuleSetUpdatePreparation, RuleSetUpdateService, RuntimeRuleSetUpdateSource,
+    UnavailableRuleSetUpdateSource,
 };
 pub use runner::{
     CheckOutputSummary, CheckReport, RunnerDiagnosticCode, RunnerError, RunnerLimits,
@@ -82,14 +118,17 @@ pub use source_config::{
 };
 #[cfg(feature = "subscription-update")]
 pub use source_update::{
-    ConfiguredSourceUpdater, HttpSourceBodyFetcher, PreparedSourceUpdate, SourceBodyFetcher,
-    SourceUpdateError, SourceUpdateReport, SourceUpdateService, UpdateRuntimePolicy,
+    ConfiguredSourceUpdater, HttpSourceBodyFetcher, ImportPreview, PreparedSourceUpdate,
+    SourceBody, SourceBodyFetcher, SourceBodyOrigin, SourceUpdateDetail, SourceUpdateError,
+    SourceUpdateReport, SourceUpdateService, UpdateRuntimePolicy,
 };
 pub use stats::{
     CounterBatch, CounterDelta, CounterDeltaBatch, CounterDeltaTracker, CounterName,
     CounterReading, CounterTransport, StatsError,
 };
-pub use storage::{StatsBucket, StatsStore, StatsStoreError};
+#[cfg(feature = "subscription-update")]
+pub use storage::{SourceHealth, SourceStatus, SourceStatusStore};
+pub use storage::{StatsBucket, StatsStore, StatsStoreError, TrafficTotal};
 pub use supervisor::{
     RestartPolicy, SupervisorError, SupervisorEvent, SupervisorState, SystemWorkerBackend,
     SystemWorkerProcess, WorkerExit, WorkerProcess, WorkerProcessBackend, WorkerSignal,
@@ -101,6 +140,13 @@ pub use uds::{
     ControlRequestHandler, ControlServerError, ControlServerLimits, PeerCredentials,
     RootPeerAuthorizer,
 };
+#[cfg(feature = "subscription-update")]
+pub use version_check::HttpCoreReleaseBodyFetcher;
+pub use version_check::{
+    CoreReleaseBodyFetcher, CoreUpdateAvailability, CoreVersion, CoreVersionCheckError,
+    CoreVersionChecker, CoreVersionStateSink, CoreVersionStatus, JsonCoreVersionStateStore,
+    ReleaseMetadata,
+};
 pub use worker_activation::{
     ActiveRuntime, CapabilitySource, CurrentGenerationActivator, DataPlaneHealthError,
     DataPlaneHealthProbe, NetworkController, NetworkDataPlaneHealthProbe, RuntimeStopError,
@@ -108,9 +154,9 @@ pub use worker_activation::{
     WorkerRecoveryError,
 };
 pub use worker_application::{
-    ApplicationRecovery, MonotonicClock, OptionalRuntimeUpdateSource, RuntimePolicyError,
-    RuntimeRecoverySource, RuntimeUpdateError, RuntimeUpdateSource, UnavailableRuntimeUpdateSource,
-    WorkerApplication, WorkerClock, WorkerRecoveryCoordinator,
+    ApplicationRecovery, MonotonicClock, OptionalRuntimeUpdateSource, RuntimeCoreVersionSource,
+    RuntimePolicyError, RuntimeRecoverySource, RuntimeUpdateError, RuntimeUpdateSource,
+    UnavailableRuntimeUpdateSource, WorkerApplication, WorkerClock, WorkerRecoveryCoordinator,
 };
 pub use worker_config::{ConfigError, ConfigSnapshot, ConfigStore};
 pub use worker_runtime::{

@@ -101,7 +101,8 @@ fn release_profile_and_parser_feature_closure_remain_frozen() {
     )
     .expect("crate manifest");
     assert!(
-        crate_manifest.contains("fetch = [\"parser\", \"dep:flate2\", \"dep:ureq\", \"dep:url\"]")
+        crate_manifest
+            .contains("fetch = [\"parser\", \"source-url\", \"dep:flate2\", \"dep:ureq\"]")
     );
     assert!(crate_manifest.contains("sha2 ="));
     assert!(!crate_manifest.contains("blake3 ="));

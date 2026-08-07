@@ -1,6 +1,6 @@
 # NetHop user configuration
 # Source IDs are daemon-owned and never belong in this file.
-schema_version = 1
+schema_version = 2
 
 [service]
 # Persistent proxy switch. The daemon remains available when disabled.
@@ -14,10 +14,12 @@ update_interval_hours = 24
 # User-visible name and HTTPS subscription URL.
 name = "Primary"
 enabled = true
-url = "https://update.glados-config.com/mihomo/121525/f936155/150503/glados.yaml"
+url = ""
 request_profile = "sing_box_android"
 format_hint = "auto"
 mirrors = []
+# Optional source-local filters. Name matching is ASCII case-insensitive.
+filter = { include_names = [], exclude_names = [], excluded_node_ids = [], protocols = [] }
 
 [[subscriptions.sources]]
 # Optional fallback source. Enable it only after setting a URL.
@@ -27,6 +29,7 @@ url = ""
 request_profile = "sing_box_android"
 format_hint = "auto"
 mirrors = []
+filter = { include_names = [], exclude_names = [], excluded_node_ids = [], protocols = [] }
 
 [proxy]
 outbound_mode = "rule"
@@ -41,9 +44,9 @@ concurrency = 10
 
 [applications]
 mode = "all"
-packages = []
-include_uids = []
-exclude_uids = [0]
+# Each target is either { kind = "package", android_user_id = 0, package = "com.example.app" }
+# or { kind = "uid", uid = 10123 }. Root is always excluded by the daemon.
+targets = []
 
 [network]
 capture_mode = "auto"
@@ -61,12 +64,26 @@ usb = false
 include = []
 exclude = []
 
+[network.wifi_scenes]
+# Optional transient policy. The persistent service switch remains authoritative.
+enabled = false
+probe_interval_seconds = 30
+
+# Example (SSID/BSSID are treated as sensitive values):
+# [[network.wifi_scenes.rules]]
+# id = "trusted-home"
+# ssid = "Home Wi-Fi"
+# action = "disable_proxy"
+
 [routing]
 bypass_private = true
-bypass_cn = false
+bypass_cn = true
 block_quic = false
 force_proxy_cidrs = []
 bypass_cidrs = []
+force_proxy_domains = []
+bypass_domains = []
+block_domains = []
 
 [logging]
 level = "info"

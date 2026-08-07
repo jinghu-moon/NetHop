@@ -65,9 +65,9 @@ fn sing_box_1_13_15_mapping_manifest_is_strict_and_digest_pinned() {
     assert_eq!(matrix.go_version, "1.24.7");
     assert_eq!(
         matrix.mapping_digest(),
-        "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+        "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
     );
-    assert_eq!(matrix.entry_count(), 25);
+    assert_eq!(matrix.entry_count(), 30);
 
     let wrong_version = manifest.replacen("1.13.15", "1.14.0", 1);
     assert!(CapabilityMatrix::from_manifest_json(&wrong_version).is_err());
@@ -80,7 +80,27 @@ fn sing_box_1_13_15_mapping_manifest_is_strict_and_digest_pinned() {
 }
 
 #[test]
-fn sing_box_check_fixture_covers_exactly_the_seven_parser_protocols() {
+fn alioth_fixture_records_the_actual_prebuilt_sing_box_identity() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/device/alioth-parser-integration.json"
+    ))
+    .unwrap();
+    let core = &fixture["build"]["sing_box_core"];
+    assert_eq!(core["origin"], "official_prebuilt");
+    assert_eq!(core["version"], "1.13.15");
+    assert_eq!(core["revision"], "3708fa18766cda1f11b77f6ed9c7bd61688f17df");
+    assert_eq!(core["go"], "1.25.12");
+    let tags = core["tags"].as_array().unwrap();
+    for required in ["with_gvisor", "with_quic", "with_utls", "with_wireguard"] {
+        assert!(
+            tags.iter().any(|tag| tag == required),
+            "missing tag {required}"
+        );
+    }
+}
+
+#[test]
+fn sing_box_check_fixture_covers_exactly_the_nine_parser_protocols() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/mapping/sing-box-1.13.15-check.json")).unwrap();
     let mut types = fixture["outbounds"]
@@ -94,8 +114,10 @@ fn sing_box_check_fixture_covers_exactly_the_seven_parser_protocols() {
         types,
         [
             "anytls",
+            "http",
             "hysteria2",
             "shadowsocks",
+            "socks",
             "trojan",
             "tuic",
             "vless",
@@ -106,7 +128,7 @@ fn sing_box_check_fixture_covers_exactly_the_seven_parser_protocols() {
 
 #[test]
 #[cfg(feature = "format-singbox-json")]
-fn sing_box_check_fixture_round_trips_all_seven_protocols_through_parser() {
+fn sing_box_check_fixture_round_trips_all_nine_protocols_through_parser() {
     let conversion = convert_stable_sources(
         vec![SourceInput {
             source_id: SourceId::new("sing-box-check-fixture").unwrap(),
@@ -117,7 +139,7 @@ fn sing_box_check_fixture_round_trips_all_seven_protocols_through_parser() {
         &CapabilityMatrix::default(),
     );
     assert_eq!(
-        conversion.report.summary.accepted, 7,
+        conversion.report.summary.accepted, 9,
         "diagnostics={:?}",
         conversion.report.diagnostic_counts
     );

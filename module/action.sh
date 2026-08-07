@@ -6,4 +6,4 @@ CTL="$MODDIR/bin/nethopctl"
 
 "$CTL" config reload --wait
 "$CTL" update --if-needed --wait || true
-"$CTL" status
+"$CTL" status --human

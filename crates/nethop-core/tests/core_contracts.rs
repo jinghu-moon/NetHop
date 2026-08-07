@@ -110,7 +110,7 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
     assert_eq!(value["outbounds"][2]["tag"], "nethop-auto");
     assert_eq!(value["outbounds"][3]["tag"], "nethop-select");
     assert_eq!(value["dns"]["servers"][0]["type"], "https");
-    assert_eq!(value["dns"]["servers"][0]["tag"], "dns-bootstrap");
+    assert_eq!(value["dns"]["servers"][0]["tag"], "dns-direct");
     assert_eq!(value["dns"]["servers"][0]["server"], "223.5.5.5");
     assert_eq!(value["dns"]["servers"][0]["server_port"], 443);
     assert_eq!(value["dns"]["servers"][0]["path"], "/dns-query");
@@ -127,10 +127,30 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
     assert_eq!(value["dns"]["servers"][1]["server"], "1.1.1.1");
     assert_eq!(value["dns"]["servers"][1]["detour"], "nethop-select");
     assert_eq!(value["dns"]["final"], "dns-proxy");
+    assert_eq!(value["dns"]["servers"][0]["tag"], "dns-direct");
+    assert!(value["dns"]["rules"].as_array().is_some_and(|rules| {
+        rules.iter().any(|rule| {
+            rule["rule_set"] == serde_json::json!(["nethop-cn-domain"])
+                && rule["server"] == "dns-direct"
+        })
+    }));
     assert_eq!(value["dns"]["strategy"], "prefer_ipv4");
     assert_eq!(value["dns"]["disable_cache"], false);
     assert_eq!(value["dns"]["cache_capacity"], 4096);
-    assert_eq!(value["route"]["default_domain_resolver"], "dns-bootstrap");
+    assert_eq!(value["route"]["default_domain_resolver"], "dns-direct");
+    assert!(value["route"]["rule_set"].as_array().is_some_and(|sets| {
+        sets.iter().any(|set| {
+            set["tag"] == "nethop-cn-domain"
+                && set["type"] == "local"
+                && set["format"] == "binary"
+                && set["path"] == "/data/adb/nethop/rulesets/cn-domain.srs"
+        }) && sets.iter().any(|set| {
+            set["tag"] == "nethop-cn-ip"
+                && set["type"] == "local"
+                && set["format"] == "binary"
+                && set["path"] == "/data/adb/nethop/rulesets/cn-ip.srs"
+        })
+    }));
     assert!(
         value["route"]["rules"]
             .as_array()
@@ -143,6 +163,26 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
                     rules.iter().any(|item| item["protocol"] == "dns")
                         && rules.iter().any(|item| item["port"] == 53)
                 }))
+    );
+    assert!(
+        value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| {
+                rule["rule_set"] == serde_json::json!(["nethop-cn-domain"])
+                    && rule["outbound"] == "direct"
+            })
+    );
+    assert!(
+        value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| {
+                rule["rule_set"] == serde_json::json!(["nethop-cn-ip"])
+                    && rule["outbound"] == "direct"
+            })
     );
     assert_eq!(config.node_count(), 2);
 }
@@ -173,6 +213,7 @@ fn managed_options_control_urltest_logging_and_route_without_raw_json() {
             1,
             ManagedLogLevel::Debug,
             true,
+            false,
             vec!["203.0.113.0/24".to_owned()],
             vec!["192.0.2.0/24".to_owned()],
         )
@@ -209,6 +250,113 @@ fn managed_options_control_urltest_logging_and_route_without_raw_json() {
                     && rule["outbound"] == "direct"
             })
     );
+}
+
+#[test]
+fn managed_domain_overrides_have_explicit_route_and_dns_precedence() {
+    let capture = CapturePolicy::new(
+        CaptureMode::Tproxy,
+        true,
+        Some(7893),
+        Some(0x4e48),
+        vec![],
+        vec![0],
+    )
+    .unwrap();
+    let options = ManagedOptions::default()
+        .with_domain_rules(
+            vec!["proxy.example".into()],
+            vec!["direct.example".into()],
+            vec!["blocked.example".into()],
+        )
+        .unwrap();
+    let profile = ManagedProfile::new(
+        capture,
+        vec![outbound("node-a")],
+        ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+    )
+    .unwrap()
+    .with_options(options);
+    let value: serde_json::Value =
+        serde_json::from_slice(ManagedConfig::from_profile(profile).unwrap().bytes()).unwrap();
+    let rules = value["route"]["rules"].as_array().unwrap();
+    let domain_rules = rules
+        .iter()
+        .filter(|rule| rule.get("domain_suffix").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(domain_rules[0]["outbound"], "block");
+    assert_eq!(domain_rules[1]["outbound"], "nethop-select");
+    assert_eq!(domain_rules[2]["outbound"], "direct");
+    let dns_rules = value["dns"]["rules"].as_array().unwrap();
+    assert!(dns_rules.iter().any(|rule| {
+        rule["domain_suffix"] == json!(["proxy.example"]) && rule["server"] == "dns-proxy"
+    }));
+    assert!(dns_rules.iter().any(|rule| {
+        rule["domain_suffix"] == json!(["direct.example"]) && rule["server"] == "dns-direct"
+    }));
+
+    assert!(
+        ManagedOptions::default()
+            .with_domain_rules(vec!["Bad Domain".into()], vec![], vec![])
+            .is_err()
+    );
+}
+
+#[test]
+fn managed_outbound_modes_have_distinct_dns_and_cn_routing_semantics() {
+    let compose = |mode| {
+        let capture = CapturePolicy::new(
+            CaptureMode::Tproxy,
+            true,
+            Some(7893),
+            Some(0x4e48),
+            vec![],
+            vec![0],
+        )
+        .unwrap();
+        let options = ManagedOptions::new(
+            mode,
+            ManagedSelectorMode::Urltest,
+            10,
+            50,
+            64,
+            ManagedLogLevel::Warn,
+            true,
+            true,
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let profile = ManagedProfile::new(
+            capture,
+            vec![outbound("node-a")],
+            ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        )
+        .unwrap()
+        .with_options(options);
+        serde_json::from_slice::<serde_json::Value>(
+            ManagedConfig::from_profile(profile).unwrap().bytes(),
+        )
+        .unwrap()
+    };
+
+    let rule = compose(ManagedOutboundMode::Rule);
+    assert_eq!(rule["route"]["final"], "nethop-select");
+    assert_eq!(rule["dns"]["final"], "dns-proxy");
+    assert_eq!(rule["route"]["rule_set"].as_array().unwrap().len(), 2);
+    assert_eq!(rule["dns"]["rules"].as_array().unwrap().len(), 1);
+
+    let global = compose(ManagedOutboundMode::Global);
+    assert_eq!(global["route"]["final"], "nethop-select");
+    assert_eq!(global["dns"]["final"], "dns-proxy");
+    assert!(global["route"]["rule_set"].as_array().unwrap().is_empty());
+    assert!(global["dns"]["rules"].as_array().unwrap().is_empty());
+
+    let direct = compose(ManagedOutboundMode::Direct);
+    assert_eq!(direct["route"]["final"], "direct");
+    assert_eq!(direct["dns"]["final"], "dns-direct");
+    assert!(direct["route"]["rule_set"].as_array().unwrap().is_empty());
+    assert!(direct["dns"]["rules"].as_array().unwrap().is_empty());
 }
 
 #[test]

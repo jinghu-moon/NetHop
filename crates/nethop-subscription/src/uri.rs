@@ -154,6 +154,7 @@ pub struct UriNodeCandidate<'a> {
     userinfo: Option<&'a str>,
     server: &'a str,
     port: Option<u16>,
+    port_spec: Option<&'a str>,
     query: Vec<UriQueryParameter<'a>>,
     fragment: Option<&'a str>,
     line: u32,
@@ -168,6 +169,7 @@ impl fmt::Debug for UriNodeCandidate<'_> {
             .field("line", &self.line)
             .field("item_index", &self.item_index)
             .field("port", &self.port)
+            .field("has_port_spec", &self.port_spec.is_some())
             .field("query_count", &self.query.len())
             .field("has_userinfo", &self.userinfo.is_some())
             .field("has_fragment", &self.fragment.is_some())
@@ -202,6 +204,10 @@ impl<'a> UriNodeCandidate<'a> {
 
     pub const fn port(&self) -> Option<u16> {
         self.port
+    }
+
+    pub const fn port_spec(&self) -> Option<&'a str> {
+        self.port_spec
     }
 
     pub fn query(&self) -> &[UriQueryParameter<'a>] {
@@ -367,7 +373,7 @@ pub fn parse_uri_line<'a>(
     if let Some(userinfo) = userinfo {
         percent_decode_field(userinfo)?;
     }
-    let (server, port) = parse_host_port(host_port)?;
+    let (server, port, port_spec) = parse_host_port(host_port, scheme)?;
     let query = parse_query(query_text, limits)?;
 
     let candidate = UriNodeCandidate {
@@ -376,6 +382,7 @@ pub fn parse_uri_line<'a>(
         userinfo,
         server,
         port,
+        port_spec,
         query,
         fragment,
         line: line_number,
@@ -454,28 +461,32 @@ fn parse_query<'a>(
     Ok(parameters)
 }
 
-fn parse_host_port(host_port: &str) -> Result<(&str, Option<u16>), UriContainerError> {
+fn parse_host_port(
+    host_port: &str,
+    scheme: UriScheme,
+) -> Result<(&str, Option<u16>, Option<&str>), UriContainerError> {
     let (server, port) = if let Some(bracketed) = host_port.strip_prefix('[') {
         let (server, suffix) = bracketed
             .split_once(']')
             .ok_or(UriContainerError::InvalidUri)?;
         let port = if suffix.is_empty() {
-            None
+            (None, None)
         } else {
-            Some(parse_port(
+            parse_port_suffix(
                 suffix
                     .strip_prefix(':')
                     .ok_or(UriContainerError::InvalidUri)?,
-            )?)
+                scheme,
+            )?
         };
         (server, port)
     } else if let Some((server, port)) = host_port.rsplit_once(':') {
         if server.contains(':') {
             return Err(UriContainerError::InvalidUri);
         }
-        (server, Some(parse_port(port)?))
+        (server, parse_port_suffix(port, scheme)?)
     } else {
-        (host_port, None)
+        (host_port, (None, None))
     };
     if server.is_empty()
         || server
@@ -484,7 +495,44 @@ fn parse_host_port(host_port: &str) -> Result<(&str, Option<u16>), UriContainerE
     {
         return Err(UriContainerError::InvalidUri);
     }
-    Ok((server, port))
+    Ok((server, port.0, port.1))
+}
+
+fn parse_port_suffix(
+    value: &str,
+    scheme: UriScheme,
+) -> Result<(Option<u16>, Option<&str>), UriContainerError> {
+    if !matches!(scheme, UriScheme::Hysteria2 | UriScheme::Hysteria2Short)
+        || (!value.contains(',') && !value.contains('-'))
+    {
+        return Ok((Some(parse_port(value)?), None));
+    }
+    if value.is_empty() || value.len() > 256 {
+        return Err(UriContainerError::InvalidUri);
+    }
+    let mut first_port = None;
+    let mut count = 0usize;
+    for entry in value.split(',') {
+        count = count.saturating_add(1);
+        if count > 64 || entry.is_empty() {
+            return Err(UriContainerError::InvalidUri);
+        }
+        if let Some((start, end)) = entry.split_once('-') {
+            if start.is_empty() || end.is_empty() || end.contains('-') {
+                return Err(UriContainerError::InvalidUri);
+            }
+            let start = parse_port(start)?;
+            let end = parse_port(end)?;
+            if start > end {
+                return Err(UriContainerError::InvalidUri);
+            }
+            first_port.get_or_insert(start);
+        } else {
+            let port = parse_port(entry)?;
+            first_port.get_or_insert(port);
+        }
+    }
+    Ok((first_port, Some(value)))
 }
 
 fn parse_port(value: &str) -> Result<u16, UriContainerError> {

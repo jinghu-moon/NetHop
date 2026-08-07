@@ -268,6 +268,7 @@ fn supported_json_shape(text: &str) -> bool {
     let bytes = text.as_bytes();
     if bytes[0] == b'{' {
         top_level_object_has_array_key(bytes, b"outbounds")
+            || top_level_object_has_array_key(bytes, b"endpoints")
     } else {
         top_level_array_has_outbound_marker(bytes)
     }

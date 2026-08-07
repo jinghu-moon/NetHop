@@ -18,7 +18,7 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         },
         {
           "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -34,7 +34,7 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         },
         {
           "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -50,7 +50,7 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         },
         {
           "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -66,11 +66,11 @@
       "evidence": [
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         },
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         }
       ]
     },
@@ -86,7 +86,7 @@
         },
         {
           "path": "docs/05-subscription-parser-android-scope.md",
-          "sha256": "4c056888b6ba9cd214c2c9950a4866b7130f2f07101172f148a2d294b67e5f0a"
+          "sha256": "18b3c42c93f152091ad510d3559ca10ec2a3bc981cacf5e1cf564835f82c313c"
         }
       ]
     }
@@ -108,14 +108,20 @@
       ],
       "capability_variants": 9,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     },
@@ -136,14 +142,20 @@
       ],
       "capability_variants": 6,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     },
@@ -162,16 +174,22 @@
         "plugin_opts",
         "udp_over_tcp"
       ],
-      "capability_variants": 4,
+      "capability_variants": 5,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     },
@@ -190,14 +208,20 @@
       ],
       "capability_variants": 3,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     },
@@ -210,20 +234,30 @@
         "tag",
         "server",
         "server_port",
+        "server_ports",
+        "hop_interval",
+        "up_mbps",
+        "down_mbps",
         "password",
         "obfs",
         "tls"
       ],
       "capability_variants": 1,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     },
@@ -239,18 +273,28 @@
         "uuid",
         "password",
         "congestion_control",
+        "udp_relay_mode",
+        "udp_over_stream",
+        "zero_rtt_handshake",
+        "heartbeat",
         "tls"
       ],
       "capability_variants": 1,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     },
@@ -264,47 +308,110 @@
         "server",
         "server_port",
         "password",
+        "idle_session_check_interval",
+        "idle_session_timeout",
+        "min_idle_session",
         "tls"
       ],
       "capability_variants": 1,
       "sing_box_version": "1.13.15",
+      "formats": [
+        "uri_list",
+        "base64_list",
+        "clash_yaml",
+        "singbox_json"
+      ],
       "evidence": [
         {
           "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-          "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
         },
         {
           "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-          "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
+        }
+      ]
+    },
+    {
+      "protocol": "http",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "username",
+        "password",
+        "tls",
+        "path",
+        "headers"
+      ],
+      "capability_variants": 2,
+      "sing_box_version": "1.13.15",
+      "formats": [
+        "clash_yaml",
+        "singbox_json"
+      ],
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
+        }
+      ]
+    },
+    {
+      "protocol": "socks",
+      "parser_support": "reference_verified",
+      "android_data_plane": "best_effort",
+      "mapping_fields": [
+        "type",
+        "tag",
+        "server",
+        "server_port",
+        "version",
+        "username",
+        "password",
+        "network",
+        "udp_over_tcp"
+      ],
+      "capability_variants": 2,
+      "sing_box_version": "1.13.15",
+      "formats": [
+        "clash_yaml",
+        "singbox_json"
+      ],
+      "evidence": [
+        {
+          "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
+          "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
+        },
+        {
+          "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
+          "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
         }
       ]
     }
   ],
   "unsupported_protocols": [
     {
-      "protocol": "http",
-      "support_level": "unsupported",
-      "reason": "outside_alpha_protocol_whitelist"
-    },
-    {
-      "protocol": "socks5",
-      "support_level": "unsupported",
-      "reason": "outside_alpha_protocol_whitelist"
-    },
-    {
       "protocol": "wireguard",
       "support_level": "unsupported",
-      "reason": "outside_alpha_protocol_whitelist"
+      "reason": "sing_box_1_13_15_endpoint_outside_terminal_outbound_contract"
     },
     {
       "protocol": "naive",
       "support_level": "unsupported",
-      "reason": "outside_alpha_protocol_whitelist"
+      "reason": "android_sing_box_1_13_15_missing_with_naive_outbound"
     },
     {
       "protocol": "mieru",
       "support_level": "unsupported",
-      "reason": "outside_alpha_protocol_whitelist"
+      "reason": "not_implemented_by_sing_box_1_13_15"
     },
     {
       "protocol": "shadowsocksr",
@@ -361,15 +468,15 @@
   "generated_from": [
     {
       "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-      "sha256": "d059ecef1d2e761d8f92b87a3e8639058701ce0c4a2767e22089c1f94d4e72bb"
+      "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
     },
     {
       "path": "crates/nethop-subscription/tests/fixtures/device/cross-environment-compatibility.json",
-      "sha256": "28e4ff6f52f8e95e29822fec6b0280df412df82acbe3921e0d153a59e5236478"
+      "sha256": "e4e3e2db6de7e640ce391833ad4d8120cbb2956f981cb1b9ef9e14c677da75bb"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-      "sha256": "4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140"
+      "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
     },
     {
       "path": "docs/04-subscription-parser-phase0b-performance-report.md",
@@ -377,7 +484,7 @@
     },
     {
       "path": "docs/05-subscription-parser-android-scope.md",
-      "sha256": "4c056888b6ba9cd214c2c9950a4866b7130f2f07101172f148a2d294b67e5f0a"
+      "sha256": "18b3c42c93f152091ad510d3559ca10ec2a3bc981cacf5e1cf564835f82c313c"
     },
     {
       "path": "crates/nethop-subscription/tests/fixtures/surfboard/manifest.json",

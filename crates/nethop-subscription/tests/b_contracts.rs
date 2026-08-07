@@ -53,6 +53,14 @@ fn baseline_node(
         ProxyProtocol::AnyTls => Credentials::AnyTls {
             password: SecretString::new("password"),
         },
+        ProxyProtocol::Http => Credentials::Http {
+            username: None,
+            password: None,
+        },
+        ProxyProtocol::Socks => Credentials::Socks {
+            username: None,
+            password: None,
+        },
     };
     UnvalidatedNode {
         display_name: DisplayName::new("node").unwrap(),
@@ -252,7 +260,14 @@ fn protocol_and_transport_whitelists_reject_unknown_values() {
     for protocol in ProxyProtocol::ALL {
         assert!(protocol.as_str().parse::<ProxyProtocol>().is_ok());
     }
-    assert!("http".parse::<ProxyProtocol>().is_err());
+    assert_eq!(
+        "http".parse::<ProxyProtocol>().unwrap(),
+        ProxyProtocol::Http
+    );
+    assert_eq!(
+        "socks5".parse::<ProxyProtocol>().unwrap(),
+        ProxyProtocol::Socks
+    );
     assert!("wireguard".parse::<ProxyProtocol>().is_err());
     assert!("ws".parse::<TransportKind>().is_ok());
     assert!("xhttp".parse::<TransportKind>().is_err());

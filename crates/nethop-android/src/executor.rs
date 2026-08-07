@@ -12,7 +12,8 @@ use thiserror::Error;
 
 use crate::{
     capability::IpFamily,
-    plan::{MutationAction, NetworkOperation, NetworkPlan, PlanSlot},
+    forwarding::ForwardingPlan,
+    plan::{MutationAction, NetworkOperation, NetworkPlan, PlanSlot, PlanStep},
 };
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -247,12 +248,28 @@ impl<B: NetworkCommandBackend> NetworkExecutor<B> {
     }
 
     pub fn apply(&mut self, plan: &NetworkPlan) -> Result<ApplyReceipt, ExecutionError> {
+        self.apply_steps(plan.generation(), plan.slot(), plan.steps())
+    }
+
+    pub fn apply_forwarding(
+        &mut self,
+        plan: &ForwardingPlan,
+    ) -> Result<ApplyReceipt, ExecutionError> {
+        self.apply_steps(plan.generation(), plan.slot(), plan.steps())
+    }
+
+    fn apply_steps(
+        &mut self,
+        generation: GenerationId,
+        slot: PlanSlot,
+        steps: &[PlanStep],
+    ) -> Result<ApplyReceipt, ExecutionError> {
         let mut completed = 0;
-        for (index, step) in plan.steps().iter().enumerate() {
+        for (index, step) in steps.iter().enumerate() {
             let invocation = CommandInvocation::from_operation(&step.apply);
             let result = self.backend.execute(&invocation);
             if !matches!(result, Ok(output) if output.is_success()) {
-                let rollback_failed = self.rollback_range(plan, index + 1).err();
+                let rollback_failed = self.rollback_range(steps, index + 1).err();
                 return Err(match rollback_failed {
                     Some(rollback_step) => ExecutionError::ApplyRollbackFailed {
                         apply_step: index,
@@ -264,8 +281,8 @@ impl<B: NetworkCommandBackend> NetworkExecutor<B> {
             completed += 1;
         }
         Ok(ApplyReceipt {
-            generation: plan.generation(),
-            slot: plan.slot(),
+            generation,
+            slot,
             completed_steps: completed,
         })
     }
@@ -275,12 +292,30 @@ impl<B: NetworkCommandBackend> NetworkExecutor<B> {
         plan: &NetworkPlan,
         receipt: &mut ApplyReceipt,
     ) -> Result<(), ExecutionError> {
-        if receipt.generation != plan.generation() || receipt.slot != plan.slot() {
+        self.rollback_steps(plan.generation(), plan.slot(), plan.steps(), receipt)
+    }
+
+    pub fn rollback_forwarding(
+        &mut self,
+        plan: &ForwardingPlan,
+        receipt: &mut ApplyReceipt,
+    ) -> Result<(), ExecutionError> {
+        self.rollback_steps(plan.generation(), plan.slot(), plan.steps(), receipt)
+    }
+
+    fn rollback_steps(
+        &mut self,
+        generation: GenerationId,
+        slot: PlanSlot,
+        steps: &[PlanStep],
+        receipt: &mut ApplyReceipt,
+    ) -> Result<(), ExecutionError> {
+        if receipt.generation != generation || receipt.slot != slot {
             return Err(ExecutionError::ReceiptMismatch);
         }
         while receipt.completed_steps > 0 {
             let index = receipt.completed_steps - 1;
-            if !self.execute_rollback(plan, index) {
+            if !self.execute_rollback(steps, index) {
                 return Err(ExecutionError::RollbackFailed { step: index });
             }
             receipt.completed_steps -= 1;
@@ -288,18 +323,18 @@ impl<B: NetworkCommandBackend> NetworkExecutor<B> {
         Ok(())
     }
 
-    fn rollback_range(&mut self, plan: &NetworkPlan, end_exclusive: usize) -> Result<(), usize> {
+    fn rollback_range(&mut self, steps: &[PlanStep], end_exclusive: usize) -> Result<(), usize> {
         let mut first_failure = None;
         for index in (0..end_exclusive).rev() {
-            if !self.execute_rollback(plan, index) && first_failure.is_none() {
+            if !self.execute_rollback(steps, index) && first_failure.is_none() {
                 first_failure = Some(index);
             }
         }
         first_failure.map_or(Ok(()), Err)
     }
 
-    fn execute_rollback(&mut self, plan: &NetworkPlan, index: usize) -> bool {
-        let invocation = CommandInvocation::from_operation(&plan.steps()[index].rollback);
+    fn execute_rollback(&mut self, steps: &[PlanStep], index: usize) -> bool {
+        let invocation = CommandInvocation::from_operation(&steps[index].rollback);
         match self.backend.execute(&invocation) {
             Ok(output) => output.is_success(),
             Err(CommandFailure::Absent) => true,

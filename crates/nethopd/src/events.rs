@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -16,6 +16,9 @@ const MAX_CAPACITY: usize = 1_024;
 const MAX_SUBSCRIBERS: usize = 4;
 const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
 const MAX_LOG_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_LOG_HISTORY_ITEMS: usize = 128;
+const MAX_LOG_HISTORY_FILES: usize = 32;
+const MAX_LOG_HISTORY_BYTES: usize = 256 * 1024;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone)]
@@ -75,6 +78,30 @@ impl EventHub {
             .map_err(|_| EventError::Unavailable)?;
         *installed = Some(log);
         Ok(())
+    }
+
+    pub fn structured_log_history(&self, limit: u8) -> Result<Vec<Value>, EventError> {
+        if limit == 0 || usize::from(limit) > MAX_LOG_HISTORY_ITEMS {
+            return Err(EventError::InvalidPolicy);
+        }
+        let mut installed = self
+            .shared
+            .log
+            .lock()
+            .map_err(|_| EventError::Unavailable)?;
+        installed
+            .as_mut()
+            .ok_or(EventError::Unavailable)?
+            .history(usize::from(limit))
+    }
+
+    pub fn clear_structured_logs(&self) -> Result<usize, EventError> {
+        let mut installed = self
+            .shared
+            .log
+            .lock()
+            .map_err(|_| EventError::Unavailable)?;
+        installed.as_mut().ok_or(EventError::Unavailable)?.clear()
     }
 
     pub fn publish(&self, kind: EventKind, payload: Value) {
@@ -203,6 +230,113 @@ impl FileEventLog {
         file.write_all(&line).map_err(|_| EventError::Unavailable)?;
         self.bytes += line.len() as u64;
         Ok(())
+    }
+
+    fn history(&mut self, limit: usize) -> Result<Vec<Value>, EventError> {
+        if let Some(file) = self.file.as_mut() {
+            file.flush().map_err(|_| EventError::Unavailable)?;
+        }
+        let mut paths = controlled_log_paths(&self.directory)?;
+        paths.sort();
+        let mut history = Vec::with_capacity(limit);
+        let mut retained_bytes = 0_usize;
+        for path in paths.into_iter().rev().take(MAX_LOG_HISTORY_FILES) {
+            let file = open_private_read(&path)?;
+            let metadata = file.metadata().map_err(|_| EventError::Unavailable)?;
+            if metadata.len() > MAX_LOG_FILE_BYTES {
+                continue;
+            }
+            let mut bytes = Vec::with_capacity(metadata.len() as usize);
+            file.take(MAX_LOG_FILE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| EventError::Unavailable)?;
+            if bytes.len() as u64 > MAX_LOG_FILE_BYTES {
+                continue;
+            }
+            for line in bytes.split(|byte| *byte == b'\n').rev() {
+                if line.is_empty() || line.len() > MAX_LOG_LINE_BYTES {
+                    continue;
+                }
+                if retained_bytes.saturating_add(line.len()) > MAX_LOG_HISTORY_BYTES {
+                    return Ok(history);
+                }
+                let Ok(mut value) = serde_json::from_slice::<Value>(line) else {
+                    continue;
+                };
+                if !value.is_object() {
+                    continue;
+                }
+                redact_sensitive(&mut value);
+                retained_bytes += line.len();
+                history.push(value);
+                if history.len() == limit {
+                    return Ok(history);
+                }
+            }
+        }
+        Ok(history)
+    }
+
+    fn clear(&mut self) -> Result<usize, EventError> {
+        self.file = None;
+        self.day = None;
+        self.bytes = 0;
+        let paths = controlled_log_paths(&self.directory)?;
+        let mut removed = 0_usize;
+        for path in paths {
+            fs::remove_file(path).map_err(|_| EventError::Unavailable)?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+}
+
+fn controlled_log_paths(directory: &Path) -> Result<Vec<PathBuf>, EventError> {
+    let entries = fs::read_dir(directory).map_err(|_| EventError::Unavailable)?;
+    let mut paths = Vec::new();
+    for entry in entries.take(1_024) {
+        let entry = entry.map_err(|_| EventError::Unavailable)?;
+        let path = entry.path();
+        if path.parent() != Some(directory)
+            || path.extension().and_then(|value| value.to_str()) != Some("log")
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|_| EventError::Unavailable)?;
+        if metadata.is_file() && !metadata.file_type().is_symlink() {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+fn open_private_read(path: &Path) -> Result<File, EventError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    options.open(path).map_err(|_| EventError::Unavailable)
+}
+
+fn redact_sensitive(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "url" | "password" | "secret" | "token" | "uuid" | "authorization"
+                ) {
+                    *value = Value::String("[REDACTED]".into());
+                } else {
+                    redact_sensitive(value);
+                }
+            }
+        }
+        Value::Array(values) => values.iter_mut().for_each(redact_sensitive),
+        _ => {}
     }
 }
 

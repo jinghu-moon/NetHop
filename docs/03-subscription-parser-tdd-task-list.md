@@ -80,7 +80,7 @@ artifacts/tdd/<task-id>/manifest.json
 | 公共模型、限制与诊断 | `02` 4、14、15、17 | B001-B015 |
 | 规范化与格式探测 | `02` 6 | C001-C012 |
 | URI/Base64 | `02` 9 | D001-D012 |
-| 七协议与能力矩阵 | `02` 14.3-15 | E001-E015 |
+| 九协议与能力矩阵 | `02` 14.3-15 | E001-E015,N001-N006 |
 | Clash/Mihomo YAML | `02` 10 | F001-F013 |
 | sing-box JSON | `02` 11 | G001-G009 |
 | fingerprint、去重、报告、compose | `02` 16-19 | H001-H022 |
@@ -277,10 +277,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 人类 message 留给 CLI/App，不存入核心诊断。
   - `done`: snapshot、secret scanner 和 size boundary 通过。
 
-- [x] **B008 - 定义七协议枚举**
+- [x] **B008 - 定义九协议枚举**
   - `depends_on`: A010；`parallel_group`: B-proxy-model
-  - `scope`: 只表达 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS。
-  - `RED`: HTTP/SOCKS/WireGuard 被接受或未知值 panic 的测试失败。
+  - `scope`: 表达 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS、HTTP、SOCKS；URI scheme 仍是前七种。
+  - `RED`: WireGuard/Naive/Mieru 被接受或未知值 panic 的测试失败。
   - `GREEN`: 实现白名单枚举和稳定 wire names。
   - `REFACTOR`: client dialect 不进入协议枚举。
   - `done`: whitelist/unsupported golden 通过。
@@ -348,7 +348,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 | 有界资源模型 | `src/limits.rs` | 默认 body 5 MiB、10,000 nodes、16 KiB line、64 depth、64 KiB string 等值冻结；越界构造被拒绝 |
 | 载体与来源模型 | `src/payload.rs` | QR/file/text/HTTP 四种 origin 共用有界 `ImportPayload`；content/source URL 只保留 SHA-256 digest；原始 bytes 不进入 Debug |
 | secret 与诊断 | `src/secret.rs`、`src/diagnostics.rs` | secret 的 Debug/Display/Serialize 脱敏；稳定 code、未知 code 前向兼容、1-based location 和参数 allowlist 已覆盖 |
-| 协议与连接值对象 | `src/protocol.rs` | 七协议白名单、严格 UUID、endpoint、TLS/Reality/uTLS、transport、协议专用 credentials 已类型化 |
+| 协议与连接值对象 | `src/protocol.rs` | 九协议白名单、严格 UUID、endpoint、TLS/Reality/uTLS、transport、协议专用 credentials 已类型化；HTTP/SOCKS 认证和 options 不透传字符串对象 |
 | validated node 边界 | `src/protocol.rs` | `ProxyNode` 字段私有，只能由 `ProxyNode::validate` 从 `UnvalidatedNode` 和能力矩阵构造 |
 | 能力矩阵 | `src/capability.rs` | sing-box `1.13.15` 版本固定；supported 必须有 evidence；未列组合 deny-by-default |
 | B 专项测试 | `tests/b_contracts.rs` | 15 个边界、脱敏、矩阵和 validated-node 测试全部通过 |
@@ -609,7 +609,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 结果：全部退出码为 `0`。D001-D012 已完成；E001 及后续任务仍保持未开始状态。
 
-## 9. E - 七协议语义与能力矩阵
+## 9. E - 九协议语义与能力矩阵
 
 - [x] **E001 - 校验 endpoint 公共语义**
   - `depends_on`: B015；`parallel_group`: E-shared
@@ -701,7 +701,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 
 - [x] **E012 - 对未知协议返回稳定拒绝码**
   - `depends_on`: B008,B014；`parallel_group`: E-policy
-  - `scope`: HTTP/SOCKS/WireGuard/未知协议可识别但不生成 `ProxyNode`。
+  - `scope`: WireGuard/Naive/Mieru/未知协议可识别但不生成 `ProxyNode`；HTTP/SOCKS 仅由已审计的 YAML/JSON adapter 生成。
   - `RED`: 任一非白名单协议成为 validated node 的测试失败。
   - `GREEN`: 在语义入口返回 `unsupported_protocol`。
   - `REFACTOR`: 所有 adapter 共用拒绝路径。
@@ -715,17 +715,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
   - `REFACTOR`: 字段分类进入 capability/mapping fixture。
   - `done`: unknown-field policy golden 通过。
 
-- [x] **E014 - 建立七协议跨格式等价 fixture**
+- [x] **E014 - 建立协议跨格式等价 fixture**
   - `depends_on`: E005,E006,E007,E008,E009,E010,E011,E012,E013；`parallel_group`: serial
   - `scope`: 同一节点的 URI/YAML/JSON 表示产生相同 normalized semantic fields。
   - `RED`: 等价 fixture 因字段默认值或别名产生差异。
   - `GREEN`: 只补齐共享 normalization，不在测试中忽略差异。
   - `REFACTOR`: fixture generator 使用一种 canonical seed 描述。
-  - `done`: 七协议 equivalence golden 全绿。
+  - `done`: 七种 URI 协议在 URI/YAML/JSON 等价，HTTP/SOCKS 在 YAML/JSON 等价。
 
 - [x] **E015 - 通过协议语义 gate**
   - `depends_on`: E014；`parallel_group`: serial
-  - `scope`: 七协议只有 capability matrix 证明的组合能成为 validated node。
+  - `scope`: 九协议只有 capability matrix 证明的组合能成为 validated node。
   - `RED`: gate 在任一协议缺 valid/reject/evidence fixture 时失败。
   - `GREEN`: 汇总协议测试与 matrix completeness。
   - `REFACTOR`: gate 不执行公网连通。
@@ -736,9 +736,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/a-gate.ps1
 | 交付物 | 实现位置 | 验证结果 |
 |---|---|---|
 | 容器无关语义层 | `src/semantic.rs` | `NodeSpec` 集中处理 endpoint、UUID、TLS/Reality/uTLS、transport、凭据和未知关键语义；adapter 无法绕过 capability matrix |
-| 协议与矩阵约束 | `src/protocol.rs`、`src/capability.rs` | 七协议最小已验证组合、VLESS Reality、HTTP-family transport 与 QUIC 组合按 `1.13.15` matrix deny-by-default 校验 |
+| 协议与矩阵约束 | `src/protocol.rs`、`src/capability.rs` | 九协议最小已验证组合、VLESS Reality、HTTP-family transport、HTTP/SOCKS terminal outbound 与 QUIC 组合按 `1.13.15` matrix deny-by-default 校验 |
 | 稳定诊断 | `src/diagnostics.rs` | 新增 `insecure_tls`；不安全 TLS 只产生脱敏 warning，不放宽下载 TLS 或 capability check |
-| E 专项合约 | `tests/e_contracts.rs` | 8 个测试覆盖七协议、endpoint/UUID/TLS/transport、插件、flow、obfs、congestion、URI 交接和 canonical seed 跨格式等价 |
+| E 专项合约 | `tests/e_contracts.rs` | 覆盖九协议、endpoint/UUID/auth/TLS/transport、插件、flow、obfs、congestion、URI 交接和 canonical seed 跨格式等价 |
 
 本次 E 阶段验证命令：
 
@@ -841,9 +841,9 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: Surfboard 扩展可增加分类但不能覆盖稳定语义。
   - `done`: unknown-field golden 通过。
 
-- [x] **F012 - YAML 七协议 golden 通过公共语义层**
+- [x] **F012 - YAML 九协议 golden 通过公共语义层**
   - `depends_on`: F011,E015；`parallel_group`: serial
-  - `scope`: YAML adapter 对七协议产生与 E014 相同的 validated node 或稳定拒绝。
+  - `scope`: YAML adapter 对九协议产生与 E014 相同的 validated node 或稳定拒绝。
   - `RED`: 每个协议至少一个官方结构 fixture 先因 adapter 未实现失败。
   - `GREEN`: 只补 adapter 映射，不复制 protocol validator。
   - `REFACTOR`: 共享字段 alias table 数据化。
@@ -851,7 +851,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 - [x] **F013 - 通过 YAML 稳定格式 gate**
   - `depends_on`: F008,F009,F012；`parallel_group`: serial
-  - `scope`: YAML adapter 满足 nodes-only、资源限制、重复 key、诊断和七协议映射。
+  - `scope`: YAML adapter 满足 nodes-only、资源限制、重复 key、诊断和九协议映射。
   - `RED`: gate 在任一安全类别或 golden 缺失时失败。
   - `GREEN`: 汇总 YAML tests，不执行性能 gate。
   - `REFACTOR`: gate 只调用公共 parse API。
@@ -865,7 +865,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 | nodes-only YAML adapter | `src/clash_yaml.rs::parse_clash_yaml` | 仅读取顶层 inline `proxies`；rules、groups、providers、script 只产生有界 summary，不执行、不下载、不透传 |
 | source-level YAML 攻击防护 | `src/clash_yaml.rs` | 重复 key、merge key、tag/include、alias replay、文档数量和节点数量返回稳定拒绝码 |
 | 字段映射与语义交接 | `src/clash_yaml.rs::clash_node_spec` | 公共字段映射到 `NodeSpec`，再统一经 E 阶段 capability gate；critical unknown 拒绝，harmless unknown 仅一次 warning |
-| F 专项合约 | `tests/f_contracts.rs` | 7 个测试覆盖预算、七协议、provider-only、非节点区域、duplicate/merge/tag、alias/doc、部分成功与未知字段 |
+| F 专项合约 | `tests/f_contracts.rs` | 覆盖预算、九协议、provider-only、非节点区域、duplicate/merge/tag、alias/doc、部分成功与未知字段 |
 
 本次 F 阶段验证命令：
 
@@ -928,13 +928,13 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   - `REFACTOR`: 容器只负责字段位置转换。
   - `done`: cross-format unknown-field tests 通过。
 
-- [x] **G007 - JSON 七协议 golden 通过公共语义层**
+- [x] **G007 - JSON 九协议 golden 通过公共语义层**
   - `depends_on`: G006,E015；`parallel_group`: serial
-  - `scope`: 七协议 outbound 产生与 E014 相同的 validated node 或稳定拒绝。
+  - `scope`: 九协议 outbound 产生与 E014 相同的 validated node 或稳定拒绝。
   - `RED`: 每协议最小官方 fixture 先失败。
   - `GREEN`: 只补 JSON mapping。
   - `REFACTOR`: 共享默认值表，不复制 validator。
-  - `done`: seven-protocol JSON golden 全绿。
+  - `done`: nine-protocol JSON golden 全绿。
 
 - [x] **G008 - JSON 支持逐 outbound 部分成功**
   - `depends_on`: G007,B007；`parallel_group`: serial
@@ -946,7 +946,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 - [x] **G009 - 通过 JSON 稳定格式 gate**
   - `depends_on`: G004,G008；`parallel_group`: serial
-  - `scope`: JSON adapter 满足顶层范围、nodes-only、重复 key、七协议与部分成功。
+  - `scope`: JSON adapter 满足顶层范围、nodes-only、重复 key、九协议与部分成功。
   - `RED`: gate 在任一类别 fixture 缺失时失败。
   - `GREEN`: 汇总 JSON test targets。
   - `REFACTOR`: 只使用公共 API。
@@ -959,9 +959,9 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 | JSON 顶层与 raw outbound 提取 | `src/singbox_json.rs::extract_outbounds` | 接受完整配置、outbound array 和单个 terminal outbound；逐 outbound typed deserialize，不保留完整 `Value` DOM |
 | duplicate/partial-success | `src/singbox_json.rs::parse_singbox_json` | 关键重复字段只拒绝对应 outbound；其他合法 outbound 保持原始顺序和 item index |
 | nodes-only 边界 | `src/singbox_json.rs` | selector/urltest/direct/block/dns/shadowtls 跳过；log/dns/inbounds/route/services/experimental 仅生成一个有界 summary |
-| 七协议与未知字段策略 | `src/singbox_json.rs::singbox_node_spec` | 七协议统一进入 E gate；critical unknown 拒绝、harmless unknown warning 与 YAML 一致 |
+| 九协议与未知字段策略 | `src/singbox_json.rs::singbox_node_spec` | 九协议统一进入 E gate；critical unknown 拒绝、harmless unknown warning 与 YAML 一致 |
 | JSON 结构预算 | `src/singbox_json.rs::check_json_structure` | body 外层限制之外，在 typed mapping 前限制 64 层深度与 64 KiB 字符串 |
-| G 专项合约 | `tests/g_contracts.rs` | 7 个测试覆盖三种顶层、duplicate、nodes-only、七协议、未知字段、部分成功、深度与字符串预算 |
+| G 专项合约 | `tests/g_contracts.rs` | 覆盖三种顶层、duplicate、nodes-only、九协议、未知字段、部分成功、深度与字符串预算 |
 
 本次 G 阶段验证命令：
 
@@ -1147,7 +1147,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 - [x] **H022 - 通过稳定核心功能 gate**
   - `depends_on`: H021；`parallel_group`: serial
-  - `scope`: 三格式、七协议、去重、报告和 compose 的功能证据完整，不含性能结论。
+  - `scope`: 稳定格式、九协议、去重、报告和 compose 的功能证据完整，不含性能结论。
   - `RED`: traceability gate 在任一必需 behavior/test/evidence 缺失时失败。
   - `GREEN`: 汇总 A-H 机器可读 manifest。
   - `REFACTOR`: gate 不重新实现断言。
@@ -1161,9 +1161,9 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 | 截断 node ID | `crates/nethop-subscription/src/pipeline.rs::NodeDisplayId` | 输出 `nh1s-` schema tag 与 16 位十六进制截断 digest，不暴露完整 fingerprint |
 | 去重、跨 source 引用与 source outcome | `crates/nethop-subscription/src/pipeline.rs::dedupe_sources` | 相同 semantic node 合并，别名/source refs 稳定有序；`accepted + duplicate > 0` 作为 source success |
 | compact report 与 8 MiB JSON budget | `crates/nethop-subscription/src/pipeline.rs::ConversionReport` | summary、diagnostic counts、compact item 与 detailed diagnostics cap 保持计数守恒 |
-| 七协议 outbound fragment compose | `crates/nethop-subscription/src/pipeline.rs::compose_outbound` | Shadowsocks、VMess、VLESS、Trojan、Hysteria2、TUIC、AnyTLS 仅从 validated `ProxyNode` 生成 terminal outbound fragment |
+| 九协议 outbound fragment compose | `crates/nethop-subscription/src/pipeline.rs::compose_outbound` | Shadowsocks、VMess、VLESS、Trojan、Hysteria2、TUIC、AnyTLS、HTTP、SOCKS 仅从 validated `ProxyNode` 生成 terminal outbound fragment |
 | 三格式端到端稳定转换 | `crates/nethop-subscription/src/pipeline.rs::convert_stable_sources` | URI/Base64、Clash YAML、sing-box JSON 串联 detect/parse/validate/dedupe/compose/report，不下载、不写盘、不生成完整 sing-box config |
-| H 专项合约 | `crates/nethop-subscription/tests/h_contracts.rs` | 7 个测试覆盖 fingerprint、node ID、去重、source outcome、bounded report、七协议 compose 和三格式 e2e |
+| H 专项合约 | `crates/nethop-subscription/tests/h_contracts.rs` | 覆盖 fingerprint、node ID、去重、source outcome、bounded report、九协议 compose 和稳定格式 e2e |
 
 本次 H 阶段验证命令：
 
@@ -1619,7 +1619,7 @@ K001-K020 实现证据：`fetch` feature 固定 `ureq = 3.3.0`，使用自定义
 
 ## 16. L - Android Surfboard 兼容扩展
 
-L 阶段只覆盖 Android 上实际使用的 Surfboard INI。Stash、Surge、Shadowrocket、Quantumult X 专用配置属于 `out_of_scope`；它们导出的 URI/Base64 仍由稳定容器处理。Surfboard 扩展不阻塞稳定三格式 Alpha，继续遵守 nodes-only、七协议、资源限制和诊断边界。
+L 阶段只覆盖 Android 上实际使用的 Surfboard INI。Stash、Surge、Shadowrocket、Quantumult X 专用配置属于 `out_of_scope`；它们导出的 URI/Base64 仍由稳定容器处理。Surfboard 扩展不阻塞稳定三格式 Alpha，继续遵守 nodes-only、公共九协议模型、方言独立证据、资源限制和诊断边界。
 
 - [x] **L001 - 建立 Surfboard 脱敏 fixture 与证据 manifest**
   - `depends_on`: H022；`parallel_group`: L-infra
@@ -1639,7 +1639,7 @@ L 阶段只覆盖 Android 上实际使用的 Surfboard INI。Stash、Surge、Sha
 
 - [x] **L003 - 实现 Surfboard `[Proxy]` adapter**
   - `depends_on`: L002,E015；`parallel_group`: L-adapter
-  - `scope`: 只读取 `[Proxy]` terminal entries，映射 fixture 已证明的七协议字段。
+  - `scope`: 只读取 `[Proxy]` terminal entries，映射 fixture 已证明的字段；HTTP/SOCKS 在 Surfboard 方言证据完成前拒绝。
   - `RED`: `[Proxy Group]`、`[Rule]`、`[Script]`、`[MITM]`、remote policy 影响输出时失败。
   - `GREEN`: 使用公共 semantic validator 生成 `ProxyNode`。
   - `REFACTOR`: 方言差异只存在于 mapping table，不复制 URI/protocol parser。
@@ -1760,11 +1760,11 @@ M002-M003 实现证据：QR IPC origin 只接受带用户确认状态的 Android
   - `REFACTOR`: 版本证据来自单一 manifest。
   - `done`: 1.13.15 mapping manifest golden 通过。
 
-M004 实现证据：`manifests/sing-box-1.13.15-mapping.json` 是运行时 `CapabilityMatrix` 的单一事实来源，冻结上游 tag `v1.13.15`、commit `3708fa18766cda1f11b77f6ed9c7bd61688f17df`、Go `1.24.7`、NetHop 候选 build tags、七协议 mapped fields、源码路径和 25 个 capability shapes；加入 sing-box 1.13.15 原生 Shadowsocks `udp_over_tcp` 以及经审核的 `obfs-local` UDP 窄映射后，manifest SHA-256 为 `4db3661bd7906e1a68474357cfd0d196f5d604e0cc7cab87443bbb7593c4c140`。严格 validator 拒绝未知字段、版本/commit/build tag 漂移、重复/缺失协议和重复 query。
+M004 实现证据：`manifests/sing-box-1.13.15-mapping.json` 是运行时 `CapabilityMatrix` 的单一事实来源，冻结上游 tag `v1.13.15`、commit `3708fa18766cda1f11b77f6ed9c7bd61688f17df`、Go `1.24.7`、NetHop 候选 build tags、九协议 mapped fields、源码路径和 30 个 capability shapes；除 sing-box 1.13.15 原生 Shadowsocks `udp_over_tcp`、经审核的 `obfs-local`/`v2ray-plugin` 窄映射外，新增 HTTP TCP/TLS 与 SOCKS TCP/UDP 的 deny-by-default capability。manifest SHA-256 为 `b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84`。严格 validator 拒绝未知字段、版本/commit/build tag 漂移、重复/缺失协议和重复 query。官方 Android arm64 预编译包的运行时身份单独记录在 `tests/fixtures/device/alioth-parser-integration.json`：Go `1.25.12`、实际标签包含 `with_wireguard`；它不覆盖 NetHop 源码候选构建标签，也不自动启用 WireGuard parser。
 
-`tests/fixtures/mapping/sing-box-1.13.15-check.json` SHA-256 为 `571f98cfea51e08550e4e2f82c995a0ef1810ba096f8496c907aa244f93abba1`，覆盖七种 outbound，并在 Shadowsocks 节点覆盖原生 `udp_over_tcp`；sing-box v1.13.15 官方 Android arm64 发布二进制在 alioth 上执行 `check` 返回 `0`，其 `version` 输出确认 revision `3708fa...`。本机 Go `1.25.4` 不能链接该版本 `badlinkname` 组合，因此 NetHop 自定义裁剪 tags 的下游源码构建仍留给发布构建 gate，不把官方二进制检查冒充自定义构建证据。
+`tests/fixtures/mapping/sing-box-1.13.15-check.json` 为 2,841 bytes，SHA-256 为 `3cec341ea3bc030e5f201a63b85f2ef8c50df2a5fc6bd22c41932da89832dcb6`，覆盖九种 outbound，并在 Shadowsocks 节点覆盖原生 `udp_over_tcp`、在 HTTP/SOCKS 节点覆盖认证与协议 options；sing-box v1.13.15 官方 Android arm64 发布二进制于 2026-08-05 在 alioth 上执行 `check` 返回 `0`，其 `version` 输出确认 revision `3708fa...`。该检查证明配置结构可被固定数据面接纳，不替代 HTTP/SOCKS 远端连通性证据。
 
-源码对照同时修复了三个会静默改变连接语义的缺陷：uTLS/Reality composer 补齐 `enabled=true`；TUIC `congestion_control` 进入 typed `ProtocolOptions` 与 outbound；Hysteria2 只接受完整的 `salamander + obfs password` 并同时进入 canonical fingerprint 和 outbound。未建模的端口跳跃、带宽及其他连接关键字段继续拒绝，不做猜测映射。
+源码对照同时修复了会静默改变连接语义的缺陷：uTLS/Reality composer 补齐 `enabled=true`；TUIC `congestion_control` 进入 typed `ProtocolOptions` 与 outbound；Hysteria2 的 `server_ports`/端口跳跃、`hop_interval`、带宽字段进入有界 typed options，并在 compose 时省略互斥的 `server_port`；Mihomo 数字秒/毫秒间隔被转换为 sing-box duration，非法范围拒绝；Mihomo 证书 DER fingerprint 不伪装成 sing-box 公钥 pin，而是返回 `unsupported_semantics`；Shadowsocks SIP003 `v2ray-plugin` 仅允许 `websocket|quic` 与 `host/path/tls/mux` 窄字段。所有新增字段均在 URI、Clash/Mihomo YAML 或 sing-box JSON 的共享 semantic gate 后生成 outbound。
 
 - [x] **M005 - 建立 fake Magisk/KernelSU parser host harness**
   - `depends_on`: M001；`parallel_group`: M-android
@@ -1784,7 +1784,7 @@ M005 实现证据：`tests/support/fake_module_host.rs` 为 Magisk/KernelSU 提�
   - `REFACTOR`: 只修复设备实际暴露的问题。
   - `done`: device integration manifest 和脱敏 log。
 
-M006 实现证据：`tests/fixtures/device/alioth-parser-integration.json` 绑定 `alioth / Android 13 / API 33 / arm64-v8a / Magisk 30.6`、Rust/NDK 构建参数和本地 check fixture digest。parser-only 与 fetch-enabled release probe 已于 2026-08-03 在设备上重跑，输出 `accepted=7`、`rejected=0`、`candidate_state=ready`、`ipc_schema_version=1` 和 mapping digest `6215042d...`；同一 fixture 已通过官方 sing-box 1.13.15 Android arm64 的 `check`。测试只使用仓库内脱敏 fixture，没有访问订阅 URL。该声明不外推到其他设备、ROM、SoC 或 Root 管理器。
+M006 实现证据：`tests/fixtures/device/alioth-parser-integration.json` 绑定 `alioth / Android 13 / API 33 / arm64-v8a / Magisk 30.6`、Rust/NDK 构建参数和本地 check fixture digest。2026-08-05 重新以 `cargo ndk -t arm64-v8a -P 23 build --locked --release` 构建并在设备端运行 `subscription_parser_probe`：stable parser 二进制为 `2,045,648` bytes、SHA-256 `6b17c00a9b6129cc11733224f3928775f48b6fe2bb78add263873b711ef67c32`；增加 fetch feature 后为 `2,045,824` bytes、SHA-256 `e6645fdd03ea37b2ecd932a88ac0cc7fd44f8b8b339fdbb957410bf25fc28d5f`。两个变体对 2,841-byte 本地 fixture 均输出 `accepted=9`、`rejected=0`、`candidate_state=ready`、`ipc_schema_version=1`、九种协议各一项及 mapping digest `b070b47c...`；同一 fixture 已通过官方 sing-box 1.13.15 Android arm64 的 `check`。测试只使用仓库内脱敏 fixture，没有访问订阅 URL。该声明不外推到其他设备、ROM、SoC 或 Root 管理器。
 
 - [x] **M007 - 验证 active limit 500/2,000/10,000 边界**
   - `depends_on`: H022,M001；`parallel_group`: M-boundary
@@ -1844,7 +1844,7 @@ M011 实现证据：`crates/nethop-subscription/fuzz/` 建立五个独立 libFuz
   - `REFACTOR`: 释放说明不手工复制设备状态。
   - `done`: support matrix 与 evidence manifest 一致。
 
-M012 实现证据：`scripts/generate-subscription-parser-support-matrix.ps1` 从 alioth Android integration、跨环境 manifest、sing-box mapping、Phase 0-B 性能报告和 Android scope 生成矩阵，不读取客户端品牌宣传。URI/Base64、Clash YAML、sing-box JSON 标为 `reference_verified`；Surfboard 标为默认关闭 `experimental`；七协议 parser mapping 标为 `reference_verified`，Android data-plane 明确为 `best_effort`，不外推到所有设备。`release-manifest.json` 启用 stable parser + fetch，显式关闭 Surfboard/experimental formats，并绑定每项 artifact digest。
+M012 实现证据：`scripts/generate-subscription-parser-support-matrix.ps1` 从 alioth Android integration、跨环境 manifest、sing-box mapping、Phase 0-B 性能报告和 Android scope 生成矩阵，不读取客户端品牌宣传。URI/Base64、Clash YAML、sing-box JSON 标为 `reference_verified`；Surfboard 标为默认关闭 `experimental`；九协议 parser mapping 标为 `reference_verified`，Android data-plane 明确为 `best_effort`，不外推到所有设备。`release-manifest.json` 启用 stable parser + fetch，显式关闭 Surfboard/experimental formats，并绑定每项 artifact digest。
 
 - [x] **M013 - 执行发布候选全量验证**
   - `depends_on`: M012,K020,J016,L011；`parallel_group`: serial
@@ -1866,9 +1866,117 @@ M013 实现证据：`scripts/subscription-parser-release-gate.ps1` 通过 fmt、
 
 M014 实现证据：`scripts/subscription-parser-freeze-gate.ps1` 在不执行 Git mutation 的前提下复核 M013 candidate、五个 fuzz smoke、fmt、workspace/all-features tests、Clippy 和 `git diff --check`，生成 `artifacts/subscription-parser/m014/release-freeze.json`。冻结文件状态为 `frozen`，绑定 22 个 artifact、10 项安全/确定性/范围不变量，稳定发布 feature 为 parser、URI/Base64、Clash YAML、sing-box JSON 和 fetch；Surfboard/experimental formats 保持关闭。
 
-## 18. TDD 完成与回归协议
+## 18. N - HTTP/SOCKS 受控协议扩展
 
-### 18.1 每个节点的最小证据
+- [x] **N001 - 固定三内核源码证据边界**
+  - `depends_on`: M014；`parallel_group`: serial
+  - `scope`: Mihomo/Xray 只证明输入生态和协议语义，固定 sing-box 1.13.15 才决定 NetHop 输出字段与 Android 数据面能力。
+  - `RED`: 仅凭客户端宣传或同名字段就启用协议的 review gate 失败。
+  - `GREEN`: 绑定 Mihomo `adapter/parser.go`、`adapter/outbound/http.go`、`adapter/outbound/socks5.go`，Xray `proxy/http`/`proxy/socks`，以及 sing-box `option/simple.go`、`option/types.go`、`protocol/http/outbound.go`、`protocol/socks/outbound.go`。
+  - `REFACTOR`: Xray 不作为 sing-box composer 的字段权威。
+  - `done`: 源码职责和不采纳字段写入 Android scope 与 mapping manifest。
+
+- [x] **N002 - 扩展九协议 typed model 与公共语义 gate**
+  - `depends_on`: N001；`parallel_group`: N-protocol
+  - `scope`: HTTP/SOCKS 使用协议专用 credentials/options；认证只允许均缺失或 username/password 成对出现。
+  - `RED`: HTTP/SOCKS enum、auth、TLS/capability tests 先因字段不存在而编译失败。
+  - `GREEN`: 增加 `HttpOptions`、`SocksOptions` 和 deny-by-default capability shape。
+  - `REFACTOR`: HTTP header value 使用脱敏 secret 类型；SOCKS-over-TLS 明确拒绝。
+  - `done`: `e_contracts` 九协议和拒绝矩阵通过。
+
+- [x] **N003 - 实现 Clash/Mihomo HTTP/SOCKS 窄映射**
+  - `depends_on`: N002；`parallel_group`: N-adapter
+  - `scope`: HTTP 映射认证/TLS/SNI/headers，SOCKS5 映射认证/UDP；不导入证书路径、私钥、dialer proxy 或 SOCKS TLS。
+  - `RED`: 合法节点未接受、危险字段被静默丢弃的 tests 失败。
+  - `GREEN`: 两类节点进入共享 semantic gate。
+  - `REFACTOR`: Surfboard 同名协议继续拒绝，避免跨方言猜测。
+  - `done`: `f_contracts` 和 `l_contracts` 通过。
+
+- [x] **N004 - 实现 sing-box JSON HTTP/SOCKS 窄映射**
+  - `depends_on`: N002；`parallel_group`: N-adapter
+  - `scope`: HTTP 映射 auth/TLS/path/headers；SOCKS 映射 4/4a/5、auth、TCP/UDP network 和原生 UDP-over-TCP。
+  - `RED`: version/network/transport 关键语义被忽略的 tests 失败。
+  - `GREEN`: 只接受 TCP 或 TCP+UDP 的有界 network 形态。
+  - `REFACTOR`: UDP-only、未知 version、HTTP V2Ray transport 稳定拒绝。
+  - `done`: `g_contracts` 通过。
+
+- [x] **N005 - 扩展 fingerprint 与 terminal outbound compose**
+  - `depends_on`: N003,N004；`parallel_group`: serial
+  - `scope`: auth、HTTP path/headers、SOCKS version/network/UoT 全部进入 canonical fingerprint 和 JSON fragment。
+  - `RED`: 连接字段变化不改变 fingerprint 或 compose 丢字段的 tests 失败。
+  - `GREEN`: 生成 sing-box 1.13.15 等价 outbound。
+  - `REFACTOR`: 无完整 config、route、inbound 或 dialer 字段透传。
+  - `done`: `h_contracts` 通过。
+
+- [x] **N006 - 重建 Android 与发布冻结证据**
+  - `depends_on`: N005；`parallel_group`: serial
+  - `scope`: 九协议 check fixture、mapping digest、support matrix、SBOM/provenance、M013/M014 artifact digest 全部一致。
+  - `RED`: 旧七协议 count/digest 与新源码不一致，M contracts 失败。
+  - `GREEN`: alioth 上用官方 sing-box 1.13.15 Android arm64 执行 `check`，再重跑 release/freeze gate。
+  - `REFACTOR`: `check` 只证明配置接纳；HTTP/SOCKS 未做远端连通测试时仍标 `best_effort`。
+  - `done`: workspace/all-features/Clippy/fmt/M013/M014 全绿。
+
+N006 实现证据：官方 sing-box 1.13.15 Android arm64 在 alioth 上对九协议 check fixture 执行 `check` 返回 `0`；stable parser 与 fetch-enabled parser probe 均在真机输出 `accepted=9`、`rejected=0` 和 `candidate_state=ready`。`scripts/generate-subscription-parser-release-evidence.ps1`、`scripts/generate-subscription-parser-support-matrix.ps1` 已重建当前 SBOM、provenance、support matrix 与 release manifest；`scripts/subscription-parser-release-gate.ps1` 在 519.2 秒内完成 11 项 hard gate，workspace、all-features、release feature、Clippy、五个有界 fuzz target 和 Android 证据全部通过；`scripts/subscription-parser-freeze-gate.ps1` 随后冻结 22 个 artifact 与 10 项不变量。HTTP/SOCKS 当前只具有 parser mapping 和 Android `sing-box check` 证据，未声称具备协议级远端连通验证，Android data-plane 继续标记为 `best_effort`。
+
+## 19. O - WireGuard Endpoint 边界评估
+
+- [x] **O001 - 固定三内核 WireGuard 配置拓扑证据**
+  - `depends_on`: N006；`parallel_group`: serial
+  - `scope`: 对照 Mihomo/Xray 输入语义与 sing-box 1.13.15 固定输出拓扑，判断是否属于 terminal outbound。
+  - `RED`: 把同名协议或 Android build tag 直接当作 `ProxyNode` 支持证据时 review gate 失败。
+  - `GREEN`: 绑定 Mihomo `adapter/outbound/wireguard.go`、Xray `infra/conf/wireguard.go`，以及 sing-box `option/wireguard.go`、`protocol/wireguard/endpoint.go`、`option/options.go`。
+  - `REFACTOR`: Mihomo/Xray 只作为输入语义参考，sing-box 1.13.15 是 composer 拓扑权威。
+  - `done`: 结论明确为顶层 `endpoints`，不进入九协议 `TerminalOutbound` 枚举。
+
+- [x] **O002 - 识别并显式忽略 sing-box endpoint section**
+  - `depends_on`: O001；`parallel_group`: serial
+  - `scope`: endpoint-only 配置可识别为 sing-box JSON；混合配置只导入 terminal outbounds；不得读取 WireGuard secret/peer。
+  - `RED`: endpoint-only 返回 `unknown_format`，或混合配置静默忽略 `endpoints` 的测试失败。
+  - `GREEN`: detector 接受顶层 `endpoints` 结构证据，adapter 返回零节点/普通节点及 `non_node_section_ignored`。
+  - `REFACTOR`: 仅反序列化 `IgnoredAny` presence，不建立 WireGuard DTO，不让私钥进入 report/fingerprint。
+  - `done`: `c_contracts` 与 `g_contracts` endpoint boundary tests 通过。
+
+- [x] **O003 - 冻结 WireGuard unsupported support-matrix 原因**
+  - `depends_on`: O002；`parallel_group`: serial
+  - `scope`: support matrix 明确区分“普通白名单外协议”与“超出 terminal-outbound 架构的 managed endpoint”。
+  - `RED`: WireGuard reason 退化为泛化文案或被列入 parser protocols 的 contract 失败。
+  - `GREEN`: 生成 `sing_box_1_13_15_endpoint_outside_terminal_outbound_contract`，重建 M010/M012/M013/M014。
+  - `REFACTOR`: 不增加 WireGuard runtime dependency、key parser 或 composer 分支。
+  - `done`: release/freeze contracts 和全量门禁通过。
+
+O001-O003 实现证据：Mihomo/Xray 的配置模型证明 WireGuard 输入包含 private key、本地 address、peer、allowed IP 和 keepalive；sing-box 1.13.15 的 `option.WireGuardEndpointOptions` 与 `protocol/wireguard/endpoint.go` 进一步确认它是顶层 endpoint，而非 terminal outbound。`c_contracts` 先复现 endpoint-only 配置被判 `unknown_format`，`g_contracts` 先复现混合配置静默忽略 endpoint；实现只让 detector 接受顶层 `endpoints` 结构证据，并以 `IgnoredAny` 记录 section presence，不反序列化或保存任何 WireGuard secret/peer。endpoint-only 转换为零节点并报告 `non_node_section_ignored`，混合配置只导入普通 outbounds。support matrix reason 固定为 `sing_box_1_13_15_endpoint_outside_terminal_outbound_contract`。更新后 Android stable/fetch probes 分别为 `2,045,648`/`2,045,824` bytes，九协议 fixture 均为 `accepted=9`、`rejected=0`；M013 用 556.4 秒完成 11 项 hard gate，M014 冻结 22 个 artifact 和 10 项不变量。
+
+## 20. P - Naive/Mieru 数据面准入评估
+
+- [x] **P001 - 固定 Naive/Mieru 源码与 build-tag 证据**
+  - `depends_on`: O003；`parallel_group`: P-admission
+  - `scope`: 区分“option 类型存在”“固定 Android 二进制包含实现”和“其他内核支持”三类证据。
+  - `RED`: 仅凭 sing-box option 或 Mihomo adapter 就把协议加入 parser 白名单时 review gate 失败。
+  - `GREEN`: 绑定 sing-box `option/naive.go`、`include/naive_outbound*.go`、`protocol/naive/outbound.go` 和 Mihomo `adapter/outbound/mieru.go`。
+  - `REFACTOR`: Xray 无匹配实现记为无证据，不从空结果推导兼容性。
+  - `done`: Naive 依赖 `with_naive_outbound`；Mieru 不存在于 sing-box 1.13.15。
+
+- [x] **P002 - 在参考 Android 数据面执行 Naive 负向 check**
+  - `depends_on`: P001；`parallel_group`: serial
+  - `scope`: 用脱敏最小配置验证模块内实际 sing-box 1.13.15，而不是只检查源码 tags。
+  - `RED`: 把普通 shell 权限错误或宿主机结果冒充数据面拒绝证据时失败。
+  - `GREEN`: 通过 `su -c` 运行固定模块二进制，捕获稳定初始化错误和退出码。
+  - `REFACTOR`: 临时配置仅含虚构域名/凭据，不进入仓库发布 artifact。
+  - `done`: alioth 返回退出码 1 和 `naive outbound is not included in this build`。
+
+- [x] **P003 - 冻结 Naive/Mieru unsupported 原因**
+  - `depends_on`: P002；`parallel_group`: serial
+  - `scope`: support matrix 分别记录 Android build 缺 tag 与固定 sing-box 版本未实现。
+  - `RED`: 两项退化为泛化 `outside_alpha_protocol_whitelist` 的 release contract 失败。
+  - `GREEN`: 生成精确 reason，并重建 M010/M012/M013/M014。
+  - `REFACTOR`: 不增加 Cronet/Mieru 依赖、不扩大 parser enum、不修改 release build tags。
+  - `done`: release/freeze contracts 和全量门禁通过。
+
+P001-P003 实现证据：sing-box 1.13.15 的 Naive outbound 由 `with_naive_outbound` 条件编译，缺失时 registry 明确走 stub；模块内官方 Android arm64 CLI 二进制的 version tags 不含该项。alioth 上通过 root 调用固定二进制检查脱敏最小 Naive 配置，退出码为 1，初始化错误为 `naive outbound is not included in this build, rebuild with -tags with_naive_outbound`。Mihomo 提供 Mieru adapter，但 sing-box 1.13.15 与 Xray 对照源码均没有可作为 NetHop 数据面的 Mieru 实现。support matrix 分别冻结 `android_sing_box_1_13_15_missing_with_naive_outbound` 和 `not_implemented_by_sing_box_1_13_15`；未增加协议 enum、Cronet/Mieru 依赖或 composer 分支。M013 用 363.1 秒通过 11 项 hard gate，M014 再次冻结 22 个 artifact 与 10 项不变量。
+
+## 21. TDD 完成与回归协议
+
+### 21.1 每个节点的最小证据
 
 任务完成前必须同时存在：
 
@@ -1879,7 +1987,7 @@ M014 实现证据：`scripts/subscription-parser-freeze-gate.ps1` 在不执行 G
 - 任务对应 fixture、测试路径、feature set 和 artifact digest；
 - 未完成的后续能力没有被顺手标记为完成。
 
-### 18.2 命令分层
+### 21.2 命令分层
 
 ```text
 # 单任务窄回归
@@ -1905,7 +2013,7 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 
 性能命令不得使用真实订阅 URL；性能证据必须使用冻结 fixture。Host/AVD 结果不能替代参考真机 RSS/CPU/TPROXY 证据。没有设备时任务状态应为 `blocked_by_environment` 或 `not_in_release_scope`，不能改写 SLO。
 
-### 18.3 失败分类
+### 21.3 失败分类
 
 | 状态 | 含义 | 处理 |
 |---|---|---|
@@ -1917,7 +2025,7 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 | `not_in_release_scope` | 可选 feature 未进入当前发布包 | 保留明确状态，不伪造通过 |
 | `invalid_measurement` | 温度、网络、服务端、设备状态或工具异常 | 原始数据保留，重新测量，不挑选最好值 |
 
-### 18.4 不变量回归清单
+### 21.4 不变量回归清单
 
 每次修改 parser、依赖、feature、profile 或 mapping 都必须运行适用项目：
 
@@ -1933,15 +2041,15 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 - [x] release profile、toolchain、fixture digest 和性能报告可追溯；
 - [x] 未通过设备/feature gate 的能力仍标记 `experimental`、`best_effort` 或 `unsupported`。
 
-## 19. 依赖图与执行建议
+## 22. 依赖图与执行建议
 
-### 19.1 可并行的安全分支
+### 22.1 可并行的安全分支
 
 在前置 gate 通过后，可以并行推进：
 
 | 分支 | 起点 | 终点 | 说明 |
 |---|---|---|---|
-| 协议语义 | B015 | E015 | 不依赖具体容器；七协议任务可按 E-protocols 并行 |
+| 协议语义 | B015 | E015,N001-N006,O001-O003,P001-P003 | terminal outbound 可按 E/N-protocols 扩展；endpoint/build-tag/其他内核协议必须先经过独立准入评估 |
 | URI/Base64 | C012 | D012 | 与 YAML/JSON 容器并行 |
 | Clash YAML | C012 + E015 | F013 | 资源策略先于字段映射 |
 | sing-box JSON | C012 + E015 | G009 | 只读取 terminal outbounds |
@@ -1950,7 +2058,7 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 | fetch | H022 | K020 | 可选 feature，不进入 parser-only |
 | Android 方言扩展 | H022 | L011 | 不阻塞稳定核心；Surfboard adapter 可并行 |
 
-### 19.2 不允许并行的递进关系
+### 22.2 不允许并行的递进关系
 
 - 不得在 B015 之前实现具体 parser adapter；否则会复制模型、诊断和限制。
 - 不得在 E015 之前把容器字段标记为 validated；否则客户端方言会自行决定协议能力。
@@ -1959,29 +2067,29 @@ cargo fuzz run <target> -- -max_total_time=60 -rss_limit_mb=<budget>
 - 不得在 J016/L011 之前扩大 Alpha support matrix；性能与 Surfboard 扩展必须先有证据。
 - 不得在 M014 之前启用 `panic="abort"`、BLAKE3 双写、实验方言默认 feature 或未验证协议。
 
-## 20. 参考资料
+## 23. 参考资料
 
-### 20.1 任务与 TDD 格式
+### 23.1 任务与 TDD 格式
 
 - GitHub task lists：<https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/about-tasklists>
 - GitHub basic Markdown task list：<https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#task-lists>
 - GitHub Flavored Markdown：<https://github.github.com/gfm/#task-list-items-extension->
 - Martin Fowler, Test Driven Development：<https://martinfowler.com/bliki/TestDrivenDevelopment.html>
 
-### 20.2 Rust 测试与 Fuzz
+### 23.2 Rust 测试与 Fuzz
 
 - Rust Book, Test Organization：<https://doc.rust-lang.org/stable/book/ch11-03-test-organization.html>
 - Cargo test：<https://doc.rust-lang.org/stable/cargo/commands/cargo-test.html>
 - Cargo tests guide：<https://doc.rust-lang.org/cargo/guide/tests.html>
 - Rust Fuzz Book, cargo-fuzz：<https://rust-fuzz.github.io/book/cargo-fuzz.html>
 
-### 20.3 本地设计约束
+### 23.3 本地设计约束
 
 - [`00-nethop-system-design.md`](./00-nethop-system-design.md)
 - [`01-performance-budget-and-slo.md`](./01-performance-budget-and-slo.md)
 - [`02-subscription-import-and-parser-design.md`](./02-subscription-import-and-parser-design.md)
 
-## 21. 冻结结论
+## 24. 冻结结论
 
 1. 本清单的最小执行单元是一个复选框节点；一个节点只交付一个可观察行为或 gate。
 2. 所有功能节点使用 Red -> Green -> Refactor；不以实现先行或“测试最终补齐”替代 TDD。

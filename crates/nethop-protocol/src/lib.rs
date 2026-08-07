@@ -67,10 +67,22 @@ pub enum ControlMethod {
     CapabilityProbe,
     #[serde(rename = "subscription.update")]
     SubscriptionUpdate,
+    #[serde(rename = "subscription.import_preview")]
+    SubscriptionImportPreview,
+    #[serde(rename = "subscription.import_apply")]
+    SubscriptionImportApply,
     #[serde(rename = "config.reload")]
     ConfigReload,
     #[serde(rename = "config.get")]
     ConfigGet,
+    #[serde(rename = "config.export")]
+    ConfigExport,
+    #[serde(rename = "core.version_check")]
+    CoreVersionCheck,
+    #[serde(rename = "ruleset.status")]
+    RuleSetStatus,
+    #[serde(rename = "ruleset.update")]
+    RuleSetUpdate,
     #[serde(rename = "config.validate")]
     ConfigValidate,
     #[serde(rename = "config.apply")]
@@ -83,6 +95,30 @@ pub enum ControlMethod {
     ConfigMutate,
     #[serde(rename = "events.subscribe")]
     EventsSubscribe,
+    #[serde(rename = "node.list")]
+    NodeList,
+    #[serde(rename = "node.test")]
+    NodeTest,
+    #[serde(rename = "node.select")]
+    NodeSelect,
+    #[serde(rename = "node.export")]
+    NodeExport,
+    #[serde(rename = "connections.get")]
+    ConnectionsGet,
+    #[serde(rename = "connection.close")]
+    ConnectionClose,
+    #[serde(rename = "connections.close_all")]
+    ConnectionsCloseAll,
+    #[serde(rename = "logs.get")]
+    LogsGet,
+    #[serde(rename = "logs.clear")]
+    LogsClear,
+    #[serde(rename = "diagnostics.bundle")]
+    DiagnosticsBundle,
+    #[serde(rename = "topology.get")]
+    TopologyGet,
+    #[serde(rename = "traffic.get")]
+    TrafficGet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,14 +148,14 @@ pub enum ConfigMutation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_source_id: Option<String>,
     },
-    AddPackage {
-        package: String,
+    AddApplicationTarget {
+        target: ApplicationTarget,
     },
-    RemovePackage {
-        package: String,
+    RemoveApplicationTarget {
+        target: ApplicationTarget,
     },
-    ReplacePackages {
-        packages: Vec<String>,
+    ReplaceApplicationTargets {
+        targets: Vec<ApplicationTarget>,
     },
     AddRoutingCidr {
         list: RoutingCidrList,
@@ -129,9 +165,24 @@ pub enum ConfigMutation {
         list: RoutingCidrList,
         cidr: String,
     },
+    RemoveNode {
+        node_id: String,
+    },
     SetScalarField {
         field_id: String,
         value: Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ApplicationTarget {
+    Package {
+        android_user_id: u32,
+        package: String,
+    },
+    Uid {
+        uid: u32,
     },
 }
 
@@ -162,6 +213,8 @@ pub struct ControlParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_config_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    candidate_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     document: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manager_version: Option<String>,
@@ -173,6 +226,14 @@ pub struct ControlParams {
     mutation: Option<ConfigMutation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     event_kinds: Option<Vec<EventKind>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_id: Option<String>,
 }
 
 impl ControlParams {
@@ -181,12 +242,17 @@ impl ControlParams {
             wait,
             if_needed,
             expected_config_digest: None,
+            candidate_digest: None,
             document: None,
             manager_version: None,
             manager_protocol_min: None,
             manager_protocol_max: None,
             mutation: None,
             event_kinds: None,
+            target: None,
+            query: None,
+            limit: None,
+            source_id: None,
         }
     }
 
@@ -201,6 +267,19 @@ impl ControlParams {
     pub fn config_document(expected_config_digest: String, document: Value) -> Self {
         Self {
             expected_config_digest: Some(expected_config_digest),
+            document: Some(document),
+            ..Self::default()
+        }
+    }
+
+    pub fn import_document(
+        expected_config_digest: String,
+        candidate_digest: Option<String>,
+        document: Value,
+    ) -> Self {
+        Self {
+            expected_config_digest: Some(expected_config_digest),
+            candidate_digest,
             document: Some(document),
             ..Self::default()
         }
@@ -234,8 +313,36 @@ impl ControlParams {
         }
     }
 
+    pub fn target(target: String) -> Self {
+        Self {
+            target: Some(target),
+            ..Self::default()
+        }
+    }
+
+    pub fn list(query: Option<String>, limit: Option<u8>) -> Self {
+        Self {
+            query,
+            limit,
+            ..Self::default()
+        }
+    }
+
+    pub fn subscription_update(wait: bool, if_needed: bool, source_id: Option<String>) -> Self {
+        Self {
+            wait,
+            if_needed,
+            source_id,
+            ..Self::default()
+        }
+    }
+
     pub fn expected_config_digest(&self) -> Option<&str> {
         self.expected_config_digest.as_deref()
+    }
+
+    pub fn candidate_digest(&self) -> Option<&str> {
+        self.candidate_digest.as_deref()
     }
 
     pub const fn document(&self) -> Option<&Value> {
@@ -259,6 +366,22 @@ impl ControlParams {
 
     pub fn event_kinds(&self) -> Option<&[EventKind]> {
         self.event_kinds.as_deref()
+    }
+
+    pub fn target_value(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
+    pub fn query_value(&self) -> Option<&str> {
+        self.query.as_deref()
+    }
+
+    pub const fn limit(&self) -> Option<u8> {
+        self.limit
+    }
+
+    pub fn source_id(&self) -> Option<&str> {
+        self.source_id.as_deref()
     }
 }
 
@@ -312,6 +435,7 @@ impl ControlRequest {
             ControlMethod::ServiceStart
                 | ControlMethod::ServiceStop
                 | ControlMethod::SubscriptionUpdate
+                | ControlMethod::RuleSetUpdate
                 | ControlMethod::ConfigReload
         );
         if (self.params.wait && !wait_allowed)
@@ -319,14 +443,29 @@ impl ControlRequest {
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
+        if (self.params.source_id.is_some() && self.method != ControlMethod::SubscriptionUpdate)
+            || self
+                .params
+                .source_id
+                .as_ref()
+                .is_some_and(|source_id| !valid_source_id(source_id))
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let import_method = matches!(
+            self.method,
+            ControlMethod::SubscriptionImportPreview | ControlMethod::SubscriptionImportApply
+        );
         let document_method = matches!(
             self.method,
             ControlMethod::ConfigValidate | ControlMethod::ConfigApply
-        );
+        ) || import_method;
+        let candidate_method = self.method == ControlMethod::SubscriptionImportApply;
         let mutation_method = self.method == ControlMethod::ConfigMutate;
         if self.params.document.is_some() != document_method
             || self.params.mutation.is_some() != mutation_method
             || self.params.expected_config_digest.is_some() != (document_method || mutation_method)
+            || self.params.candidate_digest.is_some() != candidate_method
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
@@ -346,6 +485,14 @@ impl ControlRequest {
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
+        if let Some(digest) = &self.params.candidate_digest
+            && (digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
         if let Some(mutation) = &self.params.mutation {
             validate_mutation(mutation)?;
         }
@@ -359,6 +506,39 @@ impl ControlRequest {
                     unique.len() != kinds.len()
                 }
             })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let target_method = matches!(
+            self.method,
+            ControlMethod::NodeTest
+                | ControlMethod::NodeSelect
+                | ControlMethod::NodeExport
+                | ControlMethod::ConnectionClose
+        );
+        if self.params.target.is_some() != target_method
+            || self.params.target.as_ref().is_some_and(|target| {
+                target.is_empty() || target.len() > 128 || target.chars().any(char::is_control)
+            })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let query_method = matches!(
+            self.method,
+            ControlMethod::NodeList | ControlMethod::ConnectionsGet
+        );
+        let limit_method = query_method || self.method == ControlMethod::LogsGet;
+        if (!query_method && self.params.query.is_some())
+            || (!limit_method && self.params.limit.is_some())
+            || self
+                .params
+                .query
+                .as_ref()
+                .is_some_and(|query| query.len() > 128 || query.chars().any(char::is_control))
+            || self
+                .params
+                .limit
+                .is_some_and(|limit| !(1..=128).contains(&limit))
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
@@ -387,9 +567,6 @@ impl ControlRequest {
 }
 
 fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
-    let bounded = |value: &str, max: usize| {
-        !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
-    };
     let source_id = |value: &str| {
         value.len() == 36
             && value.starts_with("src_")
@@ -421,20 +598,48 @@ fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
                     .as_ref()
                     .is_none_or(|value| source_id(value) && value != id)
         }
-        ConfigMutation::AddPackage { package } | ConfigMutation::RemovePackage { package } => {
-            bounded(package, 255)
-        }
-        ConfigMutation::ReplacePackages { packages } => {
-            packages.len() <= 2_000 && packages.iter().all(|value| bounded(value, 255))
+        ConfigMutation::AddApplicationTarget { target }
+        | ConfigMutation::RemoveApplicationTarget { target } => application_target(target),
+        ConfigMutation::ReplaceApplicationTargets { targets } => {
+            targets.len() <= 2_000 && targets.iter().all(application_target)
         }
         ConfigMutation::AddRoutingCidr { cidr, .. }
         | ConfigMutation::RemoveRoutingCidr { cidr, .. } => bounded(cidr, 64),
+        ConfigMutation::RemoveNode { node_id } => {
+            node_id.len() == 21
+                && node_id.starts_with("nh1s-")
+                && node_id[5..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        }
         ConfigMutation::SetScalarField { field_id, value } => {
             bounded(field_id, 128)
                 && matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_))
         }
     };
     valid.then_some(()).ok_or(ProtocolError::InvalidEnvelope)
+}
+
+fn bounded(value: &str, max: usize) -> bool {
+    !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+}
+
+fn valid_source_id(value: &str) -> bool {
+    value.len() == 36
+        && value.starts_with("src_")
+        && value[4..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn application_target(target: &ApplicationTarget) -> bool {
+    match target {
+        ApplicationTarget::Package {
+            android_user_id,
+            package,
+        } => *android_user_id <= 21_474 && bounded(package, 255),
+        ApplicationTarget::Uid { uid } => *uid > 0,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

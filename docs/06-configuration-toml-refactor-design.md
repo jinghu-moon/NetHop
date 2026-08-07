@@ -16,7 +16,7 @@ NetHop 将用户配置统一为 TOML，并废弃用户直接维护 `nethop.json`
 
 重构分为两个阶段：
 
-1. **第一阶段：极简可用闭环。** v1 使用 `[[subscriptions.sources]]`，从第一阶段支持 `1..16` 个有序 source；安装模板只生成一个名为 `Primary` 的 source，单订阅用户仍只需填写名称和 HTTPS URL。NetHop 自动分配内部 ID、下载、识别格式、解析、合并、稳定去重、校验、发布 generation 并启动代理。
+1. **第一阶段：极简可用闭环。** v2 使用 `[[subscriptions.sources]]`，支持 `1..16` 个有序 source；安装模板只生成一个名为 `Primary` 的 source，单订阅用户仍只需填写名称和 HTTPS URL。NetHop 自动分配内部 ID、下载、识别格式、解析、合并、稳定去重、校验、发布 generation 并启动代理。
 2. **第二阶段：完整配置与 Manager 契约。** 开放订阅调度、出站模式、节点选择、应用范围、网络接管和受控高级资源参数；Manager APK 通过 daemon 的 typed IPC 读写配置，不直接执行 shell 文本替换。
 
 配置权威分为三层，不能混为“把 TOML 当数据库”或“内存状态不落盘”：
@@ -63,10 +63,10 @@ Manager 操作 typed config；daemon 校验后同时更新持久 TOML 和内存�
 | 显式 `capture_mode = "tun"` | 拒绝；TUN probe/规划组件存在，但尚未接入配置 activation |
 | 非 `auto` 的 DNS/IPv6 模式 | 拒绝 |
 | `tun_stack != "system"` | 拒绝 |
-| hotspot/USB 接口接管 | 拒绝 |
-| `routing.bypass_cn=true`、`routing.block_quic=true` | 拒绝 |
+| hotspot/USB 接口接管 | 实验性受控启用；仅验证软件 netfilter 路径 |
+| `routing.block_quic=true` | 拒绝；Android 首版不阻断 QUIC |
 
-这属于开发期的有意 fail-closed，而不是兼容承诺。启用这些值必须先补数据面、capability admission、回滚和 Android 真机测试，再移除拒绝分支。
+这属于开发期的有意 fail-closed，而不是兼容承诺。`routing.bypass_cn=true` 已完成本地规则集、sing-box `check` 和 Android 侧规则匹配验证；其余被拒绝值必须先补数据面、capability admission、回滚和 Android 真机测试，再移除拒绝分支。
 
 ## 2. 设计目标
 
@@ -88,7 +88,7 @@ Manager 操作 typed config；daemon 校验后同时更新持久 TOML 和内存�
 - 不让 Manager APK 直接修改 sing-box 生成配置、netfilter 规则或 `current` generation。
 - 不把所有内核实现常量都变成用户选项；无明确用户价值的参数继续由 capability probe 和安全默认值管理。
 - 第一阶段不提供每个 source 独立调度、镜像或请求 profile 高级编辑，但必须执行多订阅有序合并、稳定去重和单源 last-known-good。
-- 首版和第二阶段都不实现多 profile/多套命名配置切换、完整规则编辑器、热点/USB 接管或 Expert sing-box JSON；多 profile 只有形成独立用户需求和切换事务 ADR 后再立项。
+- 首版和第二阶段都不实现多 profile/多套命名配置切换、完整规则编辑器或 Expert sing-box JSON；热点/USB 仅走受控 TPROXY 复合计划，硬件/eBPF offload admission 完成前保持 experimental。
 - 不因为配置中出现未来字段而静默忽略；未知字段必须拒绝并给出稳定诊断。
 - 不在 TOML 中预留 `[plugins]`、`[extensions]` 或用户声明的 `feature_set`。扩展能力通过 IPC 协商和 schema metadata 暴露，避免无行为占位。
 - 不承诺 Manager 完全零硬编码。标量设置允许 schema-driven 通用渲染；订阅、节点、应用选择和冲突解决保留领域 UI。
@@ -129,12 +129,12 @@ MagicNet 的受控 CLI、私有 payload staging、保存前校验和敏感信息
 | 出站 | `OUTBOUND_MODE`、`SELECTOR_MODE`、`CURRENT_CONFIG` | rule/global/direct、自动/手动节点 | 保留模式；当前节点属于运行状态，不接受文件路径 |
 | 订阅 | `SUB_AUTO_UPDATE`、`SUB_UPDATE_INTERVAL` | 自动更新 | 保留，默认 24 小时；URL 进入统一 source 模型 |
 | 接管 | `PROXY_MODE`、TCP/UDP 开关、IPv6 | TPROXY/回退和协议范围 | 映射为受控 enum；不提供不安全组合 |
-| 接口 | 移动、Wi-Fi、热点、USB、额外接口 | 指定代理范围 | 第一阶段只接管本机；热点/USB 延后 |
+| 接口 | 移动、Wi-Fi、热点、USB、额外接口 | 指定代理范围 | 本机与明确识别的 tether 接口；不匹配时 fail closed |
 | 应用 | blacklist/whitelist、应用列表 | 分应用代理 | 第二阶段提供包名模型，UID 仅作为高级覆盖 |
 | DNS | 劫持方式和端口 | DNS 接管 | 第二阶段开放策略，监听安全边界固定 |
 | 路由资源 | mark、mask、table、priority、端口 | 冲突处理与兼容 | 第二阶段高级区开放候选值，仍必须 capability admission |
 | 绕过 | 私网/CN IP、强制代理 IP | 路由策略 | 通过受控规则源与 CIDR 类型表达，不接受 shell 字符串 |
-| 热点 | 子网、MAC 列表 | 下游设备代理 | 不属于当前首版范围 |
+| 热点 | tether 接口 | 下游设备 IPv4 代理，IPv6 fail closed | 不处理 MAC/子网精细策略与硬件 offload |
 | 调试 | dry-run、日志时间戳 | 排障 | 保留日志级别和 dry-run；敏感信息仍强制脱敏 |
 
 ### 4.3 值得吸收的设计
@@ -163,7 +163,7 @@ MagicNet 的受控 CLI、私有 payload staging、保存前校验和敏感信息
 
 ### 5.1 版本与命名
 
-- 顶层 `schema_version` 为正整数，首版固定为 `1`。只有不兼容 wire shape 才升级版本；新增可选字段不自动升级。
+- 顶层 `schema_version` 为正整数。当前开发期配置 ABI 固定为 `2`；从数组式 application UID/package 字段切换到 typed `targets`，并加入 source filter、Wi-Fi scene 与 domain routing 后，wire shape 已不兼容，因此必须升级版本。新增可选字段本身不自动升级。
 - section 和 key 使用 `snake_case`。
 - enum 使用小写 `snake_case` 字符串。
 - 时间间隔显式带单位，例如 `update_interval_hours`、`timeout_seconds`。
@@ -180,7 +180,7 @@ protocol_version = nethopctl <-> nethopd framing and methods
 manager_version  = APK release identity，仅用于兼容诊断
 ```
 
-项目首次正式发布前，daemon 的 schema 支持窗口固定为 `min = max = 1`，且只接受本文冻结后的 v1 shape。开发期旧 JSON、单 source 草案和包含用户 `sources[].id` 的草案全部干净拒绝，不写迁移器。首次公开发布后如需扩大兼容窗口，必须另立 schema 演进 ADR，不能把开发期兼容负担提前带入实现。
+项目首次正式发布前，daemon 的 schema 支持窗口固定为 `min = max = 2`，且只接受本文冻结后的 v2 shape。开发期旧 JSON、v1 TOML 和包含用户 `sources[].id` 的草案全部干净拒绝，不写迁移器。首次公开发布后如需扩大兼容窗口，必须另立 schema 演进 ADR，不能把开发期兼容负担提前带入实现。
 
 ### 5.2 第一阶段默认配置
 
@@ -188,7 +188,7 @@ manager_version  = APK release identity，仅用于兼容诊断
 
 ```toml
 # NetHop user configuration
-schema_version = 1
+schema_version = 2
 
 [service]
 # Persistent proxy switch. The daemon stays available when disabled.
@@ -205,7 +205,7 @@ url = ""
 正常使用只需改为：
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [service]
 enabled = true
@@ -234,7 +234,7 @@ URL 中的 `?`、`&`、`#` 在双引号内都是普通内容。配置不得记�
 第二阶段生成完整注释模板。下面是目标 schema，不代表第一阶段可以提前接受尚未实现的字段：
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [service]
 enabled = true
@@ -250,6 +250,7 @@ url = ""
 request_profile = "sing_box_android"
 format_hint = "auto"
 mirrors = []
+filter = { include_names = [], exclude_names = [], excluded_node_ids = [], protocols = [] }
 
 [[subscriptions.sources]]
 name = "Backup"
@@ -258,6 +259,7 @@ url = ""
 request_profile = "sing_box_android"
 format_hint = "auto"
 mirrors = []
+filter = { include_names = [], exclude_names = [], excluded_node_ids = [], protocols = [] }
 
 [proxy]
 outbound_mode = "rule"
@@ -271,9 +273,7 @@ concurrency = 10
 
 [applications]
 mode = "all"
-packages = []
-include_uids = []
-exclude_uids = [0]
+targets = []
 
 [network]
 capture_mode = "auto"
@@ -293,10 +293,13 @@ exclude = []
 
 [routing]
 bypass_private = true
-bypass_cn = false
+bypass_cn = true
 block_quic = false
 force_proxy_cidrs = []
 bypass_cidrs = []
+force_proxy_domains = []
+bypass_domains = []
+block_domains = []
 
 [logging]
 level = "info"
@@ -337,7 +340,7 @@ rule_priority = 12020
 
 | 字段 | 类型/范围 | 默认值 | 生效方式 | 阶段 |
 |---|---|---:|---|---|
-| `schema_version` | `1` | 必填 | reload 前校验 | 1 |
+| `schema_version` | `2` | 必填 | reload 前校验 | 2 |
 | `service.enabled` | bool | `true` | true 启用；false 受控停服并保持 direct | 1 |
 | `subscriptions.auto_update` | bool | `true` | 调度器重排 | 2 |
 | `subscriptions.update_interval_hours` | `1..168` | `24` | 调度器重排 | 2 |
@@ -346,8 +349,11 @@ rule_priority = 12020
 | `subscriptions.sources[].enabled` | bool | `true` | source 合并事务 | 1 |
 | `subscriptions.sources[].url` | string，空或有效 HTTPS URL | 空 | 完整订阅事务 | 1 |
 | `subscriptions.sources[].request_profile` | `generic/mihomo/clash_standard/surfboard/sing_box/sing_box_android` | `sing_box_android` | 下次 fetch | 2 |
-| `subscriptions.sources[].format_hint` | `auto` 或已编译格式 | `auto` | 下次 parse | 2 |
+| `subscriptions.sources[].format_hint` | `auto/uri_list/base64_list/clash_yaml/singbox_json/surfboard_ini` | `auto` | 下次 parse | 2 |
 | `subscriptions.sources[].mirrors` | 最多 3 个 HTTPS URL | `[]` | 主源失败后有界回退 | 2 |
+| `subscriptions.sources[].filter.include_names` | 最多 32 个名称子串规则；ASCII 大小写不敏感 | `[]` | 解析后 source 级节点筛选 | 2 |
+| `subscriptions.sources[].filter.exclude_names` | 最多 32 个名称子串规则；ASCII 大小写不敏感 | `[]` | 解析后 source 级节点排除 | 2 |
+| `subscriptions.sources[].filter.protocols` | `vless/vmess/shadowsocks/trojan/hysteria2/tuic/anytls/http/socks` 白名单 | `[]` | 解析后 source 级协议筛选 | 2 |
 
 第一阶段行为与内部默认：
 
@@ -418,13 +424,11 @@ registry 和 `EffectiveConfig`/generation 的提交仍受 `MutationCoordinator` 
 | 字段 | 类型/范围 | 默认值 | 说明 |
 |---|---|---:|---|
 | `applications.mode` | `all/blacklist/whitelist` | `all` | 全部、绕过名单、仅代理名单 |
-| `applications.packages` | 唯一包名数组，最多 2,000 项 | `[]` | Manager 友好的主要模型 |
-| `applications.include_uids` | 唯一 `u32` 数组 | `[]` | 高级覆盖 |
-| `applications.exclude_uids` | 唯一 `u32` 数组 | `[0]` | 高级覆盖；root 默认绕过防环路 |
+| `applications.targets` | 最多 2,000 个 typed target：`{ kind = "package", android_user_id = 0, package = "..." }` 或 `{ kind = "uid", uid = 10123 }` | `[]` | 唯一应用范围入口；包名必须绑定 Android user，避免工作资料同名包歧义 |
 
-包名必须由 daemon 通过 PackageManager 映射到指定 Android user 的 UID。第二阶段扩展多用户时使用结构化对象，不使用 NetProxy 的空格拼接 `user:package` 字符串。wire 输入保留用户顺序用于诊断；`EffectiveConfig` 使用规范化集合完成去重和 membership，canonical TOML 按稳定规则排序。最多 2,000 项时 typed compare 远低于网络 activation 成本，不为此单独引入数据库。
+`mode = "all"` 时 `targets` 必须为空；`blacklist`/`whitelist` 时必须至少有一个 target。包名由 daemon 通过 PackageManager 映射到 UID，shared UID 原子扩展；UID 0 和核心防环路身份不允许由用户写入，root 例外由 daemon 强制排除。wire 输入使用结构化对象，不使用 NetProxy 的空格拼接字符串；`EffectiveConfig` 规范化并稳定排序 target。
 
-`exclude_uids` 不能移除 NetHop 核心、下载器或必要系统防环路身份；这类 UID 由 safety auditor 强制补入运行策略。
+用户 target 不能覆盖 NetHop 核心、下载器或必要系统防环路身份；这些排除项只存在于 daemon-owned `CapturePolicy`，不属于用户配置 ABI。
 
 ### 6.5 网络接管
 
@@ -439,21 +443,30 @@ registry 和 `EffectiveConfig`/generation 的提交仍受 `MutationCoordinator` 
 
 接口选项表达用户意图，不要求用户知道 Android 实际接口名。`include/exclude` 是高级 glob 列表，必须限制字符集和数量；默认依靠 netlink/capability probe 识别移动数据与 Wi-Fi。
 
-热点和 USB 在系统设计明确进入对应阶段前，即使 schema 已规划也不得被 release 构建接受为 `true`。
+热点和 USB 已接入单一 generation 的复合 `NetworkPlan`：IPv4 使用独立 `NH_FWD_A/B` 链执行 TPROXY，IPv6 使用同源 `NH_FWD6_A/B` 链 fail closed，所有步骤由同一回执逆序回滚，健康检查同时验证两套链。接口只从 capability probe 的实时链路集合中按 Android 安全命名选择（如 `ap*`、`swlan*`、`wlan1+`、`rndis*`、`usb*`）；请求转发但没有安全匹配时拒绝激活。当前实现尚未识别 Android tethering 硬件/eBPF offload，因此该能力保持 experimental，不作为稳定发布能力；稳定化前必须增加 offload capability admission 和真机流量证据。
+
+Wi-Fi 场景使用 `[network.wifi_scenes]` 和 `[[network.wifi_scenes.rules]]` 表达。规则由有界 `id`、可选 SSID/BSSID 和 `enable_proxy/disable_proxy` 动作组成，最多 64 条；默认 30 秒低频读取 `cmd wifi status`，范围为 15..3600 秒。SSID/BSSID 只进入内存 matcher，Debug、事件和 `config.get` 均脱敏。场景动作是瞬态覆盖，不写回 TOML；`service.enabled=false` 始终是主开关，任何场景都不能重新开启用户明确关闭的代理。无匹配、无线事实不可用或 probe 失败时恢复持久主开关语义。
 
 ### 6.6 路由和日志
 
 | 字段 | 类型/范围 | 默认值 | 说明 |
 |---|---|---:|---|
 | `routing.bypass_private` | bool | `true` | 保留局域网可达性 |
-| `routing.bypass_cn` | bool | `false` | 依赖受审核二进制 ruleset |
+| `routing.bypass_cn` | bool | `true` | `rule` 模式启用 `/data/adb/nethop/rulesets/` 下已校验的持久 `cn-domain.srs`/`cn-ip.srs`；`global` 忽略该分流 |
 | `routing.block_quic` | bool | `false` | 显式策略，不作为性能默认值 |
 | `routing.force_proxy_cidrs` | CIDR 数组 | `[]` | 强制代理，数量有界 |
 | `routing.bypass_cidrs` | CIDR 数组 | `[]` | 自定义绕过，数量有界 |
+| `routing.force_proxy_domains` | 域名后缀数组，最多 512 项 | `[]` | 命中域名及其子域强制进入顶层 selector，并使用代理 DNS |
+| `routing.bypass_domains` | 域名后缀数组，最多 512 项 | `[]` | 命中域名及其子域强制直连，并使用直连 DNS |
+| `routing.block_domains` | 域名后缀数组，最多 512 项 | `[]` | 命中域名及其子域在 route 层拒绝连接 |
 | `logging.level` | `error/warn/info/debug/trace` | `info` | trace 仍不得输出 secret |
 | `logging.retention_days` | `1..30` | `7` | 有界清理，不按无限大小增长 |
 
 CIDR 使用结构化解析器验证并规范化，不能直接拼入 shell 命令。`force_proxy` 与 `bypass` 冲突时拒绝配置，不采用隐式优先级。
+
+域名规则只接受规范 ASCII 域名后缀，不接受 URL、通配符、端口、路径、IP literal、空 label 或首尾为连字符的 label。输入统一转为小写、排序并去重；每项最长 253 bytes，每个 label 最长 63 bytes。不同动作列表之间出现相同后缀或父子后缀重叠时拒绝整份配置，例如 `force_proxy_domains=["video.example"]` 与 `bypass_domains=["sub.video.example"]` 不允许同时存在，避免同一请求依赖隐式顺序得到不同结果。
+
+托管 route 的用户域名优先级固定为 `block -> force proxy -> bypass -> CIDR/private/CN -> final`。`force_proxy_domains` 和 `bypass_domains` 分别绑定 `dns-proxy` 与 `dns-direct`，保证域名判定与地址解析走同一路径。`block_domains` 当前只生成 route 层连接阻断；在 sing-box 1.13.15 的 DNS reject 行为没有独立 fixture 与 `sing-box check` 证据前，不宣称 DNS 层 NXDOMAIN/reject。
 
 `performance.profile` 不进入 v1。当前没有三组经过真机验证且行为明确的参数集，提前暴露会成为假能力；`00` 也不允许首版任意修改全局 sysctl。未来只有 profile 的具体差异、可逆应用、耗电和性能门槛全部冻结后，才通过 ADR 加入可选字段。
 
@@ -638,7 +651,7 @@ URL 规范化只用于身份计算，不修改实际请求语义。不得排序�
 
 1. 创建 `/data/adb/nethop/config`，owner `root:root`、mode `0700`。
 2. 首次安装复制 `defaults/nethop.toml` 到持久路径并设置 `0600`。
-3. 升级时不覆盖已存在的 TOML。
+3. 覆盖安装时保留同为 v2 的 TOML；检测到非 v2 开发期配置时，只保存一次 root-only `nethop.toml.pre-v2` 备份，然后直接安装 v2 默认文件，不在安装器中迁移旧字段。
 4. 在模块目录创建可发现的 `config/nethop.toml` 受控链接。
 5. 不联网、不验证订阅可达性、不生成代理 generation。
 
@@ -727,7 +740,9 @@ daemon 自身通过 Manager/CLI 原子写 TOML 也会产生 inotify 事件。不
 4. 候选失败：保留当前 runtime，不执行候选，报告 `NH-CONFIG-ENTRY-DIVERGED`；
 5. 错误 symlink、非普通文件或不安全 owner/mode：拒绝且绝不跟随。
 
-`action.sh` 先调用 `nethopctl config reload --wait` 强制执行与 watcher 相同的全量 rescan/reconcile；配置有效时再调用 `nethopctl update --if-needed --wait`，最后显示脱敏状态。Action 是 watch 降级、订阅手动重试或排障入口，不是正常保存后的必需步骤，也不承担含糊的 start/stop toggle。服务启停统一由 TOML/Manager 的 `service.enabled` 或明确的 `nethopctl start|stop` 完成。
+`action.sh` 先调用 `nethopctl config reload --wait` 强制执行与 watcher 相同的全量 rescan/reconcile；配置有效时再调用 `nethopctl update --if-needed --wait`，最后通过 `nethopctl status --human` 显示脱敏状态与核心更新提示。CLI 默认 JSON 输出不变；human renderer 只接受封闭状态枚举和数字版本，未知结构直接失败。Action 是 watch 降级、订阅手动重试或排障入口，不是正常保存后的必需步骤，也不承担含糊的 start/stop toggle。服务启停统一由 TOML/Manager 的 `service.enabled` 或明确的 `nethopctl start|stop` 完成。
+
+状态同时包含只读 Android Private DNS 诊断。daemon 只查询 `private_dns_mode`，不读取或回显 provider hostname；`off` 映射为 split DNS healthy，`opportunistic/hostname` 映射为 `degraded_private_dns`，查询失败或未知 OEM 值映射为 `unknown`。诊断失败不阻断代理，NetHop 也不自动修改用户的全局 Private DNS 设置。
 
 ### 11.6 自动更新
 
@@ -770,6 +785,7 @@ APK 不直接连接 loopback TCP 或放宽权限的 UDS。短请求通过 `su -c
 
 ```text
 config.get
+config.export
 config.validate
 config.apply
 config.reload
@@ -777,7 +793,28 @@ config.schema
 capability.get
 config.mutate
 events.subscribe
+connections.close_all
+logs.get
+logs.clear
+node.export
+subscription.import_preview
+subscription.import_apply
+core.version_check
 ```
+
+CLI 同时提供：
+
+```text
+nethopctl backup export --file <new-path>
+nethopctl backup restore --file <path> --expected-digest <sha256>
+nethopctl core version-check
+```
+
+`config.export` 只通过 root-only UDS 返回完整未脱敏用户配置文档，备份文件使用 `nethop-config-backup-v1` envelope、`0600` 权限和 create-new 语义，不覆盖已有路径。备份不包含 daemon-owned source registry、手动节点源、下载缓存、generation、API secret、日志或 SQLite runtime state。恢复从 envelope 中提取完整 document 后复用 `config.apply` 和 `expected_config_digest` CAS；CLI 不直接覆盖 TOML。
+
+`core.version_check` 是只读、空参数操作：只检查固定 sing-box 官方稳定 release，不下载、不替换、不执行远端资产。结果进入 `status.core_update` 与 `state/runtime.json`；Android 通知是 best-effort，失败不改变代理状态。该能力属于运行控制面，不增加 TOML 字段。
+
+worker 同时维护独立的 sing-box 版本检查 schedule，固定 key 为 `resource:sing-box-version`，不占用或伪造订阅 source ID。首次创建记录时立即到期；成功后按 24 小时加稳定 jitter 重排，失败后从 1 小时开始有界退避。手动 `core.version_check` 也更新同一记录，避免紧接着重复自动请求。schedule 读取或持久化失败只产生运行时降级事件，并进入 1 小时单调时钟冷却以避免空转；它不改变当前 generation、网络接管或核心进程。
 
 `config.apply` 请求包含：
 
@@ -815,6 +852,7 @@ MoveSource { source_id, before_source_id? }
 AddPackage / RemovePackage / ReplacePackages
 AddRoutingCidr / RemoveRoutingCidr
 SetScalarField（只允许 schema 注册的标量 field_id）
+RemoveNode { node_id }（将稳定 fingerprint 写入每个 source 的 `filter.excluded_node_ids`）
 ```
 
 每个 mutation 都携带 `expected_config_digest`，在 `EffectiveConfig` clone 上应用，随后走完整 validation、SourceId registry reconcile、admission、change plan、持久化和 activation。`AddSource` 不接受调用方指定 ID；daemon 生成并在响应中返回。其他 source mutation 只接受 daemon 已分配的 ID，用户修改名称和链接时无需看到或输入 ID。RFC 6902 使用字符串 JSON Pointer、数组索引和通用 `move/copy`，对版本化配置的类型安全、权限和稳定 source identity 不利；NetHop 只吸收其“有序操作、失败整体不成功、配合 precondition”的事务思想。
@@ -1034,7 +1072,7 @@ NH-CONFIG-URL-NON-HTTPS at subscriptions.sources[0].url: HTTPS is required
 13. 实现 `config.reload --wait` 全量 rescan、单写协调、超时和脱敏结果。
 14. 让 `nethopctl start/stop` 通过 daemon 原子持久更新 `service.enabled`，并验证随后产生的文件事件不重复 apply。
 15. 修改 Action 为强制 reload/update 和状态展示入口，保留明确的 start/stop CLI。
-16. 安装脚本创建持久 TOML、私有 state 目录和模块目录受控链接，升级不覆盖新 schema 配置/registry。
+16. 安装脚本创建持久 TOML、私有 state 目录和模块目录受控链接；升级不覆盖 v2 配置/registry，非 v2 开发配置只备份后重置。
 17. 实现入口 symlink 被编辑器写断后的实时候选校验、导入和恢复测试。
 18. 删除模块包中的 JSON 默认文件和 JSON source 示例，不实现旧配置迁移。
 19. 更新 module contract、Linux host integration、新旧行为对比和 Android 真机 smoke。
@@ -1060,7 +1098,7 @@ NH-CONFIG-URL-NON-HTTPS at subscriptions.sources[0].url: HTTPS is required
 3. 接入 outbound mode、selector mode 和 urltest 有界参数。
 4. 接入包名/Android user 到 UID 的应用范围解析和规范化集合。
 5. 接入 capture mode、TCP/UDP、IPv6、DNS 和 TUN stack capability admission。
-6. 接入移动/Wi-Fi 意图；热点/USB 仅在对应数据面组件完成后启用。
+6. 接入移动/Wi-Fi/热点/USB 意图；热点/USB 的 offload 检测与精细 tether 地址策略仍为后续增强。
 7. 接入受控 CIDR、CN ruleset 和 QUIC 策略。
 8. 接入日志级别、保留期限和结构化诊断。
 9. 接入 inbound、mark/mask、route table、priority 候选参数。
@@ -1077,7 +1115,7 @@ NH-CONFIG-URL-NON-HTTPS at subscriptions.sources[0].url: HTTPS is required
 
 - TOML 和 Manager 覆盖同一套高级配置；
 - Manager 不直接写 root 文件或执行网络 shell；
-- 多 source 不需要升级 v1 schema；
+- 多 source 本身不要求升级 schema；本次 v2 升级来自 typed application targets、source filter、Wi-Fi scene 和 domain routing 的不兼容 wire shape；
 - 所有配置项有类型、默认值、范围、capability 和生效级别；
 - 配置 apply 失败时 TOML、generation、core 和网络规则保持一致；
 - 高级配置无法关闭第 7 节安全不变量。
@@ -1097,14 +1135,14 @@ NH-CONFIG-URL-NON-HTTPS at subscriptions.sources[0].url: HTTPS is required
 - watcher burst 合并、相同 digest no-op、typed-equal no-op、overflow rescan、watch 丢失重建；
 - reload 与 apply 并发、apply 与自动更新并发、watcher 与 Manager self-write、配置变化后丢弃旧候选；
 - `service.enabled=false` 抢占待提交 source 更新，旧候选不能复活数据面；
-- 开发期 daemon 只接受冻结后的 schema v1；旧 JSON、旧草案和未知字段均拒绝；Manager 无法无损 round-trip 时只读；
+- 开发期 daemon 只接受冻结后的 schema v2；旧 JSON、v1 TOML、旧草案和未知字段均拒绝；Manager 无法无损 round-trip 时只读；
 - typed mutation 等价于完整 apply；事件丢队列后要求 resync；
 - property test：任意输入不 panic、不输出 secret。
 
 ### 16.2 模块契约
 
 - ZIP 只含 `defaults/nethop.toml`，不含 JSON 用户配置；
-- 首装创建持久文件，覆盖安装不改 digest；
+- 首装创建持久文件；覆盖安装保留 v2 digest，非 v2 配置保存一次私有备份后重置；
 - module config 入口精确指向持久文件；
 - 编辑器 temp+rename 写断入口后，只在候选校验成功时导入并恢复链接；
 - owner/mode 和非 symlink 持久读取约束正确；

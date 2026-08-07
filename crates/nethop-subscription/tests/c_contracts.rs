@@ -111,6 +111,13 @@ fn json_requires_supported_top_level_structure_and_beats_weak_text_evidence() {
 }
 
 #[test]
+fn singbox_endpoint_only_config_is_detected_without_importing_an_endpoint() {
+    let input = br#"{"endpoints":[{"type":"wireguard","tag":"wg"}]}"#;
+    let detected = detect_bytes(input, FormatHint::Auto, &ParserLimits::default()).unwrap();
+    assert_eq!(detected.format(), FormatHint::SingboxJson);
+}
+
+#[test]
 fn yaml_requires_a_top_level_proxies_sequence() {
     let limits = ParserLimits::default();
     let yaml =

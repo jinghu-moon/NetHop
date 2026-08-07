@@ -4,6 +4,9 @@ use crate::{
     ScheduleKey, SchedulePolicy, ScheduleStore, SchedulerEngine, SchedulerError, SourceConfig,
 };
 
+pub const CORE_VERSION_SCHEDULE_KEY: &str = "resource:sing-box-version";
+pub const RULE_SET_SCHEDULE_KEY: &str = "resource:rulesets";
+
 pub trait RuntimeUpdateSchedule {
     fn configure(
         &mut self,
@@ -14,6 +17,151 @@ pub trait RuntimeUpdateSchedule {
     fn next_wakeup_in(&self) -> Option<Duration>;
     fn take_due(&mut self) -> Result<bool, SchedulerError>;
     fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError>;
+}
+
+pub trait RuntimeCoreVersionSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration>;
+    fn take_due(&mut self) -> Result<bool, SchedulerError>;
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError>;
+}
+
+pub trait RuntimeRuleSetSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration>;
+    fn take_due(&mut self) -> Result<bool, SchedulerError>;
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError>;
+}
+
+#[derive(Debug, Default)]
+pub struct UnavailableCoreVersionSchedule;
+
+impl RuntimeCoreVersionSchedule for UnavailableCoreVersionSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        None
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        Ok(false)
+    }
+
+    fn record_result(&mut self, _succeeded: bool) -> Result<(), SchedulerError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct UnavailableRuleSetSchedule;
+
+impl RuntimeRuleSetSchedule for UnavailableRuleSetSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        None
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        Ok(false)
+    }
+
+    fn record_result(&mut self, _succeeded: bool) -> Result<(), SchedulerError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct PersistentResourceSchedule<S: ScheduleStore> {
+    engine: SchedulerEngine<S>,
+    key: ScheduleKey,
+}
+
+impl<S: ScheduleStore> PersistentResourceSchedule<S> {
+    fn load(store: S, key: &'static str) -> Result<Self, SchedulerError> {
+        let mut engine = SchedulerEngine::load(store, SchedulePolicy::default())?;
+        let key = ScheduleKey::new(key)?;
+        engine.ensure(key.clone(), wall_seconds()?)?;
+        Ok(Self { engine, key })
+    }
+
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        let now = wall_seconds().ok()?;
+        self.engine.record(&self.key).map(|record| {
+            Duration::from_secs(
+                record
+                    .next_run_wall_seconds()
+                    .saturating_sub(now)
+                    .try_into()
+                    .unwrap_or(0),
+            )
+        })
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        Ok(self
+            .engine
+            .due(wall_seconds()?)?
+            .into_iter()
+            .any(|key| key == self.key))
+    }
+
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError> {
+        let now = wall_seconds()?;
+        if succeeded {
+            self.engine.mark_success(&self.key, now)
+        } else {
+            self.engine.mark_failure(&self.key, now)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PersistentCoreVersionSchedule<S: ScheduleStore> {
+    resource: PersistentResourceSchedule<S>,
+}
+
+impl<S: ScheduleStore> PersistentCoreVersionSchedule<S> {
+    pub fn load(store: S) -> Result<Self, SchedulerError> {
+        Ok(Self {
+            resource: PersistentResourceSchedule::load(store, CORE_VERSION_SCHEDULE_KEY)?,
+        })
+    }
+}
+
+impl<S: ScheduleStore> RuntimeCoreVersionSchedule for PersistentCoreVersionSchedule<S> {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        self.resource.next_wakeup_in()
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        self.resource.take_due()
+    }
+
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError> {
+        self.resource.record_result(succeeded)
+    }
+}
+
+#[derive(Debug)]
+pub struct PersistentRuleSetSchedule<S: ScheduleStore> {
+    resource: PersistentResourceSchedule<S>,
+}
+
+impl<S: ScheduleStore> PersistentRuleSetSchedule<S> {
+    pub fn load(store: S) -> Result<Self, SchedulerError> {
+        Ok(Self {
+            resource: PersistentResourceSchedule::load(store, RULE_SET_SCHEDULE_KEY)?,
+        })
+    }
+}
+
+impl<S: ScheduleStore> RuntimeRuleSetSchedule for PersistentRuleSetSchedule<S> {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        self.resource.next_wakeup_in()
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        self.resource.take_due()
+    }
+
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError> {
+        self.resource.record_result(succeeded)
+    }
 }
 
 #[derive(Debug, Default)]

@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 use crate::{
-    CapabilityError, IpFamily, NetworkPlan, ProbeBackend, ProbeCommand, ResourceCandidate,
+    CapabilityError, IpFamily, NetfilterTable, NetworkPlan, ProbeBackend, ProbeCommand,
+    ResourceCandidate,
 };
 
 pub trait NetworkHealthVerifier {
@@ -42,9 +43,15 @@ impl<B: ProbeBackend> NetworkHealthVerifier for NetworkPlanVerifier<B> {
         }
 
         self.verify_owner(plan, IpFamily::Ipv4)?;
+        self.verify_dns_guard(plan, IpFamily::Ipv4)?;
         self.verify_routing(plan, IpFamily::Ipv4)?;
+        if !plan.forwarding_interfaces().is_empty() {
+            self.verify_forwarding(plan)?;
+            self.verify_forwarding_ipv6_guard(plan)?;
+        }
         if plan.ipv6_captured() {
             self.verify_owner(plan, IpFamily::Ipv6)?;
+            self.verify_dns_guard(plan, IpFamily::Ipv6)?;
             self.verify_routing(plan, IpFamily::Ipv6)?;
         } else if plan.ipv6_guarded() {
             self.verify_owner(plan, IpFamily::Ipv6)?;
@@ -67,7 +74,12 @@ impl<B: ProbeBackend> NetworkPlanVerifier<B> {
         plan: &NetworkPlan,
         family: IpFamily,
     ) -> Result<(), NetworkHealthError> {
-        let snapshot = self.run(ProbeCommand::NetfilterSnapshot(family))?;
+        let table = if family == IpFamily::Ipv6 && !plan.ipv6_captured() {
+            NetfilterTable::Filter
+        } else {
+            NetfilterTable::Mangle
+        };
+        let snapshot = self.run(ProbeCommand::NetfilterSnapshot(family, table))?;
         if !snapshot.contains(&plan.owner_marker()) || !snapshot.contains(&plan.entry_chain(family))
         {
             return Err(NetworkHealthError::OwnerMarkerMissing);
@@ -86,6 +98,24 @@ impl<B: ProbeBackend> NetworkPlanVerifier<B> {
             && !dns_capture_present(&snapshot, plan)
         {
             return Err(NetworkHealthError::DnsCaptureMissing);
+        }
+        Ok(())
+    }
+
+    fn verify_dns_guard(
+        &mut self,
+        plan: &NetworkPlan,
+        family: IpFamily,
+    ) -> Result<(), NetworkHealthError> {
+        if !plan.dns_guarded() {
+            return Ok(());
+        }
+        let snapshot = self.run(ProbeCommand::NetfilterSnapshot(
+            family,
+            NetfilterTable::Filter,
+        ))?;
+        if !dns_guard_present(&snapshot, plan) {
+            return Err(NetworkHealthError::DnsGuardMissing);
         }
         Ok(())
     }
@@ -113,6 +143,54 @@ impl<B: ProbeBackend> NetworkPlanVerifier<B> {
         Ok(())
     }
 
+    fn verify_forwarding(&mut self, plan: &NetworkPlan) -> Result<(), NetworkHealthError> {
+        let snapshot = self.run(ProbeCommand::NetfilterSnapshot(
+            IpFamily::Ipv4,
+            NetfilterTable::Filter,
+        ))?;
+        let chain = format!("NH_FWD_{}", plan.slot_suffix());
+        if !snapshot.lines().any(|line| line == format!("-N {chain}")) {
+            return Err(NetworkHealthError::ForwardingChainMissing);
+        }
+        let owner = plan.forwarding_owner_marker();
+        for interface in plan.forwarding_interfaces() {
+            let jump =
+                format!("-A PREROUTING -i {interface} -m comment --comment {owner} -j {chain}");
+            if !snapshot.lines().any(|line| line == jump) {
+                return Err(NetworkHealthError::ForwardingInterfaceJumpMissing);
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_forwarding_ipv6_guard(
+        &mut self,
+        plan: &NetworkPlan,
+    ) -> Result<(), NetworkHealthError> {
+        let snapshot = self.run(ProbeCommand::NetfilterSnapshot(
+            IpFamily::Ipv6,
+            NetfilterTable::Filter,
+        ))?;
+        let chain = format!("NH_FWD6_{}", plan.slot_suffix());
+        if !snapshot.lines().any(|line| line == format!("-N {chain}")) {
+            return Err(NetworkHealthError::ForwardingIpv6GuardMissing);
+        }
+        let owner = plan.forwarding_owner_marker();
+        for interface in plan.forwarding_interfaces() {
+            let jump = format!("-A FORWARD -i {interface} -m comment --comment {owner} -j {chain}");
+            if !snapshot.lines().any(|line| line == jump) {
+                return Err(NetworkHealthError::ForwardingIpv6GuardMissing);
+            }
+        }
+        if !snapshot
+            .lines()
+            .any(|line| line == format!("-A {chain} -j DROP"))
+        {
+            return Err(NetworkHealthError::ForwardingIpv6GuardMissing);
+        }
+        Ok(())
+    }
+
     fn run(&mut self, command: ProbeCommand) -> Result<String, NetworkHealthError> {
         let output = self
             .backend
@@ -134,8 +212,12 @@ pub enum NetworkHealthDiagnosticCode {
     ReplyBypassMissing,
     LoopbackBypassMissing,
     DnsCaptureMissing,
+    DnsGuardMissing,
     PolicyRuleMissing,
     RouteMissing,
+    ForwardingChainMissing,
+    ForwardingInterfaceJumpMissing,
+    ForwardingIpv6GuardMissing,
 }
 
 impl NetworkHealthDiagnosticCode {
@@ -148,8 +230,14 @@ impl NetworkHealthDiagnosticCode {
             Self::ReplyBypassMissing => "network_health_reply_bypass_missing",
             Self::LoopbackBypassMissing => "network_health_loopback_bypass_missing",
             Self::DnsCaptureMissing => "network_health_dns_capture_missing",
+            Self::DnsGuardMissing => "network_health_dns_guard_missing",
             Self::PolicyRuleMissing => "network_health_policy_rule_missing",
             Self::RouteMissing => "network_health_route_missing",
+            Self::ForwardingChainMissing => "network_health_forwarding_chain_missing",
+            Self::ForwardingInterfaceJumpMissing => {
+                "network_health_forwarding_interface_jump_missing"
+            }
+            Self::ForwardingIpv6GuardMissing => "network_health_forwarding_ipv6_guard_missing",
         }
     }
 }
@@ -170,10 +258,18 @@ pub enum NetworkHealthError {
     LoopbackBypassMissing,
     #[error("candidate DNS capture rules are missing")]
     DnsCaptureMissing,
+    #[error("candidate DNS leak guard rules are missing")]
+    DnsGuardMissing,
     #[error("candidate policy rule is missing")]
     PolicyRuleMissing,
     #[error("candidate local route is missing")]
     RouteMissing,
+    #[error("candidate forwarding chain is missing")]
+    ForwardingChainMissing,
+    #[error("candidate forwarding interface jump is missing")]
+    ForwardingInterfaceJumpMissing,
+    #[error("forwarding IPv6 fail-closed guard is missing")]
+    ForwardingIpv6GuardMissing,
 }
 
 impl NetworkHealthError {
@@ -186,8 +282,16 @@ impl NetworkHealthError {
             Self::ReplyBypassMissing => NetworkHealthDiagnosticCode::ReplyBypassMissing,
             Self::LoopbackBypassMissing => NetworkHealthDiagnosticCode::LoopbackBypassMissing,
             Self::DnsCaptureMissing => NetworkHealthDiagnosticCode::DnsCaptureMissing,
+            Self::DnsGuardMissing => NetworkHealthDiagnosticCode::DnsGuardMissing,
             Self::PolicyRuleMissing => NetworkHealthDiagnosticCode::PolicyRuleMissing,
             Self::RouteMissing => NetworkHealthDiagnosticCode::RouteMissing,
+            Self::ForwardingChainMissing => NetworkHealthDiagnosticCode::ForwardingChainMissing,
+            Self::ForwardingInterfaceJumpMissing => {
+                NetworkHealthDiagnosticCode::ForwardingInterfaceJumpMissing
+            }
+            Self::ForwardingIpv6GuardMissing => {
+                NetworkHealthDiagnosticCode::ForwardingIpv6GuardMissing
+            }
         }
     }
 }
@@ -208,6 +312,68 @@ fn dns_capture_present(snapshot: &str, plan: &NetworkPlan) -> bool {
                 && line.contains(" -j TPROXY ")
         })
     })
+}
+
+fn dns_guard_present(snapshot: &str, plan: &NetworkPlan) -> bool {
+    let chain = plan.dns_guard_chain();
+    let allocation = plan.allocation();
+    if !snapshot
+        .lines()
+        .any(|line| comment_jump_matches(line, "OUTPUT", &plan.owner_marker(), &chain))
+    {
+        return false;
+    }
+    let lines = snapshot.lines().collect::<Vec<_>>();
+    let return_before_drop = |predicate: &dyn Fn(&str) -> bool| {
+        let return_index = lines.iter().position(|line| {
+            line.starts_with(&format!("-A {chain} "))
+                && line.ends_with(" -j RETURN")
+                && predicate(line)
+        });
+        let first_drop = lines.iter().position(|line| {
+            line.starts_with(&format!("-A {chain} ")) && line.ends_with(" -j DROP")
+        });
+        matches!((return_index, first_drop), (Some(return_index), Some(drop_index)) if return_index < drop_index)
+    };
+    if !return_before_drop(&|line| line.contains("-o lo "))
+        || !return_before_drop(&|line| {
+            mark_argument_matches(line, allocation.mark(), allocation.mask())
+        })
+        || !return_before_drop(&|line| mark_argument_matches(line, plan.bypass_mark(), u32::MAX))
+    {
+        return false;
+    }
+    [("udp", 53_u16), ("tcp", 53), ("tcp", 853)]
+        .iter()
+        .all(|(protocol, port)| {
+            lines.iter().any(|line| {
+                line.starts_with(&format!("-A {chain} "))
+                    && line.contains(&format!("-p {protocol} "))
+                    && line.contains(&format!("--dport {port} "))
+                    && line.contains(" -j DROP")
+            })
+        })
+}
+
+fn comment_jump_matches(line: &str, source: &str, marker: &str, target: &str) -> bool {
+    let tokens = line.split_ascii_whitespace().collect::<Vec<_>>();
+    tokens.get(0..2) == Some(&["-A", source])
+        && tokens.windows(2).any(|pair| pair == ["-m", "comment"])
+        && tokens
+            .windows(2)
+            .any(|pair| pair[0] == "--comment" && pair[1].trim_matches('"') == marker)
+        && tokens
+            .windows(2)
+            .any(|pair| pair[0] == "-j" && pair[1] == target)
+}
+
+fn mark_argument_matches(line: &str, mark: u32, mask: u32) -> bool {
+    line.split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|pair| pair[0] == "--mark")
+        .and_then(|pair| parse_mark_mask(pair[1]))
+        == Some((mark, mask))
 }
 
 fn reply_bypass_precedes_capture(snapshot: &str, plan: &NetworkPlan) -> bool {
@@ -313,7 +479,7 @@ fn parse_u32(value: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::loopback_bypass_matches;
+    use super::{comment_jump_matches, loopback_bypass_matches, mark_argument_matches};
     use crate::ResourceCandidate;
 
     #[test]
@@ -333,6 +499,21 @@ mod tests {
             "-A NH_PRE_A -i lo -m mark ! --mark 0x100 -j RETURN",
             "NH_PRE_A",
             allocation,
+        ));
+    }
+
+    #[test]
+    fn android_save_normalization_preserves_comment_and_full_mask_semantics() {
+        assert!(comment_jump_matches(
+            "-A OUTPUT -m comment --comment \"nethop:g=1\" -j NH_DNS_A",
+            "OUTPUT",
+            "nethop:g=1",
+            "NH_DNS_A",
+        ));
+        assert!(mark_argument_matches(
+            "-A NH_DNS_A -m mark --mark 0x4e490100 -j RETURN",
+            0x4e49_0100,
+            u32::MAX,
         ));
     }
 }

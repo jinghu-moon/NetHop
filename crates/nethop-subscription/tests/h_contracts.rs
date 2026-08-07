@@ -198,6 +198,44 @@ fn compose_generates_terminal_fragments_for_all_protocols_deterministically() {
 }
 
 #[test]
+fn compose_preserves_http_and_socks_connection_semantics() {
+    let mut http = NodeSpec::minimal("http", "http.example", 8443);
+    http.display_name = Some("http".into());
+    http.username = Some("fixture-user".into());
+    http.password = Some("fixture-password".into());
+    http.tls = true;
+    http.http_path = Some("/connect".into());
+    http.http_headers
+        .insert("X-Fixture".into(), "bounded".into());
+
+    let mut socks = NodeSpec::minimal("socks", "socks.example", 1080);
+    socks.display_name = Some("socks".into());
+    socks.socks_version = Some("5".into());
+    socks.udp = true;
+
+    let batch = SourceBatch {
+        source_id: source_id("http-socks"),
+        nodes: vec![
+            validate_node_spec(http, &CapabilityMatrix::default())
+                .unwrap()
+                .node,
+            validate_node_spec(socks, &CapabilityMatrix::default())
+                .unwrap()
+                .node,
+        ],
+        rejected: 0,
+        warnings: 0,
+    };
+    let (nodes, _) = dedupe_sources(vec![batch], &ParserLimits::default());
+    let json = compose_outbounds_json(&nodes);
+    assert!(json.contains("\"type\":\"http\""));
+    assert!(json.contains("\"path\":\"/connect\""));
+    assert!(json.contains("\"type\":\"socks\""));
+    assert!(json.contains("\"version\":\"5\""));
+    assert!(json.contains("\"network\":[\"tcp\",\"udp\"]"));
+}
+
+#[test]
 fn stable_conversion_handles_uri_base64_yaml_and_json_without_fetch_or_full_config() {
     let limits = ParserLimits::default();
     let uri = SourceInput {

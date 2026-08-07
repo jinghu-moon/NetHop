@@ -37,6 +37,30 @@ pub struct InterfacePolicy {
     exclude: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardingPolicy {
+    hotspot: bool,
+    usb: bool,
+}
+
+impl ForwardingPolicy {
+    pub const fn new(hotspot: bool, usb: bool) -> Self {
+        Self { hotspot, usb }
+    }
+
+    pub const fn hotspot(self) -> bool {
+        self.hotspot
+    }
+
+    pub const fn usb(self) -> bool {
+        self.usb
+    }
+
+    pub const fn enabled(self) -> bool {
+        self.hotspot || self.usb
+    }
+}
+
 impl InterfacePolicy {
     pub fn new(
         mobile: bool,
@@ -104,6 +128,7 @@ pub struct CapturePolicy {
     include_uids: Vec<u32>,
     exclude_uids: Vec<u32>,
     interface_policy: InterfacePolicy,
+    forwarding_policy: ForwardingPolicy,
 }
 
 impl CapturePolicy {
@@ -172,6 +197,7 @@ impl CapturePolicy {
             include_uids,
             exclude_uids,
             interface_policy: InterfacePolicy::default(),
+            forwarding_policy: ForwardingPolicy::default(),
         })
     }
 
@@ -183,6 +209,17 @@ impl CapturePolicy {
             return Err(CapturePolicyError::InvalidInterfacePolicy);
         }
         self.interface_policy = interface_policy;
+        Ok(self)
+    }
+
+    pub fn with_forwarding_policy(
+        mut self,
+        forwarding_policy: ForwardingPolicy,
+    ) -> Result<Self, CapturePolicyError> {
+        if self.mode == CaptureMode::Direct && forwarding_policy.enabled() {
+            return Err(CapturePolicyError::InvalidInterfacePolicy);
+        }
+        self.forwarding_policy = forwarding_policy;
         Ok(self)
     }
 
@@ -226,6 +263,10 @@ impl CapturePolicy {
 
     pub const fn interface_policy(&self) -> &InterfacePolicy {
         &self.interface_policy
+    }
+
+    pub const fn forwarding_policy(&self) -> ForwardingPolicy {
+        self.forwarding_policy
     }
 }
 

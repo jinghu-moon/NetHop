@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::config_model::{EffectiveConfig, UserConfigWire};
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 pub const MAX_SOURCES: usize = 16;
 const MAX_STABLE_READ_ATTEMPTS: usize = 3;
@@ -46,6 +46,7 @@ impl ConfigStore {
         Ok(Digest::sha256(&read_stable(&self.path)?).hex())
     }
 
+    #[cfg(feature = "subscription-update")]
     pub(crate) fn checkpoint(&self) -> Result<ConfigStoreCheckpoint, ConfigError> {
         validate_private_parent(&self.path)?;
         let bytes = read_stable(&self.path)?;
@@ -79,6 +80,7 @@ impl ConfigStore {
         Ok(PreparedConfigWrite { bytes, snapshot })
     }
 
+    #[cfg(feature = "subscription-update")]
     pub(crate) fn prepare_document(
         &self,
         expected_digest: &str,
@@ -90,6 +92,7 @@ impl ConfigStore {
         self.prepare_document_candidate(document)
     }
 
+    #[cfg(feature = "subscription-update")]
     pub(crate) fn prepare_document_candidate(
         &self,
         document: &serde_json::Value,
@@ -148,12 +151,14 @@ impl ConfigStore {
     }
 }
 
+#[cfg(feature = "subscription-update")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfigStoreCheckpoint {
     bytes: Vec<u8>,
     digest: String,
 }
 
+#[cfg(feature = "subscription-update")]
 impl ConfigStoreCheckpoint {
     pub(crate) fn digest(&self) -> &str {
         &self.digest
@@ -263,9 +268,27 @@ impl ConfigSnapshot {
                 }
             }
         }
+        if let Some(rules) = value
+            .pointer_mut("/network/wifi_scenes/rules")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for rule in rules {
+                if let Some(object) = rule.as_object_mut() {
+                    for key in ["ssid", "bssid"] {
+                        let configured = object
+                            .get(key)
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|value| !value.is_empty());
+                        object.insert(key.into(), serde_json::Value::Null);
+                        object.insert(format!("{key}_configured"), serde_json::json!(configured));
+                    }
+                }
+            }
+        }
         value
     }
 
+    #[cfg(feature = "subscription-update")]
     pub(crate) fn document(&self) -> serde_json::Value {
         serde_json::to_value(&self.wire).expect("validated config is serializable")
     }

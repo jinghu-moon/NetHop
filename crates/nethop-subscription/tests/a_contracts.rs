@@ -88,9 +88,14 @@ fn stable_feature_graph_contract() {
 #[test]
 fn optional_feature_isolation_contract() {
     let manifest = manifest_text();
-    assert!(manifest.contains("fetch = [\"parser\", \"dep:flate2\", \"dep:ureq\", \"dep:url\"]"));
+    assert!(manifest.contains("source-url = [\"dep:url\"]"));
+    assert!(
+        manifest.contains("fetch = [\"parser\", \"source-url\", \"dep:flate2\", \"dep:ureq\"]")
+    );
     assert!(manifest.contains("ureq = { version = \"=3.3.0\", optional = true"));
-    assert!(manifest.contains("url = { version = \"2\", optional = true"));
+    assert!(
+        manifest.contains("url = { version = \"2\", optional = true, default-features = false")
+    );
     assert!(manifest.contains("format-surfboard = [\"parser\"]"));
     assert!(manifest.contains("experimental-formats = [\"format-surfboard\"]"));
     for excluded in [

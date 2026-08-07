@@ -324,7 +324,7 @@ NetHop 不修改 `/system`，KernelSU 不需要 metamodule/OverlayFS 才能运�
 
 ### 8.3 Action 与 CLI
 
-`action.sh` 依次调用 `nethopctl config reload --wait`、`nethopctl update --if-needed --wait` 和 `nethopctl status`。它是 watch 降级和手动重试入口，不承担含糊的 toggle；持久启停只有 TOML 中的 `service.enabled`。
+`action.sh` 依次调用 `nethopctl config reload --wait`、`nethopctl update --if-needed --wait` 和 `nethopctl status --human`。它是 watch 降级和手动重试入口，不承担含糊的 toggle；持久启停只有 TOML 中的 `service.enabled`。CLI 默认 JSON 输出保持机器可读，`status --human` 只渲染受控状态枚举、generation、订阅结果和经过版本解析的核心更新提示，不打印外部 release 文本。
 
 首版 CLI 至少包括：
 
@@ -339,6 +339,18 @@ nethopctl config reload [--wait]
 nethopctl capability get
 nethopctl hello --manager-version VERSION --protocol-min 1 --protocol-max 1
 nethopctl events [--kinds config,runtime,subscription,generation,network] --jsonl
+nethopctl connections close-all
+nethopctl logs get [--limit 1..128]
+nethopctl logs tail [--kinds ...] --jsonl
+nethopctl logs clear
+nethopctl subscription list
+nethopctl subscription add <name> <https-url> --expected-digest DIGEST
+nethopctl subscription remove|move|enable|disable <source-id> --expected-digest DIGEST
+nethopctl subscription import preview|apply --file <path>|--text --format auto|... --expected-digest DIGEST [--candidate-digest DIGEST]
+nethopctl application list|mode|add-package|remove-package|add-uid|remove-uid ...
+nethopctl network set <field-id> <value> --expected-digest DIGEST
+nethopctl node export <node-id>
+nethopctl node remove <node-id> --expected-digest DIGEST
 ```
 
 ### 8.4 停止与卸载
@@ -461,7 +473,7 @@ sing-box 1.13.15 已有默认接口 monitor，但它只负责核心自己的拨�
 
 ### 11.5 不属于首版的路径
 
-PREROUTING 中来自热点、USB 和中继接口的转发流量不在首版接管。相关链入口保持不存在，而不是预埋空规则。产品第二阶段需独立处理 Android tethering eBPF offload、接口变化、客户端 MAC 和 IPv6 前缀。
+PREROUTING 中来自热点、USB 接口的流量通过独立的 `NH_FWD_A/B` 入口受控接管；IPv6 下游流量在 `NH_FWD6_A/B` 中 fail closed，避免在未实现 IPv6 TPROXY 前泄漏。接口必须来自实时 capability probe 的安全命名集合。NetHop 当前不声称兼容 Android tethering eBPF/hardware offload，该路径在完成 offload capability admission 与真机流量证据前保持 experimental。客户端 MAC、IPv6 前缀精细策略仍是后续能力。
 
 ## 12. TUN 回退
 
@@ -521,13 +533,15 @@ catalog 在启动、应用策略变更、订阅/配置应用前刷新，并以�
 
 1. 控制面、核心服务器和 loopback 安全规则。
 2. sniff 动作与 DNS hijack。
-3. 用户显式 block/direct/proxy override。
+3. 用户显式域名 override，内部固定为 `block -> force proxy -> bypass`。
 4. 广告与恶意域名/IP block。
 5. 局域网、私有地址和必要系统网络 direct。
 6. 中国大陆域名/IP direct。
 7. 其余流量进入顶层 `selector`。
 
 规则冲突采用“更明确的用户规则优先，安全不变量不可覆盖”。完整生成配置中每类规则带稳定 tag 和来源，`diagnose/explain` 能说明命中路径。
+
+v1 托管配置提供 `force_proxy_domains`、`bypass_domains` 和 `block_domains` 三组有界域名后缀规则，每组最多 512 项。daemon 将输入规范化为小写 ASCII 域名，拒绝 URL、通配符、端口、路径、IP literal，以及跨动作列表的相同或父子后缀重叠。强制代理与直连域名分别绑定代理 DNS 和直连 DNS；阻断域名当前只在 route 层拒绝连接，不在没有 sing-box 1.13.15 验证证据时承诺 DNS reject。
 
 ### 14.2 DNS 设计
 
@@ -536,6 +550,9 @@ catalog 在启动、应用策略变更、订阅/配置应用前刷新，并以�
 - 国内上游：DoH，经 `direct`，提供固定 IPv4/IPv6 bootstrap。
 - 国外上游：DoH，经当前 proxy selector，提供固定 bootstrap。
 - 国内域名规则选择国内 DNS，其余选择国外 DNS。
+- NetHop 模块包携带受审核的 `cn-domain.srs` 与 `cn-ip.srs` 基线；安装器在校验
+  打包 SHA-256 后，通过同目录临时文件与原子 rename 发布到 daemon-owned
+  `/data/adb/nethop/rulesets/`。订阅内容不能替换、追加或远程 include 规则集。
 - 使用 sing-box 1.13.15 内建、遵循 TTL 的 DNS cache，显式保持 `disable_cache=false`；`cache_capacity` 从 4096 起在 Phase 0-B 以命中率和 RSS 校准，不再叠加一套 Rust DNS cache。
 - DoH transport 复用 sing-box 的持久 HTTP 连接；基准分别记录复用成功与重新建连，不能每次查询新建客户端。
 - TCP/UDP 53 仅对进入 NetHop 的应用执行 hijack。
@@ -549,14 +566,15 @@ DNS 状态至少暴露 `cache_hit/cache_miss/error` 累计数和命中/未命中
 
 ### 14.3 Android Private DNS
 
-严格 Private DNS/DoT 会绕过 NetHop 的 53 端口分流。worker 检测系统 Private DNS 状态：
+Android Automatic（`opportunistic`）或指定提供商（`hostname`）Private DNS/DoT 可能绕过 NetHop 的 53 端口分流。worker 通过只读的 `/system/bin/settings get global private_dns_mode` 检测状态，不读取或展示 provider hostname：
 
 - 默认不修改系统设置；
-- 严格模式存在时，拒绝宣称 `dns_split=healthy`；
+- 只有 `off` 才声明 `dns_split=healthy`；`opportunistic` 与 `hostname` 均报告 `degraded_private_dns`；
+- 查询工具缺失、权限拒绝或 OEM 返回未知值时报告 `unknown`，但不阻断 daemon 或当前代理；
 - 启动前要求配置选择“用户已关闭 Private DNS”或“允许 degraded”；
 - degraded 模式下 DoT 流量仍按普通透明流量代理，但不保证国内/国外 DNS 分流语义。
 
-`status --json` 必须给出稳定字段：`dns_split=degraded_private_dns`、原因、影响和可操作建议；不能只在日志中写 warning。
+`status --json` 给出结构化 `dns_split.mode` 和 `dns_split.dns_split`；`nethopctl status --human` 对 degraded 状态给出关闭 Private DNS 的固定建议，不能只在日志中写 warning，也不能回显外部 hostname。
 
 自动关闭并恢复系统 Private DNS 不属于首版，避免修改用户全局系统状态。
 
@@ -569,9 +587,11 @@ id, purpose, source_url, license, format, min_sing_box,
 max_bytes, expected_content_type, refresh_interval, current_digest
 ```
 
-更新流程为下载临时文件、大小/格式检查、转换或编译、`sing-box rule-set match` fixture 与引用该 SRS 的临时配置 `sing-box check` 验证、同路径原子替换，再等待有界 reload 窗口并检查核心健康/重载错误。sing-box 1.13.15 支持本地 rule-set 文件变更自动重载，因此纯 SRS 内容更新不触发核心重启；reload 报错则恢复旧 SRS，原子 rename 是否触发 watcher 必须有上游 fixture。默认 24 小时更新并加入稳定 jitter，避免每台设备在同一时刻访问上游。
+更新流程为成对下载、大小/Content-Type/SRS magic 检查、引用候选 SRS 的临时配置 `sing-box check`、持久事务 journal、同路径逐文件原子替换、受控重启当前 generation 和数据面健康检查。只有新核心健康后才删除旧 pair 与 journal；启动失败则恢复旧 pair 并重新启动旧 generation，进程在 commit 前退出时由下次 `RuleSetStore::open` 根据 journal 回滚。sing-box 1.13.15 虽支持本地 rule-set 文件 watcher，但 reload 没有 daemon 可消费的成功 ACK，因此不能把 watcher callback 当作事务提交证据。默认 24 小时更新并加入稳定 jitter，避免每台设备在同一时刻访问上游。
 
 最终采用的中国域名、中国 IP 和广告数据源必须在首次纳入公开发布包前，通过 ADR 冻结 URL、许可证、再分发权限、生成工具版本、更新责任和误杀退出路径。发布 SRS 的 manifest 记录源 digest 与产物 digest。未明确许可证的列表不得进入发布包。
+
+实现状态：当前 `cn-domain.srs` 与 `cn-ip.srs` 是 digest 固定的发布快照，安装器拒绝 symlink/非普通持久目标，并把校验后的包内资产原子发布到 `/data/adb/nethop/rulesets/`；composer 只引用该 daemon-owned 持久路径，不依赖模块升级目录的生命周期。`RuleSetStore` 提供 5 MiB/文件预算、私有 staging、SRS magic 预检、真实 `CandidateChecker` admission、两阶段 `prepare/publish/commit/rollback`、持久 journal 与启动恢复。专用 fetch service 复用 SSRF/redirect/超时/gzip/body 上限控制，强制 Content-Type/SRS/成对成功语义，并在私有目录持久化摘要绑定的 body、ETag 和 Last-Modified；损坏缓存按 miss 处理。worker 已消费独立 `resource:rulesets` 调度，运行态更新执行停止旧核心、发布候选、重启并检查健康、成功提交或失败回滚；`nethopctl ruleset status|update` 提供只读状态和手动触发。首次公开发布仍受 `07-ruleset-provider-supply-chain.md` 的可复现供应链与真机端到端闸门约束。
 
 ## 16. Rust 订阅转换库
 
@@ -903,7 +923,7 @@ NH-AUTH-*         IPC 调用者与权限
 
 订阅、规则集和 sing-box 版本检查均支持手动触发；默认周期 24 小时。worker 使用持久 `next_run`、失败退避和稳定 jitter，不依赖 Android `crond`。
 
-实现状态：订阅手动触发、持久 schedule 数据结构、退避与 jitter 已分别完成；将 schedule 到期事件接入订阅 update worker 仍是后续独立组件。完成前不得在 release notes 中宣称自动 24 小时订阅更新。
+实现状态：订阅手动触发、持久 schedule、失败退避、稳定 jitter 和到期事件接入订阅 update worker 已完成。sing-box 版本检查同时支持 `nethopctl core version-check` 手动触发和独立的 24 小时持久调度；固定 key `resource:sing-box-version` 与 daemon-owned source ID 分离。规则集使用独立固定 key `resource:rulesets`，同时支持 `nethopctl ruleset update` 手动触发；自动和手动入口共享同一两阶段发布、核心健康确认、journal 恢复与调度结果记录路径。
 
 ### 22.2 sing-box 更新
 
@@ -915,6 +935,10 @@ NH-AUTH-*         IPC 调用者与权限
 - 不下载、不覆盖、不执行新核心。
 
 升级由 NetHop 项目重新构建、验证 build tags、跑回归并发布新模块完成。模块自身更新继续使用 Magisk/KernelSU `updateJson`。
+
+当前实现固定查询 `https://api.github.com/repos/SagerNet/sing-box/releases/latest`，复用订阅 fetch 的 HTTPS-only、SSRF、连接时 peer 校验、手动重定向、超时和无环境代理边界，并把响应限制为 256 KiB。`core.version_check` 只接受空参数；结果写入有 64 KiB 上限的 `state/runtime.json`，原子更新时保留其他运行字段。Android 通知使用固定 `cmd notification post` argv，不拼接任何订阅、SSID、节点名或外部文本；同一 latest 版本的已通知状态跨 worker 重启恢复。通知或状态写入失败只产生降级事件，不停止代理。
+
+`nethopctl status` 已返回 `core_update`，自动 24 小时版本检查已接入 worker；`action.sh` 通过 `nethopctl status --human` 显示固定、脱敏的更新提示。
 
 ## 23. 安全与隐私
 
@@ -1016,7 +1040,7 @@ NH-AUTH-*         IPC 调用者与权限
 
 ### 24.5 转换基准
 
-在目标 arm64 Android 真机 release build 上预热后测量 `detect + decode + parse + validate + dedupe + serialize`。fixture 覆盖七种协议、三种输入格式、重复节点和 10% 非法节点。不得使用只包含简单 SS URI 的单一数据证明 300 ms。
+在目标 arm64 Android 真机 release build 上预热后测量 `detect + decode + parse + validate + dedupe + serialize`。当前冻结的性能 fixture 覆盖七种 URI-capable 协议、三种输入格式、重复节点和 10% 非法节点。它不构成 HTTP/SOCKS 的 10,000 节点性能证据；后两者进入稳定性能声明前必须补充同规模 YAML/JSON fixture。不得使用只包含简单 SS URI 的单一数据证明 300 ms。
 
 Base64 URI、sing-box JSON、Clash YAML 和多 source 合并分别输出 parse/validate/dedupe/serialize 耗时与 peak RSS。300 ms 是各标准 5 MiB fixture 的硬目标，不因 YAML 实现较慢自动放宽；如果合理限制下仍不能达标，应降低允许的 YAML 复杂度并明确诊断，而不是隐藏分项。
 
@@ -1035,7 +1059,7 @@ Base64 URI、sing-box JSON、Clash YAML 和多 source 合并分别输出 parse/v
 ### 25.1 Host
 
 - URI/Base64/YAML/JSON parser unit tests。
-- 七协议字段、默认值和拒绝路径 golden tests。
+- 九协议字段、默认值和拒绝路径 golden tests；HTTP/SOCKS 仅覆盖经审计的 Clash/Mihomo YAML 与 sing-box JSON 映射。
 - canonical fingerprint、tag、合并顺序和 last-known-good tests。
 - config composer 与 `sing-box check` fixture。
 - worker 状态机、熔断、更新事务、SQLite 聚合 tests。
@@ -1111,7 +1135,7 @@ Proxylink 只作为行为参考，不复制代码。`NetGuard/sub-parser` 当前
 - 采集一次 direct/TPROXY 吞吐、RSS、CPU 和切换窗口 smoke，识别路线是否明显不可行；数值先作为诊断，不要求完成跨设备或完整发布认证。
 - Host/fake module 覆盖危险网络操作的所有权、幂等清理和失败回滚。
 
-Phase 0-A 不要求多 SoC、Magisk/KernelSU 双实机、24 小时 soak、SBOM、完整 stats 补丁、双实例、七协议全量或兼容方言。安全接管、无泄漏、无环路和可恢复性失败时不得继续堆叠功能。
+Phase 0-A 不要求多 SoC、Magisk/KernelSU 双实机、24 小时 soak、SBOM、完整 stats 补丁、双实例、九协议全量或兼容方言。安全接管、无泄漏、无环路和可恢复性失败时不得继续堆叠功能。
 
 ### Phase 0-B：参考设备 Alpha
 
@@ -1124,7 +1148,7 @@ Phase 0-A 不要求多 SoC、Magisk/KernelSU 双实机、24 小时 soak、SBOM�
 ### Phase 1：控制面与订阅
 
 - `nethop-core`、`nethop-protocol`、`nethopd`、`nethopctl` 最小闭环。
-- 七协议 URI、Clash YAML、sing-box outbounds parser。
+- 九协议 Clash YAML、sing-box outbounds parser；URI/Base64 scheme 保持 VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS 七种，HTTP/SOCKS 不从 URI carrier 猜测。
 - 多订阅、active limit、诊断、last-known-good、配置 composer 和事务发布。
 - Host golden/fuzz 与 fake module 测试。
 
@@ -1192,6 +1216,7 @@ eBPF/XDP fast path 不进入已承诺阶段。只有 native nft 仍无法满足�
 - `D:/100_Projects/110_Daily/NetGuard/sub-parser/`
 - `D:/100_Projects/110_Daily/PathGuard-Next/WORKSPACE.md`
 - `D:/100_Projects/110_Daily/PathGuard-Next/docs/00-architecture-design.md`
+- `07-ruleset-provider-supply-chain.md`
 
 ### 29.2 官方网页
 

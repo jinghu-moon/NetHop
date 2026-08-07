@@ -348,13 +348,28 @@ impl CapabilityReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetfilterTable {
+    Filter,
+    Mangle,
+}
+
+impl NetfilterTable {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Filter => "filter",
+            Self::Mangle => "mangle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeCommand {
     AndroidRelease,
     AndroidAbi,
     EffectiveUid,
     SelinuxMode,
     NetfilterVersion(IpFamily),
-    NetfilterSnapshot(IpFamily),
+    NetfilterSnapshot(IpFamily, NetfilterTable),
     NetfilterRestoreHelp(IpFamily),
     TproxyHelp(IpFamily),
     MarkHelp(IpFamily),
@@ -366,8 +381,15 @@ pub enum ProbeCommand {
     Addresses(IpFamily),
     Links,
     ListeningSockets,
+    PrivateDnsMode,
+    WifiStatus,
+    CoreUpdateNotification,
     TunDevice,
-    PackageList(PackageListKind),
+    UserList,
+    PackageList {
+        kind: PackageListKind,
+        android_user_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -459,6 +481,7 @@ pub struct AndroidToolPaths {
     ss: PathBuf,
     tun: PathBuf,
     cmd: PathBuf,
+    settings: PathBuf,
 }
 
 impl AndroidToolPaths {
@@ -477,6 +500,7 @@ impl AndroidToolPaths {
             ss: resolve_tool("/system/bin/ss")?,
             tun: PathBuf::from("/dev/net/tun"),
             cmd: resolve_tool("/system/bin/cmd")?,
+            settings: PathBuf::from("/system/bin/settings"),
         })
     }
 }
@@ -518,7 +542,10 @@ impl CommandProbeBackend {
             ProbeCommand::NetfilterVersion(family) => {
                 (self.netfilter(family), vec!["--version".into()])
             }
-            ProbeCommand::NetfilterSnapshot(family) => (self.netfilter_save(family), Vec::new()),
+            ProbeCommand::NetfilterSnapshot(family, table) => (
+                self.netfilter_save(family),
+                vec!["-t".into(), table.as_str().into()],
+            ),
             ProbeCommand::NetfilterRestoreHelp(family) => {
                 (self.netfilter_restore(family), vec!["--help".into()])
             }
@@ -562,7 +589,19 @@ impl CommandProbeBackend {
             ),
             ProbeCommand::Links => (&self.tools.ip, vec!["link".into(), "show".into()]),
             ProbeCommand::ListeningSockets => (&self.tools.ss, vec!["-H".into(), "-lntu".into()]),
-            ProbeCommand::PackageList(kind) => {
+            ProbeCommand::PrivateDnsMode => (
+                &self.tools.settings,
+                vec!["get".into(), "global".into(), "private_dns_mode".into()],
+            ),
+            ProbeCommand::WifiStatus => (&self.tools.cmd, vec!["wifi".into(), "status".into()]),
+            ProbeCommand::CoreUpdateNotification => {
+                (&self.tools.cmd, crate::core_update_notification_arguments())
+            }
+            ProbeCommand::UserList => (&self.tools.cmd, vec!["user".into(), "list".into()]),
+            ProbeCommand::PackageList {
+                kind,
+                android_user_id,
+            } => {
                 let class = match kind {
                     PackageListKind::All => None,
                     PackageListKind::System => Some("-s"),
@@ -577,7 +616,7 @@ impl CommandProbeBackend {
                 if let Some(class) = class {
                     args.push(class.into());
                 }
-                args.extend(["--user".into(), "0".into()]);
+                args.extend(["--user".into(), android_user_id.to_string()]);
                 (&self.tools.cmd, args)
             }
             ProbeCommand::TunDevice => unreachable!("handled without a process"),
@@ -711,7 +750,14 @@ impl<B: ProbeBackend> CapabilityProbe<B> {
         version: ProbeOutput,
     ) -> Result<FamilyCapability, CapabilityError> {
         let address = self.backend.run(ProbeCommand::Addresses(family))?;
-        let snapshot = self.backend.run(ProbeCommand::NetfilterSnapshot(family))?;
+        let mangle_snapshot = self.backend.run(ProbeCommand::NetfilterSnapshot(
+            family,
+            NetfilterTable::Mangle,
+        ))?;
+        let filter_snapshot = self.backend.run(ProbeCommand::NetfilterSnapshot(
+            family,
+            NetfilterTable::Filter,
+        ))?;
         let restore = self
             .backend
             .run(ProbeCommand::NetfilterRestoreHelp(family))?;
@@ -721,10 +767,17 @@ impl<B: ProbeBackend> CapabilityProbe<B> {
         let owner = self.backend.run(ProbeCommand::OwnerHelp(family))?;
         let socket = self.backend.run(ProbeCommand::SocketHelp(family))?;
         let rules = self.backend.run(ProbeCommand::PolicyRules(family))?;
-        let chain_namespace = if snapshot.success() && contains_owned_chain(snapshot.stdout()) {
+        let chain_namespace = if [&mangle_snapshot, &filter_snapshot]
+            .into_iter()
+            .any(|snapshot| snapshot.success() && contains_owned_chain(snapshot.stdout()))
+        {
             CapabilityStatus::Conflict
+        } else if mangle_snapshot.success() && filter_snapshot.success() {
+            CapabilityStatus::Supported
+        } else if !mangle_snapshot.success() {
+            classify_failure(&mangle_snapshot)
         } else {
-            success_status(&snapshot)
+            classify_failure(&filter_snapshot)
         };
         Ok(FamilyCapability::new(
             family,
@@ -1078,11 +1131,45 @@ fn links_output_has_active_tunnel(output: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CapabilityStatus, ProbeLimits, ProbeOutput, ResourceCandidate, contains_owned_chain,
+        AndroidToolPaths, CapabilityStatus, CommandProbeBackend, IpFamily, NetfilterTable,
+        ProbeCommand, ProbeLimits, ProbeOutput, ResourceCandidate, contains_owned_chain,
         links_output_has_active_tunnel, parse_link_interfaces, rules_conflict,
         socket_output_contains_port,
     };
-    use std::time::Duration;
+    use std::{path::PathBuf, time::Duration};
+
+    #[test]
+    fn netfilter_snapshots_are_scoped_to_the_requested_table() {
+        let tool = PathBuf::from("/system/bin/tool");
+        let backend = CommandProbeBackend::new(
+            AndroidToolPaths {
+                getprop: tool.clone(),
+                id: tool.clone(),
+                getenforce: tool.clone(),
+                iptables: tool.clone(),
+                ip6tables: tool.clone(),
+                iptables_save: tool.clone(),
+                ip6tables_save: tool.clone(),
+                iptables_restore: tool.clone(),
+                ip6tables_restore: tool.clone(),
+                ip: tool.clone(),
+                ss: tool.clone(),
+                tun: tool.clone(),
+                cmd: tool.clone(),
+                settings: tool,
+            },
+            ProbeLimits::default(),
+        );
+
+        for (table, name) in [
+            (NetfilterTable::Filter, "filter"),
+            (NetfilterTable::Mangle, "mangle"),
+        ] {
+            let (_, arguments) =
+                backend.command_spec(ProbeCommand::NetfilterSnapshot(IpFamily::Ipv4, table));
+            assert_eq!(arguments, ["-t", name]);
+        }
+    }
 
     #[test]
     fn resource_candidate_rejects_unmasked_bits() {

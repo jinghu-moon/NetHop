@@ -49,6 +49,14 @@ fn store_uses_wal_private_file_and_accumulates_buckets() {
         .unwrap();
     assert_eq!(bucket.upload_bytes, 30);
     assert_eq!(bucket.download_bytes, 50);
+    let totals = store.traffic_totals_since(1_699_999_999, 16).unwrap();
+    assert_eq!(totals.len(), 1);
+    assert_eq!(totals[0].counter_name, "terminal:node-a");
+    assert_eq!((totals[0].upload_bytes, totals[0].download_bytes), (30, 50));
+    assert!(matches!(
+        store.traffic_totals_since(-1, 16),
+        Err(StatsStoreError::InvalidBucket)
+    ));
     #[cfg(unix)]
     {
         use std::fs;

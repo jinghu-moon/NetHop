@@ -1,20 +1,24 @@
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "subscription-update")]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "subscription-update")]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-use nethop_android::{CapabilityError, CapabilityReport, NetworkHealthVerifier, PlanSlot};
+use nethop_android::{
+    CapabilityError, CapabilityReport, NetworkHealthVerifier, PlanSlot, PrivateDnsFactsSource,
+    UpdateNotificationOutcome, UpdateNotificationSink,
+};
 #[cfg(feature = "subscription-update")]
-use nethop_android::{CapabilityStatus, ResourceCandidate};
+use nethop_android::{CapabilityStatus, ResourceCandidate, WifiFactsSource};
 use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
 #[cfg(feature = "subscription-update")]
 use nethop_core::{ManagedOptions, TunStack};
-#[cfg(feature = "subscription-update")]
-use nethop_protocol::ErrorDomain;
-use nethop_protocol::{ControlMethod, ControlRequest, ControlResponse, EventKind};
+use nethop_protocol::{ControlMethod, ControlRequest, ControlResponse, ErrorDomain, EventKind};
 use serde_json::json;
 
 #[cfg(feature = "subscription-update")]
@@ -26,17 +30,44 @@ use crate::{
     WorkerControlHandler, WorkerRecoveryError, WorkerRuntime, WorkerRuntimeLimits,
     WorkerServiceError, WorkerServiceTasks,
 };
-use crate::{CandidateChecker, CoreLauncher};
+use crate::{CandidateChecker, CoreLauncher, OperationalControl};
 #[cfg(feature = "subscription-update")]
 use crate::{
-    ConfigChange, ConfigRuntime, ConfigRuntimeCheckpoint, RuntimeLogRetention,
-    RuntimeUpdateSchedule, SourceConfig, UnavailableLogRetention, UnavailableUpdateSchedule,
+    ConfigChange, ConfigRuntime, ConfigRuntimeCheckpoint, RuleSetUpdatePreparation,
+    RuntimeCoreVersionSchedule, RuntimeLogRetention, RuntimeRuleSetSchedule,
+    RuntimeRuleSetUpdateSource, RuntimeUpdateSchedule, SourceConfig, SourceStatusStore,
+    SourceUpdateReport, UnavailableCoreVersionSchedule, UnavailableLogRetention,
+    UnavailableRuleSetSchedule, UnavailableRuleSetUpdateSource, UnavailableUpdateSchedule,
 };
+use crate::{
+    CoreReleaseBodyFetcher, CoreUpdateAvailability, CoreVersion, CoreVersionCheckError,
+    CoreVersionChecker, CoreVersionStateSink, CoreVersionStatus,
+};
+#[cfg(feature = "subscription-update")]
+use nethop_subscription::FormatHint;
 
 const IDLE_WAKEUP: Duration = Duration::from_secs(1);
 
+#[cfg(feature = "subscription-update")]
+fn rule_set_wall_seconds() -> Option<i64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+}
+
 pub trait WorkerClock {
     fn now(&self) -> Duration;
+}
+
+pub trait RuntimeCoreVersionSource {
+    fn check(&mut self) -> Result<CoreVersionStatus, CoreVersionCheckError>;
+}
+
+impl<F: CoreReleaseBodyFetcher> RuntimeCoreVersionSource for CoreVersionChecker<F> {
+    fn check(&mut self) -> Result<CoreVersionStatus, CoreVersionCheckError> {
+        CoreVersionChecker::check(self)
+    }
 }
 
 pub type ApplicationRecovery<P, R> = Result<Option<ActiveRuntime<P, R>>, WorkerRecoveryError>;
@@ -120,6 +151,19 @@ pub trait RuntimeUpdateSource {
     }
 
     #[cfg(feature = "subscription-update")]
+    fn take_source_update_report(&mut self) -> Option<SourceUpdateReport> {
+        None
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_source_update(
+        &mut self,
+        _source_id: Option<&str>,
+    ) -> Result<(), RuntimeUpdateError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn replace_config(&mut self, _config: SourceConfig) {}
 
     #[cfg(feature = "subscription-update")]
@@ -138,6 +182,25 @@ pub trait RuntimeUpdateSource {
     }
     fn commit(&mut self, prepared: Self::Prepared) -> Result<GenerationId, RuntimeUpdateError>;
     fn discard(&mut self, prepared: Self::Prepared) -> Result<(), RuntimeUpdateError>;
+
+    #[cfg(feature = "subscription-update")]
+    fn preview_import(
+        &mut self,
+        _bytes: &[u8],
+        _format_hint: FormatHint,
+    ) -> Result<serde_json::Value, RuntimeUpdateError> {
+        Err(RuntimeUpdateError::Prepare)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_import(
+        &mut self,
+        _bytes: Vec<u8>,
+        _format_hint: FormatHint,
+        _candidate_digest: String,
+    ) -> Result<(), RuntimeUpdateError> {
+        Err(RuntimeUpdateError::Prepare)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -196,6 +259,21 @@ where
     }
 
     #[cfg(feature = "subscription-update")]
+    fn take_source_update_report(&mut self) -> Option<SourceUpdateReport> {
+        self.inner
+            .as_mut()
+            .and_then(RuntimeUpdateSource::take_source_update_report)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_source_update(&mut self, source_id: Option<&str>) -> Result<(), RuntimeUpdateError> {
+        self.inner
+            .as_mut()
+            .ok_or(RuntimeUpdateError::Prepare)?
+            .request_source_update(source_id)
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn replace_config(&mut self, config: SourceConfig) {
         if let Some(inner) = &mut self.inner {
             inner.replace_config(config);
@@ -246,6 +324,31 @@ where
             .as_mut()
             .ok_or(RuntimeUpdateError::Discard)?
             .discard(prepared)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn preview_import(
+        &mut self,
+        bytes: &[u8],
+        format_hint: FormatHint,
+    ) -> Result<serde_json::Value, RuntimeUpdateError> {
+        self.inner
+            .as_mut()
+            .ok_or(RuntimeUpdateError::Prepare)?
+            .preview_import(bytes, format_hint)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_import(
+        &mut self,
+        bytes: Vec<u8>,
+        format_hint: FormatHint,
+        candidate_digest: String,
+    ) -> Result<(), RuntimeUpdateError> {
+        self.inner
+            .as_mut()
+            .ok_or(RuntimeUpdateError::Prepare)?
+            .request_import(bytes, format_hint, candidate_digest)
     }
 }
 
@@ -375,7 +478,26 @@ where
     #[cfg(feature = "subscription-update")]
     update_schedule: Box<dyn RuntimeUpdateSchedule>,
     #[cfg(feature = "subscription-update")]
+    core_version_schedule: Box<dyn RuntimeCoreVersionSchedule>,
+    #[cfg(feature = "subscription-update")]
+    core_version_schedule_retry_at: Option<Duration>,
+    #[cfg(feature = "subscription-update")]
+    rule_set_schedule: Box<dyn RuntimeRuleSetSchedule>,
+    #[cfg(feature = "subscription-update")]
+    rule_set_schedule_retry_at: Option<Duration>,
+    #[cfg(feature = "subscription-update")]
+    rule_set_updater: Box<dyn RuntimeRuleSetUpdateSource>,
+    #[cfg(feature = "subscription-update")]
+    rule_set_state: &'static str,
+    #[cfg(feature = "subscription-update")]
+    rule_set_diagnostic: Option<&'static str>,
+    #[cfg(feature = "subscription-update")]
+    rule_set_last_attempt_wall: Option<i64>,
+    #[cfg(feature = "subscription-update")]
+    rule_set_last_success_wall: Option<i64>,
+    #[cfg(feature = "subscription-update")]
     log_retention: Box<dyn RuntimeLogRetention>,
+    #[cfg_attr(not(feature = "subscription-update"), allow(dead_code))]
     updater: U,
     #[cfg(feature = "subscription-update")]
     config: Option<ConfigRuntime>,
@@ -385,6 +507,21 @@ where
     config_watch_healthy: Option<Arc<AtomicBool>>,
     #[cfg(feature = "subscription-update")]
     last_watch_health: Option<bool>,
+    #[cfg(feature = "subscription-update")]
+    source_status: Option<SourceStatusStore>,
+    #[cfg(feature = "subscription-update")]
+    wifi_facts: Option<Box<dyn WifiFactsSource>>,
+    #[cfg(feature = "subscription-update")]
+    wifi_scene_next_probe: Duration,
+    #[cfg(feature = "subscription-update")]
+    wifi_scene_override: Option<bool>,
+    operational_control: Option<OperationalControl>,
+    core_version_source: Option<Box<dyn RuntimeCoreVersionSource>>,
+    core_update_notifier: Option<Box<dyn UpdateNotificationSink>>,
+    core_version_state: Option<Box<dyn CoreVersionStateSink>>,
+    core_version_status: Option<CoreVersionStatus>,
+    last_notified_core_version: Option<CoreVersion>,
+    private_dns_source: Option<Box<dyn PrivateDnsFactsSource>>,
 }
 
 impl<S, N, V, C> WorkerApplication<S, N, V, C, UnavailableRuntimeUpdateSource>
@@ -441,6 +578,24 @@ where
             #[cfg(feature = "subscription-update")]
             update_schedule: self.update_schedule,
             #[cfg(feature = "subscription-update")]
+            core_version_schedule: self.core_version_schedule,
+            #[cfg(feature = "subscription-update")]
+            core_version_schedule_retry_at: self.core_version_schedule_retry_at,
+            #[cfg(feature = "subscription-update")]
+            rule_set_schedule: self.rule_set_schedule,
+            #[cfg(feature = "subscription-update")]
+            rule_set_schedule_retry_at: self.rule_set_schedule_retry_at,
+            #[cfg(feature = "subscription-update")]
+            rule_set_updater: self.rule_set_updater,
+            #[cfg(feature = "subscription-update")]
+            rule_set_state: self.rule_set_state,
+            #[cfg(feature = "subscription-update")]
+            rule_set_diagnostic: self.rule_set_diagnostic,
+            #[cfg(feature = "subscription-update")]
+            rule_set_last_attempt_wall: self.rule_set_last_attempt_wall,
+            #[cfg(feature = "subscription-update")]
+            rule_set_last_success_wall: self.rule_set_last_success_wall,
+            #[cfg(feature = "subscription-update")]
             log_retention: self.log_retention,
             updater,
             #[cfg(feature = "subscription-update")]
@@ -451,6 +606,21 @@ where
             config_watch_healthy: self.config_watch_healthy,
             #[cfg(feature = "subscription-update")]
             last_watch_health: self.last_watch_health,
+            #[cfg(feature = "subscription-update")]
+            source_status: self.source_status,
+            #[cfg(feature = "subscription-update")]
+            wifi_facts: self.wifi_facts,
+            #[cfg(feature = "subscription-update")]
+            wifi_scene_next_probe: self.wifi_scene_next_probe,
+            #[cfg(feature = "subscription-update")]
+            wifi_scene_override: self.wifi_scene_override,
+            operational_control: self.operational_control,
+            core_version_source: self.core_version_source,
+            core_update_notifier: self.core_update_notifier,
+            core_version_state: self.core_version_state,
+            core_version_status: self.core_version_status,
+            last_notified_core_version: self.last_notified_core_version,
+            private_dns_source: self.private_dns_source,
         }
     }
 }
@@ -502,6 +672,24 @@ where
             #[cfg(feature = "subscription-update")]
             update_schedule: Box::new(UnavailableUpdateSchedule),
             #[cfg(feature = "subscription-update")]
+            core_version_schedule: Box::new(UnavailableCoreVersionSchedule),
+            #[cfg(feature = "subscription-update")]
+            core_version_schedule_retry_at: None,
+            #[cfg(feature = "subscription-update")]
+            rule_set_schedule: Box::new(UnavailableRuleSetSchedule),
+            #[cfg(feature = "subscription-update")]
+            rule_set_schedule_retry_at: None,
+            #[cfg(feature = "subscription-update")]
+            rule_set_updater: Box::new(UnavailableRuleSetUpdateSource),
+            #[cfg(feature = "subscription-update")]
+            rule_set_state: "never",
+            #[cfg(feature = "subscription-update")]
+            rule_set_diagnostic: None,
+            #[cfg(feature = "subscription-update")]
+            rule_set_last_attempt_wall: None,
+            #[cfg(feature = "subscription-update")]
+            rule_set_last_success_wall: None,
+            #[cfg(feature = "subscription-update")]
             log_retention: Box::new(UnavailableLogRetention),
             updater,
             #[cfg(feature = "subscription-update")]
@@ -512,7 +700,104 @@ where
             config_watch_healthy: None,
             #[cfg(feature = "subscription-update")]
             last_watch_health: None,
+            #[cfg(feature = "subscription-update")]
+            source_status: None,
+            #[cfg(feature = "subscription-update")]
+            wifi_facts: None,
+            #[cfg(feature = "subscription-update")]
+            wifi_scene_next_probe: Duration::ZERO,
+            #[cfg(feature = "subscription-update")]
+            wifi_scene_override: None,
+            operational_control: None,
+            core_version_source: None,
+            core_update_notifier: None,
+            core_version_state: None,
+            core_version_status: None,
+            last_notified_core_version: None,
+            private_dns_source: None,
         }
+    }
+
+    pub fn with_operational_control(mut self, control: OperationalControl) -> Self {
+        self.operational_control = Some(control);
+        self
+    }
+
+    pub fn with_private_dns_source<T: PrivateDnsFactsSource + 'static>(
+        mut self,
+        source: T,
+    ) -> Self {
+        self.private_dns_source = Some(Box::new(source));
+        self
+    }
+
+    pub fn with_core_version_source<T: RuntimeCoreVersionSource + 'static>(
+        mut self,
+        source: T,
+    ) -> Self {
+        self.core_version_source = Some(Box::new(source));
+        self
+    }
+
+    pub fn with_core_update_notifier<T: UpdateNotificationSink + 'static>(
+        mut self,
+        notifier: T,
+    ) -> Self {
+        self.core_update_notifier = Some(Box::new(notifier));
+        self
+    }
+
+    pub fn with_core_version_state<T: CoreVersionStateSink + 'static>(
+        mut self,
+        mut state: T,
+    ) -> Self {
+        match state.restore() {
+            Ok(Some((status, last_notified))) => {
+                self.core_version_status = Some(status);
+                self.last_notified_core_version = last_notified;
+            }
+            Ok(None) => {}
+            Err(_) => self.event_hub.publish(
+                EventKind::Runtime,
+                json!({"kind":"core_update","state":"state_restore_failed"}),
+            ),
+        }
+        self.core_version_state = Some(Box::new(state));
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub fn with_core_version_schedule<T: RuntimeCoreVersionSchedule + 'static>(
+        mut self,
+        schedule: T,
+    ) -> Self {
+        self.core_version_schedule = Box::new(schedule);
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub fn with_rule_set_update_source<T: RuntimeRuleSetUpdateSource + 'static>(
+        mut self,
+        source: T,
+    ) -> Self {
+        self.rule_set_updater = Box::new(source);
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub fn with_rule_set_schedule<T: RuntimeRuleSetSchedule + 'static>(
+        mut self,
+        schedule: T,
+    ) -> Self {
+        self.rule_set_schedule = Box::new(schedule);
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub fn with_wifi_facts_source(mut self, source: impl WifiFactsSource + 'static) -> Self {
+        self.wifi_facts = Some(Box::new(source));
+        self.wifi_scene_next_probe = Duration::ZERO;
+        self
     }
 
     #[cfg(feature = "subscription-update")]
@@ -547,6 +832,12 @@ where
             let _ = schedule.configure(enabled, interval, sources);
         }
         self.update_schedule = Box::new(schedule);
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub fn with_source_status_store(mut self, store: SourceStatusStore) -> Self {
+        self.source_status = Some(store);
         self
     }
 
@@ -723,6 +1014,8 @@ where
         else {
             return;
         };
+        self.wifi_scene_next_probe = Duration::ZERO;
+        self.wifi_scene_override = None;
         if let Some(config) = self.config.as_ref() {
             let settings = config.current().effective().subscriptions();
             if self
@@ -853,6 +1146,57 @@ where
         }
     }
 
+    #[cfg(feature = "subscription-update")]
+    fn reconcile_wifi_scene(&mut self, now: Duration) {
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
+        let baseline_enabled = config.current().effective().service_enabled();
+        let settings = config.current().effective().network().wifi_scenes().clone();
+        if !settings.enabled() || self.wifi_facts.is_none() {
+            self.wifi_scene_override = None;
+            return;
+        }
+        if now < self.wifi_scene_next_probe {
+            return;
+        }
+        self.wifi_scene_next_probe = now.saturating_add(Duration::from_secs(u64::from(
+            settings.probe_interval_seconds(),
+        )));
+
+        let decision = self
+            .wifi_facts
+            .as_mut()
+            .and_then(|source| source.current().ok())
+            .and_then(|facts| settings.matcher().evaluate(&facts));
+        let desired_enabled = baseline_enabled
+            && decision
+                .as_ref()
+                .is_none_or(|decision| decision.action().service_enabled());
+        let next_override = decision.as_ref().map(|_| desired_enabled);
+        if self.wifi_scene_override == next_override {
+            return;
+        }
+        self.wifi_scene_override = next_override;
+
+        if desired_enabled {
+            if self.runtime.is_none() && !self.start_pending {
+                self.control.queue_command(ControlCommand::Start);
+            }
+        } else if self.runtime.is_some() || self.start_pending {
+            self.start_pending = false;
+            self.control.queue_command(ControlCommand::Stop);
+        }
+        self.event_hub.publish(
+            EventKind::Network,
+            json!({
+                "kind": "wifi_scene",
+                "scene_id": decision.as_ref().map(|decision| decision.scene_id()),
+                "proxy_enabled": desired_enabled,
+            }),
+        );
+    }
+
     pub fn snapshot(&self) -> ControlSnapshot {
         let state = self
             .runtime
@@ -915,6 +1259,7 @@ where
         }
     }
 
+    #[cfg(feature = "subscription-update")]
     fn publish_update_status(&mut self, last_update: UpdateStatus) {
         let snapshot = self.snapshot();
         self.control.update_snapshot(ControlSnapshot {
@@ -941,6 +1286,7 @@ where
                 self.restart_budget.clear();
                 self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
                 self.publish_snapshot(RuntimeState::RunningTproxy, Some(generation));
+                self.replay_selector();
             }
             Ok(None) => {
                 self.publish_snapshot(RuntimeState::FailOpenDirect, None);
@@ -973,10 +1319,250 @@ where
         }
     }
 
+    fn check_core_version(
+        &mut self,
+    ) -> Option<Result<(CoreVersionStatus, &'static str), CoreVersionCheckError>> {
+        let status = match self.core_version_source.as_mut()?.check() {
+            Ok(status) => status,
+            Err(error) => return Some(Err(error)),
+        };
+        let mut notification = "not_needed";
+        if status.availability() == CoreUpdateAvailability::Available
+            && self.last_notified_core_version != Some(status.latest())
+        {
+            notification = match self
+                .core_update_notifier
+                .as_mut()
+                .map(|notifier| notifier.notify_core_update())
+            {
+                Some(UpdateNotificationOutcome::Posted) => {
+                    self.last_notified_core_version = Some(status.latest());
+                    "posted"
+                }
+                Some(UpdateNotificationOutcome::Unavailable) | None => "unavailable",
+            };
+        } else if status.availability() == CoreUpdateAvailability::Available {
+            notification = "already_notified";
+        }
+        if let Some(state) = self.core_version_state.as_mut()
+            && state.persist(&status, notification).is_err()
+        {
+            self.event_hub.publish(
+                EventKind::Runtime,
+                json!({"kind":"core_update","state":"state_persist_failed"}),
+            );
+        }
+        self.core_version_status = Some(status.clone());
+        self.event_hub.publish(
+            EventKind::Runtime,
+            json!({
+                "kind": "core_update",
+                "availability": status.availability(),
+                "latest": status.latest().to_string(),
+                "notification": notification,
+            }),
+        );
+        Some(Ok((status, notification)))
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn run_scheduled_core_version_check(&mut self, now: Duration) {
+        if self
+            .core_version_schedule_retry_at
+            .is_some_and(|deadline| now < deadline)
+        {
+            return;
+        }
+        self.core_version_schedule_retry_at = None;
+        match self.core_version_schedule.take_due() {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(_) => {
+                self.event_hub.publish(
+                    EventKind::Runtime,
+                    json!({"kind":"core_update","state":"schedule_read_failed"}),
+                );
+                self.core_version_schedule_retry_at =
+                    Some(now.saturating_add(Duration::from_secs(60 * 60)));
+                return;
+            }
+        }
+        let succeeded = matches!(self.check_core_version(), Some(Ok(_)));
+        if !succeeded {
+            self.event_hub.publish(
+                EventKind::Runtime,
+                json!({"kind":"core_update","state":"check_failed"}),
+            );
+        }
+        if self.core_version_schedule.record_result(succeeded).is_err() {
+            self.event_hub.publish(
+                EventKind::Runtime,
+                json!({"kind":"core_update","state":"schedule_persist_failed"}),
+            );
+            self.core_version_schedule_retry_at =
+                Some(now.saturating_add(Duration::from_secs(60 * 60)));
+        }
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn run_scheduled_rule_set_update(&mut self, now: Duration) {
+        if !self.rule_set_updater.is_available()
+            || self
+                .rule_set_schedule_retry_at
+                .is_some_and(|deadline| now < deadline)
+        {
+            return;
+        }
+        self.rule_set_schedule_retry_at = None;
+        match self.rule_set_schedule.take_due() {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(_) => {
+                self.publish_rule_set_event("schedule_read_failed");
+                self.rule_set_schedule_retry_at =
+                    Some(now.saturating_add(Duration::from_secs(60 * 60)));
+                return;
+            }
+        }
+        let succeeded = self.update_rule_sets(now);
+        if self.rule_set_schedule.record_result(succeeded).is_err() {
+            self.publish_rule_set_event("schedule_persist_failed");
+            self.rule_set_schedule_retry_at =
+                Some(now.saturating_add(Duration::from_secs(60 * 60)));
+        }
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn update_rule_sets(&mut self, now: Duration) -> bool {
+        self.rule_set_last_attempt_wall = rule_set_wall_seconds();
+        match self.rule_set_updater.prepare_update() {
+            Ok(RuleSetUpdatePreparation::Unchanged) => {
+                self.publish_rule_set_event("unchanged");
+                return true;
+            }
+            Ok(RuleSetUpdatePreparation::Prepared) => {}
+            Err(_) => {
+                self.publish_rule_set_event("prepare_failed");
+                return false;
+            }
+        }
+
+        let restart_required = self.runtime.is_some();
+        if restart_required && self.stop().is_err() {
+            let _ = self.rule_set_updater.rollback_update();
+            self.publish_rule_set_event("stop_failed");
+            return false;
+        }
+        if self.rule_set_updater.publish_update().is_err() {
+            self.publish_rule_set_event("publish_failed");
+            if restart_required {
+                self.start(now);
+            }
+            return false;
+        }
+        if !restart_required {
+            return if self.rule_set_updater.commit_update().is_ok() {
+                self.publish_rule_set_event("updated_inactive");
+                true
+            } else {
+                let _ = self.rule_set_updater.rollback_update();
+                self.publish_rule_set_event("commit_failed");
+                false
+            };
+        }
+
+        let active = match self
+            .recovery
+            .recover(&mut self.network, &self.policy, self.slot)
+        {
+            Ok(Some(active)) => active,
+            Ok(None) | Err(_) => {
+                self.restore_previous_rule_sets(now, "activation_failed");
+                return false;
+            }
+        };
+        let generation = active.generation();
+        if self.rule_set_updater.commit_update().is_err() {
+            let cleanup_failed = active.stop(&mut self.network).is_err();
+            if cleanup_failed {
+                self.publish_snapshot(RuntimeState::CircuitOpen, None);
+                self.publish_rule_set_event("commit_cleanup_failed");
+                return false;
+            }
+            self.restore_previous_rule_sets(now, "commit_failed");
+            return false;
+        }
+
+        self.restart_budget.clear();
+        self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
+        self.publish_snapshot(RuntimeState::RunningTproxy, Some(generation));
+        self.replay_selector();
+        self.publish_rule_set_event("updated");
+        true
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn restore_previous_rule_sets(&mut self, now: Duration, failure: &'static str) {
+        if self.rule_set_updater.rollback_update().is_err() {
+            self.publish_snapshot(RuntimeState::CircuitOpen, None);
+            self.publish_rule_set_event("rollback_failed");
+            return;
+        }
+        self.publish_rule_set_event(failure);
+        self.start(now);
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn publish_rule_set_event(&mut self, state: &'static str) {
+        match state {
+            "unchanged" | "updated" | "updated_inactive" => {
+                self.rule_set_state = state;
+                self.rule_set_diagnostic = None;
+                self.rule_set_last_success_wall = rule_set_wall_seconds();
+            }
+            "schedule_read_failed" | "schedule_persist_failed" => {
+                self.rule_set_diagnostic = Some(state);
+            }
+            _ => {
+                self.rule_set_state = "failed";
+                self.rule_set_diagnostic = Some(state);
+            }
+        }
+        self.event_hub.publish(
+            EventKind::Runtime,
+            json!({"kind":"ruleset_update","state":state}),
+        );
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn rule_set_status_document(&self) -> serde_json::Value {
+        let snapshot = self.rule_set_updater.snapshot().ok();
+        json!({
+            "available": self.rule_set_updater.is_available(),
+            "state": self.rule_set_state,
+            "last_attempt_wall_seconds": self.rule_set_last_attempt_wall,
+            "last_success_wall_seconds": self.rule_set_last_success_wall,
+            "next_update_in_seconds": self.rule_set_schedule.next_wakeup_in().map(|duration| duration.as_secs()),
+            "domain_sha256": snapshot.as_ref().map(|value| value.domain_sha256()),
+            "ip_sha256": snapshot.as_ref().map(|value| value.ip_sha256()),
+            "diagnostic_code": self.rule_set_diagnostic,
+        })
+    }
+
     #[cfg(feature = "subscription-update")]
     fn update(&mut self, now: Duration) -> Result<(), WorkerServiceError> {
         let result = self.update_inner(now);
         let succeeded = result.is_ok() && self.snapshot().last_update == UpdateStatus::Succeeded;
+        if let Some(report) = self.updater.take_source_update_report()
+            && let Some(store) = self.source_status.as_mut()
+            && let Ok(wall_seconds) = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+                .ok_or(())
+        {
+            let _ = store.record_report(wall_seconds, &report);
+        }
         if self.update_schedule.record_result(succeeded).is_err() {
             return Err(WorkerServiceError::TaskFailed);
         }
@@ -1099,7 +1685,23 @@ where
         self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
         self.publish_update_status(UpdateStatus::Succeeded);
         self.publish_snapshot(RuntimeState::RunningTproxy, Some(generation));
+        self.replay_selector();
         Ok(())
+    }
+
+    fn replay_selector(&mut self) {
+        let Some(control) = self.operational_control.as_mut() else {
+            return;
+        };
+        if let Ok(result) = control.replay_selection() {
+            self.event_hub.publish(
+                EventKind::Runtime,
+                json!({
+                    "kind": "selector",
+                    "replay": format!("{result:?}").to_lowercase(),
+                }),
+            );
+        }
     }
 
     fn handle_start(&mut self, now: Duration) {
@@ -1120,7 +1722,38 @@ where
                 ControlCommand::Probe => {
                     let _ = self.recovery.probe();
                 }
-                ControlCommand::Update => self.update(now)?,
+                ControlCommand::Update => {
+                    #[cfg(feature = "subscription-update")]
+                    self.updater
+                        .request_source_update(None)
+                        .map_err(|_| WorkerServiceError::TaskFailed)?;
+                    self.update(now)?;
+                }
+                ControlCommand::UpdateSource(source_id) => {
+                    #[cfg(feature = "subscription-update")]
+                    {
+                        self.updater
+                            .request_source_update(Some(&source_id))
+                            .map_err(|_| WorkerServiceError::TaskFailed)?;
+                        self.update(now)?;
+                    }
+                    #[cfg(not(feature = "subscription-update"))]
+                    {
+                        let _ = source_id;
+                        return Err(WorkerServiceError::TaskFailed);
+                    }
+                }
+                ControlCommand::RuleSetUpdate => {
+                    #[cfg(feature = "subscription-update")]
+                    {
+                        let succeeded = self.update_rule_sets(now);
+                        if self.rule_set_schedule.record_result(succeeded).is_err() {
+                            self.publish_rule_set_event("schedule_persist_failed");
+                        }
+                    }
+                    #[cfg(not(feature = "subscription-update"))]
+                    return Err(WorkerServiceError::TaskFailed);
+                }
             }
         }
         self.handle_start(now);
@@ -1172,6 +1805,328 @@ where
     U: RuntimeUpdateSource,
 {
     fn handle(&mut self, request: ControlRequest) -> ControlResponse {
+        if request.method() == ControlMethod::RuleSetStatus {
+            let request_id = request.request_id().clone();
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            #[cfg(feature = "subscription-update")]
+            return ControlResponse::success(
+                request_id,
+                generation,
+                self.rule_set_status_document(),
+            );
+            #[cfg(not(feature = "subscription-update"))]
+            return ControlResponse::failure(
+                request_id,
+                generation,
+                crate::worker_services::unavailable_control_error(
+                    ErrorDomain::Core,
+                    "RULESET-UNAVAILABLE",
+                ),
+            );
+        }
+        if request.method() == ControlMethod::RuleSetUpdate {
+            let request_id = request.request_id().clone();
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            #[cfg(feature = "subscription-update")]
+            if self.rule_set_updater.is_available() {
+                self.control.queue_command(ControlCommand::RuleSetUpdate);
+                return ControlResponse::success(request_id, generation, json!({"accepted":true}));
+            }
+            return ControlResponse::failure(
+                request_id,
+                generation,
+                crate::worker_services::unavailable_control_error(
+                    ErrorDomain::Core,
+                    "RULESET-UNAVAILABLE",
+                ),
+            );
+        }
+        if request.method() == ControlMethod::StatusGet {
+            let request_id = request.request_id().clone();
+            let snapshot = self.snapshot();
+            let generation = snapshot.generation.map(GenerationId::get);
+            let operational = self.operational_control.as_mut().map_or_else(
+                || {
+                    json!({
+                        "core_api": "unavailable",
+                        "selector": {"selected": null, "candidate_count": 0},
+                        "active_connection_count": 0,
+                    })
+                },
+                OperationalControl::status_document,
+            );
+            let capture_active = captures_traffic(snapshot.state);
+            let process_health = match snapshot.state {
+                RuntimeState::RunningTproxy | RuntimeState::RunningTun => "healthy",
+                RuntimeState::Degraded => "degraded",
+                RuntimeState::StartingCore | RuntimeState::StartingTun | RuntimeState::Probing => {
+                    "starting"
+                }
+                _ => "stopped",
+            };
+            let dns_guard = match snapshot.state {
+                RuntimeState::RunningTproxy => "verified",
+                RuntimeState::Degraded
+                    if self.policy.mode() == nethop_core::CaptureMode::Tproxy =>
+                {
+                    "degraded"
+                }
+                _ => "inactive",
+            };
+            let mut capture = crate::operational_control::capture_document(&self.policy);
+            if let Some(object) = capture.as_object_mut() {
+                object.insert("active".into(), json!(capture_active));
+                object.insert("dns_guard".into(), json!(dns_guard));
+            }
+            let core_update = self.core_version_status.as_ref().map_or_else(
+                || {
+                    json!({
+                        "state": "never_checked",
+                        "current": nethop_subscription::PINNED_SING_BOX_VERSION,
+                    })
+                },
+                |status| json!(status),
+            );
+            let dns_split = self.private_dns_source.as_mut().map_or_else(
+                || json!({"mode":"unknown","dns_split":"unknown"}),
+                |source| {
+                    source.current().map_or_else(
+                        |_| json!({"mode":"unknown","dns_split":"unknown"}),
+                        |status| json!(status),
+                    )
+                },
+            );
+            #[cfg(feature = "subscription-update")]
+            let rule_set = self.rule_set_status_document();
+            #[cfg(not(feature = "subscription-update"))]
+            let rule_set = json!({"available":false,"state":"unavailable"});
+            return ControlResponse::success(
+                request_id,
+                generation,
+                json!({
+                    "schema_version": 1,
+                    "state": state_wire_for_event(snapshot.state),
+                    "generation": generation,
+                    "last_update": snapshot.last_update.as_str(),
+                    "watcher_health": self.watcher_health_wire(),
+                    "runtime": {
+                        "state": state_wire_for_event(snapshot.state),
+                        "process_health": process_health,
+                    },
+                    "subscription": {"last_update": snapshot.last_update.as_str()},
+                    "core_update": core_update,
+                    "rule_set": rule_set,
+                    "dns_split": dns_split,
+                    "capture": capture,
+                    "operational": operational,
+                }),
+            );
+        }
+        if request.method() == ControlMethod::CoreVersionCheck {
+            let request_id = request.request_id().clone();
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            let Some(result) = self.check_core_version() else {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Core,
+                        "VERSION-CHECK-UNAVAILABLE",
+                    ),
+                );
+            };
+            #[cfg(feature = "subscription-update")]
+            if self
+                .core_version_schedule
+                .record_result(result.is_ok())
+                .is_err()
+            {
+                self.event_hub.publish(
+                    EventKind::Runtime,
+                    json!({"kind":"core_update","state":"schedule_persist_failed"}),
+                );
+            }
+            return match result {
+                Ok((status, notification)) => ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({"status":status,"notification":notification}),
+                ),
+                Err(_) => ControlResponse::failure(
+                    request_id,
+                    generation,
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Core,
+                        "VERSION-CHECK-FAILED",
+                    ),
+                ),
+            };
+        }
+        if matches!(
+            request.method(),
+            ControlMethod::LogsGet | ControlMethod::LogsClear
+        ) {
+            let request_id = request.request_id().clone();
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            let result = match request.method() {
+                ControlMethod::LogsGet => self
+                    .event_hub
+                    .structured_log_history(request.params().limit().unwrap_or(64))
+                    .map(|entries| json!({"entries":entries,"newest_first":true})),
+                ControlMethod::LogsClear => self
+                    .event_hub
+                    .clear_structured_logs()
+                    .map(|removed| json!({"cleared":true,"removed_files":removed})),
+                _ => unreachable!(),
+            };
+            return match result {
+                Ok(result) => ControlResponse::success(request_id, generation, result),
+                Err(_) => ControlResponse::failure(
+                    request_id,
+                    generation,
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Core,
+                        "LOG-CONTROL-FAILED",
+                    ),
+                ),
+            };
+        }
+        if matches!(
+            request.method(),
+            ControlMethod::NodeList
+                | ControlMethod::NodeTest
+                | ControlMethod::NodeSelect
+                | ControlMethod::NodeExport
+                | ControlMethod::ConnectionsGet
+                | ControlMethod::ConnectionClose
+                | ControlMethod::ConnectionsCloseAll
+                | ControlMethod::DiagnosticsBundle
+                | ControlMethod::TopologyGet
+                | ControlMethod::TrafficGet
+        ) {
+            let request_id = request.request_id().clone();
+            let snapshot = self.snapshot();
+            let generation = snapshot.generation.map(GenerationId::get);
+            let Some(control) = self.operational_control.as_mut() else {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Core,
+                        "CONTROL-UNAVAILABLE",
+                    ),
+                );
+            };
+            return match control.handle(
+                request.method(),
+                request.params(),
+                snapshot.state,
+                snapshot.generation,
+                &self.policy,
+            ) {
+                Ok(result) => ControlResponse::success(request_id, generation, result),
+                Err(error) => ControlResponse::failure(
+                    request_id,
+                    generation,
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Core,
+                        if matches!(error, crate::OperationalControlError::ClashApi(_)) {
+                            "CONTROL-FAILED"
+                        } else {
+                            "CONTROL-INVALID"
+                        },
+                    ),
+                ),
+            };
+        }
+        #[cfg(feature = "subscription-update")]
+        if matches!(
+            request.method(),
+            ControlMethod::SubscriptionImportPreview | ControlMethod::SubscriptionImportApply
+        ) {
+            let request_id = request.request_id().clone();
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            let Some(config) = self.config.as_ref() else {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    unavailable_control_error(ErrorDomain::Config, "IMPORT-UNAVAILABLE"),
+                );
+            };
+            let observed = config
+                .observed_digest()
+                .unwrap_or_else(|_| config.current().digest().to_owned());
+            if request.params().expected_config_digest() != Some(observed.as_str()) {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    unavailable_control_error_with_details(
+                        ErrorDomain::Config,
+                        "CONFLICT",
+                        json!({"observed_config_digest":observed}),
+                    ),
+                );
+            }
+            let Some((bytes, format_hint)) = import_document(request.params().document()) else {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    unavailable_control_error(ErrorDomain::Subscription, "IMPORT-INVALID"),
+                );
+            };
+            if request.method() == ControlMethod::SubscriptionImportPreview {
+                return match self.updater.preview_import(&bytes, format_hint) {
+                    Ok(mut preview) => {
+                        if let Some(object) = preview.as_object_mut() {
+                            object.insert("persistence".into(), json!("persistent_manual_source"));
+                        }
+                        ControlResponse::success(request_id, generation, preview)
+                    }
+                    Err(_) => ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Subscription, "IMPORT-REJECTED"),
+                    ),
+                };
+            }
+            let candidate_digest = request
+                .params()
+                .candidate_digest()
+                .expect("protocol validated import candidate digest")
+                .to_owned();
+            if self
+                .updater
+                .request_import(bytes, format_hint, candidate_digest)
+                .is_err()
+            {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    unavailable_control_error(ErrorDomain::Subscription, "IMPORT-BUSY"),
+                );
+            }
+            self.control.queue_command(ControlCommand::Update);
+            let completed = self.handle_commands(self.clock.now()).is_ok()
+                && self.snapshot().last_update == UpdateStatus::Succeeded;
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            return if completed {
+                ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({
+                        "accepted":true,
+                        "completed":true,
+                        "persistence":"persistent_manual_source"
+                    }),
+                )
+            } else {
+                ControlResponse::failure(
+                    request_id,
+                    generation,
+                    unavailable_control_error(ErrorDomain::Subscription, "IMPORT-FAILED"),
+                )
+            };
+        }
         #[cfg(feature = "subscription-update")]
         if let Some(config) = self.config.as_ref() {
             let request_id = request.request_id().clone();
@@ -1187,17 +2142,25 @@ where
                             "compatible": compatible,
                             "daemon_protocol_min": 1,
                             "daemon_protocol_max": 1,
-                            "daemon_schema_min": 1,
-                            "daemon_schema_max": 1,
-                            "active_schema_version": 1,
+                            "daemon_schema_min": crate::worker_config::CONFIG_SCHEMA_VERSION,
+                            "daemon_schema_max": crate::worker_config::CONFIG_SCHEMA_VERSION,
+                            "active_schema_version": crate::worker_config::CONFIG_SCHEMA_VERSION,
                             "supported_operations": [
-                                "config.get", "config.validate", "config.apply", "config.reload",
-                                "config.schema", "capability.get", "config.mutate", "events.subscribe"
+                                "config.get", "config.export", "config.validate", "config.apply", "config.reload",
+                                "core.version_check",
+                                "config.schema", "capability.get", "config.mutate", "events.subscribe",
+                                "subscription.import_preview", "subscription.import_apply",
+                                "node.list", "node.test", "node.select", "node.export", "connections.get",
+                                "connection.close", "connections.close_all", "logs.get", "logs.clear",
+                                "diagnostics.bundle", "topology.get"
                             ],
                             "supported_features": [
                                 "multi_source", "config_cas", "change_preview", "typed_mutation",
                                 "event_stream", "app_scope", "interface_scope",
-                                "persistent_update_schedule", "log_retention"
+                                "persistent_update_schedule", "log_retention", "selector_replay",
+                                "connection_control", "structured_log_control", "diagnostics_bundle"
+                                , "persistent_manual_source", "config_backup_v1"
+                                , "core_update_check"
                             ]
                         }),
                     );
@@ -1206,6 +2169,21 @@ where
                     let observed = config
                         .observed_digest()
                         .unwrap_or_else(|_| config.current().digest().to_owned());
+                    let source_status = self
+                        .source_status
+                        .as_ref()
+                        .and_then(|store| {
+                            store
+                                .statuses(
+                                    config
+                                        .source_config()
+                                        .sources()
+                                        .iter()
+                                        .map(|source| source.id().as_str()),
+                                )
+                                .ok()
+                        })
+                        .unwrap_or_default();
                     return ControlResponse::success(
                         request_id,
                         generation,
@@ -1216,6 +2194,18 @@ where
                             "watcher_health": self.watcher_health_wire(),
                             "last_reload": config.last_reload().as_str(),
                             "document": config.redacted_document(),
+                            "source_status": source_status,
+                        }),
+                    );
+                }
+                ControlMethod::ConfigExport => {
+                    return ControlResponse::success(
+                        request_id,
+                        generation,
+                        json!({
+                            "format": "nethop-config-backup-v1",
+                            "config_digest": config.current().digest(),
+                            "document": config.current().document(),
                         }),
                     );
                 }
@@ -1302,7 +2292,12 @@ where
                 );
             }
             if request.params().wait() {
-                let completed = self.update(self.clock.now()).is_ok()
+                let requested = self
+                    .updater
+                    .request_source_update(request.params().source_id())
+                    .is_ok();
+                let completed = requested
+                    && self.update(self.clock.now()).is_ok()
                     && self.snapshot().last_update == UpdateStatus::Succeeded;
                 let generation = self.snapshot().generation.map(GenerationId::get);
                 return if completed {
@@ -1546,6 +2541,33 @@ where
             })
             .and_then(Result::ok)
     }
+}
+
+#[cfg(feature = "subscription-update")]
+fn import_document(document: Option<&serde_json::Value>) -> Option<(Vec<u8>, FormatHint)> {
+    let document = document?.as_object()?;
+    if document.len() > 2 {
+        return None;
+    }
+    let content = document.get("content")?.as_str()?;
+    if content.is_empty() || content.len() > 768 * 1024 {
+        return None;
+    }
+    let format_hint = match document
+        .get("format_hint")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("auto")
+    {
+        "auto" => FormatHint::Auto,
+        "uri_list" => FormatHint::UriList,
+        "base64_list" => FormatHint::Base64List,
+        "clash_yaml" => FormatHint::ClashYaml,
+        "singbox_json" => FormatHint::SingboxJson,
+        "ini_profile" => FormatHint::IniProfile,
+        "surfboard_ini" => FormatHint::SurfboardIni,
+        _ => return None,
+    };
+    Some((content.as_bytes().to_vec(), format_hint))
 }
 
 fn state_wire_for_event(state: RuntimeState) -> &'static str {
@@ -1881,6 +2903,45 @@ fn config_schema_document() -> serde_json::Value {
             0,
             3,
         ),
+        collection_schema_field(
+            "subscriptions.sources[].filter.include_names",
+            "string_array",
+            "subscriptions",
+            29,
+            true,
+            false,
+            "generation_activation",
+            "normal",
+            2,
+            0,
+            32,
+        ),
+        collection_schema_field(
+            "subscriptions.sources[].filter.exclude_names",
+            "string_array",
+            "subscriptions",
+            30,
+            true,
+            false,
+            "generation_activation",
+            "normal",
+            2,
+            0,
+            32,
+        ),
+        collection_schema_field(
+            "subscriptions.sources[].filter.protocols",
+            "proxy_protocol_array",
+            "subscriptions",
+            31,
+            true,
+            false,
+            "generation_activation",
+            "normal",
+            2,
+            0,
+            9,
+        ),
         enum_schema_field(
             "proxy.outbound_mode",
             json!("rule"),
@@ -1974,36 +3035,10 @@ fn config_schema_document() -> serde_json::Value {
             &["all", "blacklist", "whitelist"],
         ),
         collection_schema_field(
-            "applications.packages",
-            "string_array",
+            "applications.targets",
+            "application_target_array",
             "applications",
             41,
-            false,
-            false,
-            "network_plan",
-            "normal",
-            2,
-            0,
-            2000,
-        ),
-        collection_schema_field(
-            "applications.include_uids",
-            "integer_array",
-            "applications",
-            42,
-            true,
-            false,
-            "network_plan",
-            "disruptive",
-            2,
-            0,
-            2000,
-        ),
-        collection_schema_field(
-            "applications.exclude_uids",
-            "integer_array",
-            "applications",
-            43,
             true,
             false,
             "network_plan",
@@ -2159,6 +3194,45 @@ fn config_schema_document() -> serde_json::Value {
             64,
         ),
         schema_field(
+            "network.wifi_scenes.enabled",
+            "boolean",
+            json!(false),
+            "network",
+            62,
+            true,
+            false,
+            "network_plan",
+            "normal",
+            2,
+        ),
+        ranged_schema_field(
+            "network.wifi_scenes.probe_interval_seconds",
+            "integer",
+            json!(30),
+            "network",
+            63,
+            true,
+            false,
+            "runtime_only",
+            "normal",
+            2,
+            15,
+            3600,
+        ),
+        collection_schema_field(
+            "network.wifi_scenes.rules",
+            "wifi_scene_rule_array",
+            "network",
+            64,
+            true,
+            true,
+            "network_plan",
+            "sensitive",
+            2,
+            0,
+            64,
+        ),
+        schema_field(
             "routing.bypass_private",
             "boolean",
             json!(true),
@@ -2212,6 +3286,45 @@ fn config_schema_document() -> serde_json::Value {
             "cidr_array",
             "routing",
             74,
+            true,
+            false,
+            "generation_activation",
+            "normal",
+            2,
+            0,
+            512,
+        ),
+        collection_schema_field(
+            "routing.force_proxy_domains",
+            "domain_suffix_array",
+            "routing",
+            75,
+            true,
+            false,
+            "generation_activation",
+            "normal",
+            2,
+            0,
+            512,
+        ),
+        collection_schema_field(
+            "routing.bypass_domains",
+            "domain_suffix_array",
+            "routing",
+            76,
+            true,
+            false,
+            "generation_activation",
+            "normal",
+            2,
+            0,
+            512,
+        ),
+        collection_schema_field(
+            "routing.block_domains",
+            "domain_suffix_array",
+            "routing",
+            77,
             true,
             false,
             "generation_activation",
@@ -2581,14 +3694,47 @@ where
         #[cfg(not(feature = "subscription-update"))]
         let scheduled = None;
         #[cfg(feature = "subscription-update")]
+        let core_version_check = self.core_version_schedule_retry_at.map_or_else(
+            || self.core_version_schedule.next_wakeup_in(),
+            |deadline| Some(deadline.saturating_sub(now)),
+        );
+        #[cfg(not(feature = "subscription-update"))]
+        let core_version_check = None;
+        #[cfg(feature = "subscription-update")]
+        let rule_set_update = self.rule_set_schedule_retry_at.map_or_else(
+            || self.rule_set_schedule.next_wakeup_in(),
+            |deadline| Some(deadline.saturating_sub(now)),
+        );
+        #[cfg(not(feature = "subscription-update"))]
+        let rule_set_update = None;
+        #[cfg(feature = "subscription-update")]
         let log_cleanup = self.log_retention.next_wakeup_in(now);
         #[cfg(not(feature = "subscription-update"))]
         let log_cleanup = None;
+        #[cfg(feature = "subscription-update")]
+        let wifi_scene = self
+            .config
+            .as_ref()
+            .filter(|config| {
+                config
+                    .current()
+                    .effective()
+                    .network()
+                    .wifi_scenes()
+                    .enabled()
+                    && self.wifi_facts.is_some()
+            })
+            .map(|_| self.wifi_scene_next_probe.saturating_sub(now));
+        #[cfg(not(feature = "subscription-update"))]
+        let wifi_scene = None;
         runtime
             .into_iter()
             .chain(restart)
             .chain(scheduled)
+            .chain(core_version_check)
+            .chain(rule_set_update)
             .chain(log_cleanup)
+            .chain(wifi_scene)
             .min()
             .unwrap_or(IDLE_WAKEUP)
     }
@@ -2607,6 +3753,12 @@ where
             self.control.queue_command(ControlCommand::Update);
         }
         let now = self.clock.now();
+        #[cfg(feature = "subscription-update")]
+        self.run_scheduled_core_version_check(now);
+        #[cfg(feature = "subscription-update")]
+        self.run_scheduled_rule_set_update(now);
+        #[cfg(feature = "subscription-update")]
+        self.reconcile_wifi_scene(now);
         #[cfg(feature = "subscription-update")]
         if self.log_retention.run_due(now).is_err() {
             self.event_hub.publish(

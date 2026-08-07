@@ -434,6 +434,7 @@ fn fetch_with_agent(
                 body: cache.apply_not_modified()?.to_vec(),
                 endpoint_kind: endpoint.kind(),
                 endpoint_digest,
+                content_type: None,
                 etag: None,
                 last_modified: None,
                 not_modified: true,
@@ -475,6 +476,7 @@ fn fetch_with_agent(
         )?;
         let etag = bounded_header(&response, "etag")?;
         let last_modified = bounded_header(&response, "last-modified")?;
+        let content_type = bounded_header(&response, "content-type")?;
         let body = decode_response_body(
             response.into_body().into_reader(),
             encoding,
@@ -486,6 +488,7 @@ fn fetch_with_agent(
             body,
             endpoint_kind: endpoint.kind(),
             endpoint_digest,
+            content_type,
             etag,
             last_modified,
             not_modified: false,
@@ -725,6 +728,7 @@ mod tests {
         .unwrap();
         assert_eq!(first.body(), b"trojan://secret@example.com:443");
         assert!(!first.was_not_modified());
+        assert_eq!(first.content_type(), Some("application/octet-stream"));
         cache.commit(&first, &limits).unwrap();
 
         let second = fetch_with_agent(
@@ -737,6 +741,7 @@ mod tests {
         )
         .unwrap();
         assert!(second.was_not_modified());
+        assert_eq!(second.content_type(), None);
         assert_eq!(second.body(), first.body());
         server.join().unwrap();
     }
@@ -839,7 +844,7 @@ mod tests {
                     .unwrap();
                 let body = encoder.finish().unwrap();
                 let header = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nETag: \"fixture-v1\"\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nETag: \"fixture-v1\"\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
                 stream.write_all(header.as_bytes()).unwrap();

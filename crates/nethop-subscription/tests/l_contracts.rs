@@ -43,16 +43,18 @@ fn surfboard_fixture_is_nodes_only_and_partially_successful() {
             .iter()
             .any(|item| item.code == DiagnosticCode::NonNodeSectionIgnored)
     );
-    assert!(output.nodes.iter().any(|item| {
-        item.diagnostic
-            .as_ref()
-            .is_some_and(|d| d.code == DiagnosticCode::UnsupportedProtocol)
-    }));
-    assert!(output.nodes.iter().any(|item| {
-        item.diagnostic
-            .as_ref()
-            .is_some_and(|d| d.code == DiagnosticCode::UnsupportedSemantics)
-    }));
+    assert_eq!(
+        output
+            .nodes
+            .iter()
+            .filter(|item| {
+                item.diagnostic.as_ref().is_some_and(|diagnostic| {
+                    diagnostic.code == DiagnosticCode::UnsupportedSemantics
+                })
+            })
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -115,6 +117,23 @@ fn surfboard_limits_nodes_and_classifies_unknown_fields() {
             .iter()
             .any(|item| item.code == DiagnosticCode::UnknownField)
     );
+}
+
+#[test]
+fn surfboard_http_and_socks_remain_rejected_until_the_dialect_is_audited() {
+    let input = b"[Proxy]\nhttp = http, http.example, 8080\nsocks = socks5, socks.example, 1080\n";
+    let output = parse_surfboard_ini(
+        input,
+        None,
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    )
+    .unwrap();
+    assert_eq!(output.accepted_count(), 0);
+    assert_eq!(output.rejected_count(), 2);
+    assert!(output.nodes.iter().all(|item| {
+        item.diagnostic.as_ref().unwrap().code == DiagnosticCode::UnsupportedSemantics
+    }));
 }
 
 #[test]

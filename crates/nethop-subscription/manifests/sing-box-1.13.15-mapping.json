@@ -47,12 +47,13 @@
     {
       "protocol": "shadowsocks",
       "mapped_fields": ["type", "tag", "server", "server_port", "method", "password", "plugin", "plugin_opts", "udp_over_tcp"],
-      "source_paths": ["option/shadowsocks.go", "option/udp_over_tcp.go", "protocol/shadowsocks/outbound.go", "transport/sip003/obfs.go"],
+      "source_paths": ["option/shadowsocks.go", "option/udp_over_tcp.go", "protocol/shadowsocks/outbound.go", "transport/sip003/obfs.go", "transport/sip003/v2ray.go"],
       "capabilities": [
         {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
         {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null},
         {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":"obfs-local"},
-        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":"obfs-local"}
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":"obfs-local"},
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":"v2ray-plugin"}
       ]
     },
     {
@@ -67,7 +68,7 @@
     },
     {
       "protocol": "hysteria2",
-      "mapped_fields": ["type", "tag", "server", "server_port", "password", "obfs", "tls"],
+      "mapped_fields": ["type", "tag", "server", "server_port", "server_ports", "hop_interval", "up_mbps", "down_mbps", "password", "obfs", "tls"],
       "source_paths": ["option/hysteria2.go", "option/tls.go", "protocol/hysteria2/outbound.go", "include/quic.go"],
       "capabilities": [
         {"transport":"quic","tls":true,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null}
@@ -75,7 +76,7 @@
     },
     {
       "protocol": "tuic",
-      "mapped_fields": ["type", "tag", "server", "server_port", "uuid", "password", "congestion_control", "tls"],
+      "mapped_fields": ["type", "tag", "server", "server_port", "uuid", "password", "congestion_control", "udp_relay_mode", "udp_over_stream", "zero_rtt_handshake", "heartbeat", "tls"],
       "source_paths": ["option/tuic.go", "option/tls.go", "protocol/tuic/outbound.go", "include/quic.go"],
       "capabilities": [
         {"transport":"quic","tls":true,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null}
@@ -83,10 +84,28 @@
     },
     {
       "protocol": "anytls",
-      "mapped_fields": ["type", "tag", "server", "server_port", "password", "tls"],
+      "mapped_fields": ["type", "tag", "server", "server_port", "password", "idle_session_check_interval", "idle_session_timeout", "min_idle_session", "tls"],
       "source_paths": ["option/anytls.go", "option/tls.go", "protocol/anytls/outbound.go", "include/registry.go"],
       "capabilities": [
         {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null}
+      ]
+    },
+    {
+      "protocol": "http",
+      "mapped_fields": ["type", "tag", "server", "server_port", "username", "password", "tls", "path", "headers"],
+      "source_paths": ["option/simple.go", "option/tls.go", "protocol/http/outbound.go", "include/registry.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null}
+      ]
+    },
+    {
+      "protocol": "socks",
+      "mapped_fields": ["type", "tag", "server", "server_port", "version", "username", "password", "network", "udp_over_tcp"],
+      "source_paths": ["option/simple.go", "option/types.go", "option/udp_over_tcp.go", "protocol/socks/outbound.go", "include/registry.go"],
+      "capabilities": [
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":true,"flow":null,"plugin":null}
       ]
     }
   ]

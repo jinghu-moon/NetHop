@@ -3,12 +3,20 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+#[cfg(feature = "subscription-update")]
+use std::{collections::BTreeMap, path::Path};
 
 use nethop_android::{
     AllocationCapability, CapabilityError, CapabilityReport, CapabilityStatus, ExecutionError,
     FamilyCapability, IpFamily, NetfilterBackend, NetworkHealthError, NetworkHealthVerifier,
-    NetworkPlan, PlanSlot, ResourceCandidate,
+    NetworkPlan, PlanSlot, PrivateDnsError, PrivateDnsFactsSource, PrivateDnsMode,
+    PrivateDnsStatus, ResourceCandidate,
 };
+use nethop_android::{UpdateNotificationOutcome, UpdateNotificationSink};
+#[cfg(feature = "subscription-update")]
+use nethop_android::{WifiFactsSource, WifiNetworkFacts, WifiSceneError};
+#[cfg(feature = "subscription-update")]
+use nethop_core::{Candidate, GenerationId, GenerationStore, ManagedConfig, TerminalOutbound};
 use nethop_core::{CaptureMode, CapturePolicy, RuntimeState};
 #[cfg(feature = "subscription-update")]
 use nethop_protocol::ControlParams;
@@ -20,9 +28,15 @@ use nethopd::{
 };
 #[cfg(feature = "subscription-update")]
 use nethopd::{
-    ConfigRuntime, ConfigStore, RuntimePolicyError, RuntimeUpdateError, RuntimeUpdateSource,
-    SourceIdEntropy, SourceRegistry, SourceRegistryError, UpdateStatus,
+    CandidateChecker, CapabilitySource, ConfigRuntime, ConfigStore, CoreLauncher,
+    CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe, HealthProbe,
+    HealthProbeError, InMemoryScheduleStore, PersistentCoreVersionSchedule, RuleSetUpdateError,
+    RuleSetUpdatePreparation, RunnerError, RuntimeCoreVersionSchedule, RuntimePolicyError,
+    RuntimeRuleSetSchedule, RuntimeRuleSetUpdateSource, RuntimeUpdateError, RuntimeUpdateSource,
+    SchedulerError, SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceStatusStore,
+    UpdateStatus,
 };
+use nethopd::{CoreReleaseBodyFetcher, CoreVersion, CoreVersionCheckError, CoreVersionChecker};
 #[cfg(feature = "subscription-update")]
 use serde_json::json;
 #[cfg(feature = "subscription-update")]
@@ -38,6 +52,128 @@ impl WorkerClock for TestClock {
 }
 
 struct TestProcess;
+
+struct FixedCoreRelease;
+
+impl CoreReleaseBodyFetcher for FixedCoreRelease {
+    fn fetch_release_body(&mut self) -> Result<Vec<u8>, CoreVersionCheckError> {
+        Ok(br#"{"tag_name":"v1.13.16","draft":false,"prerelease":false}"#.to_vec())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct CountingCoreRelease(Rc<Cell<u32>>);
+
+#[cfg(feature = "subscription-update")]
+impl CoreReleaseBodyFetcher for CountingCoreRelease {
+    fn fetch_release_body(&mut self) -> Result<Vec<u8>, CoreVersionCheckError> {
+        self.0.set(self.0.get() + 1);
+        Ok(br#"{"tag_name":"v1.13.16","draft":false,"prerelease":false}"#.to_vec())
+    }
+}
+
+struct RecordingCoreUpdateNotifier(Rc<Cell<u32>>);
+
+impl UpdateNotificationSink for RecordingCoreUpdateNotifier {
+    fn notify_core_update(&mut self) -> UpdateNotificationOutcome {
+        self.0.set(self.0.get() + 1);
+        UpdateNotificationOutcome::Posted
+    }
+}
+
+struct FixedPrivateDnsFacts(PrivateDnsMode);
+
+impl PrivateDnsFactsSource for FixedPrivateDnsFacts {
+    fn current(&mut self) -> Result<PrivateDnsStatus, PrivateDnsError> {
+        Ok(PrivateDnsStatus::from_mode(self.0))
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct FailingCoreSchedule {
+    fail_on_take: bool,
+    attempts: Rc<Cell<u32>>,
+}
+
+#[cfg(feature = "subscription-update")]
+struct TestRuleSetSchedule {
+    due: bool,
+    results: Rc<RefCell<Vec<bool>>>,
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeRuleSetSchedule for TestRuleSetSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        self.due.then_some(Duration::ZERO)
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        Ok(std::mem::take(&mut self.due))
+    }
+
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError> {
+        self.results.borrow_mut().push(succeeded);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct TestRuleSetUpdater {
+    events: Rc<RefCell<Vec<&'static str>>>,
+    unchanged: bool,
+    fail_commit: bool,
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeRuleSetUpdateSource for TestRuleSetUpdater {
+    fn prepare_update(&mut self) -> Result<RuleSetUpdatePreparation, RuleSetUpdateError> {
+        self.events.borrow_mut().push("prepare_ruleset");
+        Ok(if self.unchanged {
+            RuleSetUpdatePreparation::Unchanged
+        } else {
+            RuleSetUpdatePreparation::Prepared
+        })
+    }
+
+    fn publish_update(&mut self) -> Result<(), RuleSetUpdateError> {
+        self.events.borrow_mut().push("publish_ruleset");
+        Ok(())
+    }
+
+    fn commit_update(&mut self) -> Result<(), RuleSetUpdateError> {
+        self.events.borrow_mut().push("commit_ruleset");
+        if self.fail_commit {
+            Err(RuleSetUpdateError::Admission)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn rollback_update(&mut self) -> Result<(), RuleSetUpdateError> {
+        self.events.borrow_mut().push("rollback_ruleset");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeCoreVersionSchedule for FailingCoreSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        self.attempts.set(self.attempts.get() + 1);
+        if self.fail_on_take {
+            Err(SchedulerError::PersistenceFailed)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn record_result(&mut self, _succeeded: bool) -> Result<(), SchedulerError> {
+        Err(SchedulerError::PersistenceFailed)
+    }
+}
 
 impl CandidateProcess for TestProcess {
     fn identity(&self) -> ProcessIdentity {
@@ -69,6 +205,218 @@ impl NetworkController for TestNetwork {
         _receipt: &mut Self::Receipt,
     ) -> Result<(), ExecutionError> {
         Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct DelayedRuleSetSchedule {
+    calls: u32,
+    due_on_call: u32,
+    results: Rc<RefCell<Vec<bool>>>,
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeRuleSetSchedule for DelayedRuleSetSchedule {
+    fn next_wakeup_in(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
+    fn take_due(&mut self) -> Result<bool, SchedulerError> {
+        self.calls += 1;
+        Ok(self.calls == self.due_on_call)
+    }
+
+    fn record_result(&mut self, succeeded: bool) -> Result<(), SchedulerError> {
+        self.results.borrow_mut().push(succeeded);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetProcess {
+    events: Rc<RefCell<Vec<&'static str>>>,
+}
+
+#[cfg(feature = "subscription-update")]
+impl CandidateProcess for RuleSetProcess {
+    fn identity(&self) -> ProcessIdentity {
+        ProcessIdentity::new(7, Some(7)).unwrap()
+    }
+
+    fn is_running(&mut self) -> Result<bool, ProcessError> {
+        Ok(true)
+    }
+
+    fn stop(self) -> Result<(), ProcessError> {
+        self.events.borrow_mut().push("core_stop");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetLauncher {
+    starts: Rc<Cell<u32>>,
+    events: Rc<RefCell<Vec<&'static str>>>,
+    fail_on_start: Option<u32>,
+}
+
+#[cfg(feature = "subscription-update")]
+impl CoreLauncher for RuleSetLauncher {
+    type Process = RuleSetProcess;
+
+    fn start(&self, _config_path: &Path) -> Result<Self::Process, ProcessError> {
+        let attempt = self.starts.get() + 1;
+        self.starts.set(attempt);
+        self.events.borrow_mut().push("core_start");
+        if self.fail_on_start == Some(attempt) {
+            Err(ProcessError::SpawnFailed)
+        } else {
+            Ok(RuleSetProcess {
+                events: Rc::clone(&self.events),
+            })
+        }
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetChecker;
+
+#[cfg(feature = "subscription-update")]
+impl CandidateChecker for RuleSetChecker {
+    fn check(&self, _config_path: &Path) -> Result<(), RunnerError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetCoreHealth;
+
+#[cfg(feature = "subscription-update")]
+impl HealthProbe<RuleSetProcess> for RuleSetCoreHealth {
+    fn wait_healthy(&self, _process: &mut RuleSetProcess) -> Result<(), HealthProbeError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetCapability;
+
+#[cfg(feature = "subscription-update")]
+impl CapabilitySource for RuleSetCapability {
+    fn probe(&mut self) -> Result<CapabilityReport, CapabilityError> {
+        Ok(test_capability_report())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetDataPlaneHealth;
+
+#[cfg(feature = "subscription-update")]
+impl DataPlaneHealthProbe<RuleSetProcess> for RuleSetDataPlaneHealth {
+    fn wait_healthy(
+        &mut self,
+        _process: &mut RuleSetProcess,
+        _plan: &NetworkPlan,
+        _capabilities: &CapabilityReport,
+    ) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct RuleSetRecovery {
+    _directory: tempfile::TempDir,
+    store: GenerationStore,
+    checker: RuleSetChecker,
+    launcher: RuleSetLauncher,
+    health: RuleSetCoreHealth,
+    capability: RuleSetCapability,
+    data_health: RuleSetDataPlaneHealth,
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuleSetRecovery {
+    fn new(
+        events: Rc<RefCell<Vec<&'static str>>>,
+        starts: Rc<Cell<u32>>,
+        fail_on_start: Option<u32>,
+    ) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let store = GenerationStore::new(directory.path()).unwrap();
+        let outbound = TerminalOutbound::new(
+            "fixture",
+            "trojan",
+            BTreeMap::from([
+                ("server".to_owned(), json!("example.com")),
+                ("server_port".to_owned(), json!(443)),
+                ("password".to_owned(), json!("fixture-only")),
+            ]),
+        )
+        .unwrap();
+        let candidate = Candidate::new(
+            GenerationId::new(1).unwrap(),
+            ManagedConfig::from_outbounds(vec![outbound]).unwrap(),
+        );
+        store.publish(&candidate, |_| Ok(())).unwrap();
+        Self {
+            _directory: directory,
+            store,
+            checker: RuleSetChecker,
+            launcher: RuleSetLauncher {
+                starts,
+                events,
+                fail_on_start,
+            },
+            health: RuleSetCoreHealth,
+            capability: RuleSetCapability,
+            data_health: RuleSetDataPlaneHealth,
+        }
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeRecoverySource<TestNetwork> for RuleSetRecovery {
+    type Process = RuleSetProcess;
+
+    fn recover(
+        &mut self,
+        network: &mut TestNetwork,
+        policy: &CapturePolicy,
+        slot: PlanSlot,
+    ) -> Result<Option<ActiveRuntime<Self::Process, ()>>, WorkerRecoveryError> {
+        CurrentGenerationActivator::new(
+            &self.store,
+            &self.checker,
+            &self.launcher,
+            &self.health,
+            &mut self.capability,
+            network,
+            &mut self.data_health,
+        )
+        .recover(policy, slot)
+    }
+
+    fn recover_generation(
+        &mut self,
+        network: &mut TestNetwork,
+        policy: &CapturePolicy,
+        slot: PlanSlot,
+        generation: GenerationId,
+    ) -> Result<Option<ActiveRuntime<Self::Process, ()>>, WorkerRecoveryError> {
+        CurrentGenerationActivator::new(
+            &self.store,
+            &self.checker,
+            &self.launcher,
+            &self.health,
+            &mut self.capability,
+            network,
+            &mut self.data_health,
+        )
+        .recover_generation(generation, policy, slot)
+    }
+
+    fn probe(&mut self) -> Result<CapabilityReport, CapabilityError> {
+        self.capability.probe()
     }
 }
 
@@ -123,6 +471,55 @@ impl RuntimeUpdateSource for TestUpdater {
 
     fn discard(&mut self, _prepared: Self::Prepared) -> Result<(), RuntimeUpdateError> {
         self.events.borrow_mut().push("discard");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+struct SelectingUpdater {
+    selected: Rc<RefCell<Vec<Option<String>>>>,
+}
+
+#[cfg(feature = "subscription-update")]
+struct FixedWifiFacts;
+
+#[cfg(feature = "subscription-update")]
+impl WifiFactsSource for FixedWifiFacts {
+    fn current(&mut self) -> Result<WifiNetworkFacts, WifiSceneError> {
+        WifiNetworkFacts::new(
+            Some("Trusted Home".into()),
+            Some("aa:bb:cc:dd:ee:ff".into()),
+        )
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeUpdateSource for SelectingUpdater {
+    type Prepared = ();
+
+    fn request_source_update(&mut self, source_id: Option<&str>) -> Result<(), RuntimeUpdateError> {
+        self.selected
+            .borrow_mut()
+            .push(source_id.map(str::to_owned));
+        Ok(())
+    }
+
+    fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError> {
+        Ok(())
+    }
+
+    fn generation(&self, _prepared: &Self::Prepared) -> nethop_core::GenerationId {
+        nethop_core::GenerationId::new(2).unwrap()
+    }
+
+    fn commit(
+        &mut self,
+        _prepared: Self::Prepared,
+    ) -> Result<nethop_core::GenerationId, RuntimeUpdateError> {
+        Ok(nethop_core::GenerationId::new(2).unwrap())
+    }
+
+    fn discard(&mut self, _prepared: Self::Prepared) -> Result<(), RuntimeUpdateError> {
         Ok(())
     }
 }
@@ -323,7 +720,8 @@ fn missing_current_generation_stays_available_in_fail_open_direct() {
         policy(),
         PlanSlot::A,
         WorkerRuntimeLimits::default(),
-    );
+    )
+    .with_private_dns_source(FixedPrivateDnsFacts(PrivateDnsMode::Strict));
 
     assert_eq!(application.next_wakeup_in(), Duration::ZERO);
     application.run_ready().unwrap();
@@ -332,7 +730,335 @@ fn missing_current_generation_stays_available_in_fail_open_direct() {
     assert_eq!(application.next_wakeup_in(), Duration::from_secs(1));
 
     let status = application.handle(request("status", ControlMethod::StatusGet));
-    assert_eq!(status.result().unwrap()["state"], "fail_open_direct");
+    let status = status.result().unwrap();
+    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["state"], "fail_open_direct");
+    assert_eq!(status["runtime"]["process_health"], "stopped");
+    assert_eq!(status["capture"]["active"], false);
+    assert_eq!(status["capture"]["dns_guard"], "inactive");
+    assert_eq!(status["dns_split"]["mode"], "strict");
+    assert_eq!(status["dns_split"]["dns_split"], "degraded_private_dns");
+    assert_eq!(status["operational"]["core_api"], "unavailable");
+}
+
+#[test]
+fn core_version_check_is_read_only_and_notifies_once_per_latest_version() {
+    let notifications = Rc::new(Cell::new(0));
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_core_version_source(CoreVersionChecker::new(
+        FixedCoreRelease,
+        CoreVersion::parse("1.13.15").unwrap(),
+    ))
+    .with_core_update_notifier(RecordingCoreUpdateNotifier(Rc::clone(&notifications)));
+    application.run_ready().unwrap();
+    let state_before = application.snapshot();
+
+    let first = application.handle(request(
+        "core-version-first",
+        ControlMethod::CoreVersionCheck,
+    ));
+    assert!(first.ok());
+    assert_eq!(first.result().unwrap()["status"]["current"], "1.13.15");
+    assert_eq!(first.result().unwrap()["status"]["latest"], "1.13.16");
+    assert_eq!(first.result().unwrap()["notification"], "posted");
+
+    let second = application.handle(request(
+        "core-version-second",
+        ControlMethod::CoreVersionCheck,
+    ));
+    assert_eq!(second.result().unwrap()["notification"], "already_notified");
+    assert_eq!(notifications.get(), 1);
+    assert_eq!(application.snapshot(), state_before);
+
+    let status = application.handle(request("status-after-version", ControlMethod::StatusGet));
+    assert_eq!(status.result().unwrap()["core_update"]["latest"], "1.13.16");
+    assert_eq!(
+        status.result().unwrap()["core_update"]["availability"],
+        "available"
+    );
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn due_core_version_check_runs_once_and_reschedules_without_touching_proxy_state() {
+    let checks = Rc::new(Cell::new(0));
+    let notifications = Rc::new(Cell::new(0));
+    let schedule = PersistentCoreVersionSchedule::load(InMemoryScheduleStore::default()).unwrap();
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_core_version_source(CoreVersionChecker::new(
+        CountingCoreRelease(Rc::clone(&checks)),
+        CoreVersion::parse("1.13.15").unwrap(),
+    ))
+    .with_core_update_notifier(RecordingCoreUpdateNotifier(Rc::clone(&notifications)))
+    .with_core_version_schedule(schedule);
+
+    application.run_ready().unwrap();
+    let state_after_first_check = application.snapshot();
+    application.run_ready().unwrap();
+
+    assert_eq!(checks.get(), 1);
+    assert_eq!(notifications.get(), 1);
+    assert_eq!(application.snapshot(), state_after_first_check);
+    let status = application.handle(request("status-auto", ControlMethod::StatusGet));
+    assert_eq!(
+        status.result().unwrap()["core_update"]["availability"],
+        "available"
+    );
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn core_version_schedule_failures_are_best_effort_and_never_stop_the_worker() {
+    for fail_on_take in [true, false] {
+        let attempts = Rc::new(Cell::new(0));
+        let mut application = WorkerApplication::new(
+            TestRecovery::default(),
+            TestNetwork,
+            TestVerifier,
+            TestClock(Rc::new(Cell::new(Duration::ZERO))),
+            policy(),
+            PlanSlot::A,
+            WorkerRuntimeLimits::default(),
+        )
+        .with_core_version_source(CoreVersionChecker::new(
+            FixedCoreRelease,
+            CoreVersion::parse("1.13.15").unwrap(),
+        ))
+        .with_core_version_schedule(FailingCoreSchedule {
+            fail_on_take,
+            attempts: Rc::clone(&attempts),
+        });
+
+        application.run_ready().unwrap();
+        application.run_ready().unwrap();
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(application.next_wakeup_in(), Duration::from_secs(60 * 60));
+        assert_eq!(
+            application.snapshot().state,
+            nethop_core::RuntimeState::FailOpenDirect
+        );
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn due_rule_set_update_commits_without_restart_when_proxy_is_inactive() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let schedule_results = Rc::new(RefCell::new(Vec::new()));
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_rule_set_update_source(TestRuleSetUpdater {
+        events: Rc::clone(&events),
+        unchanged: false,
+        fail_commit: false,
+    })
+    .with_rule_set_schedule(TestRuleSetSchedule {
+        due: true,
+        results: Rc::clone(&schedule_results),
+    });
+
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["prepare_ruleset", "publish_ruleset", "commit_ruleset"]
+    );
+    assert_eq!(schedule_results.borrow().as_slice(), [true]);
+    assert_eq!(application.snapshot().state, RuntimeState::FailOpenDirect);
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn failed_inactive_rule_set_commit_rolls_back_and_reschedules_failure() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let schedule_results = Rc::new(RefCell::new(Vec::new()));
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_rule_set_update_source(TestRuleSetUpdater {
+        events: Rc::clone(&events),
+        unchanged: false,
+        fail_commit: true,
+    })
+    .with_rule_set_schedule(TestRuleSetSchedule {
+        due: true,
+        results: Rc::clone(&schedule_results),
+    });
+
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            "prepare_ruleset",
+            "publish_ruleset",
+            "commit_ruleset",
+            "rollback_ruleset"
+        ]
+    );
+    assert_eq!(schedule_results.borrow().as_slice(), [false]);
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn manual_rule_set_update_uses_the_same_transaction_and_status_contract() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let schedule_results = Rc::new(RefCell::new(Vec::new()));
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_rule_set_update_source(TestRuleSetUpdater {
+        events: Rc::clone(&events),
+        unchanged: false,
+        fail_commit: false,
+    })
+    .with_rule_set_schedule(TestRuleSetSchedule {
+        due: false,
+        results: Rc::clone(&schedule_results),
+    });
+    application.run_ready().unwrap();
+
+    let accepted = application.handle(request("ruleset-update", ControlMethod::RuleSetUpdate));
+    assert_eq!(accepted.result().unwrap()["accepted"], true);
+    application.run_ready().unwrap();
+
+    let status = application.handle(request("ruleset-status", ControlMethod::RuleSetStatus));
+    let result = status.result().unwrap();
+    assert_eq!(result["available"], true);
+    assert_eq!(result["state"], "updated_inactive");
+    assert!(result["last_attempt_wall_seconds"].is_i64());
+    assert!(result["last_success_wall_seconds"].is_i64());
+    assert_eq!(result["diagnostic_code"], serde_json::Value::Null);
+    assert_eq!(schedule_results.borrow().as_slice(), [true]);
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn running_proxy_commits_rule_sets_only_after_the_restarted_core_is_healthy() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let starts = Rc::new(Cell::new(0));
+    let schedule_results = Rc::new(RefCell::new(Vec::new()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&events), Rc::clone(&starts), None);
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_rule_set_update_source(TestRuleSetUpdater {
+        events: Rc::clone(&events),
+        unchanged: false,
+        fail_commit: false,
+    })
+    .with_rule_set_schedule(DelayedRuleSetSchedule {
+        calls: 0,
+        due_on_call: 2,
+        results: Rc::clone(&schedule_results),
+    });
+
+    application.run_ready().unwrap();
+    assert_eq!(application.snapshot().state, RuntimeState::RunningTproxy);
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            "core_start",
+            "prepare_ruleset",
+            "core_stop",
+            "publish_ruleset",
+            "core_start",
+            "commit_ruleset"
+        ]
+    );
+    assert_eq!(starts.get(), 2);
+    assert_eq!(schedule_results.borrow().as_slice(), [true]);
+    assert_eq!(application.snapshot().state, RuntimeState::RunningTproxy);
+}
+
+#[cfg(feature = "subscription-update")]
+#[test]
+fn failed_rule_set_restart_restores_the_old_pair_and_restarts_previous_generation() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let starts = Rc::new(Cell::new(0));
+    let schedule_results = Rc::new(RefCell::new(Vec::new()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&events), Rc::clone(&starts), Some(2));
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_rule_set_update_source(TestRuleSetUpdater {
+        events: Rc::clone(&events),
+        unchanged: false,
+        fail_commit: false,
+    })
+    .with_rule_set_schedule(DelayedRuleSetSchedule {
+        calls: 0,
+        due_on_call: 2,
+        results: Rc::clone(&schedule_results),
+    });
+
+    application.run_ready().unwrap();
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            "core_start",
+            "prepare_ruleset",
+            "core_stop",
+            "publish_ruleset",
+            "core_start",
+            "rollback_ruleset",
+            "core_start"
+        ]
+    );
+    assert_eq!(starts.get(), 3);
+    assert_eq!(schedule_results.borrow().as_slice(), [false]);
+    assert_eq!(application.snapshot().state, RuntimeState::RunningTproxy);
 }
 
 #[test]
@@ -512,6 +1238,37 @@ fn update_if_needed_skips_a_matching_generation_without_preparing() {
 
 #[test]
 #[cfg(feature = "subscription-update")]
+fn subscription_update_forwards_the_exact_daemon_source_id() {
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let updater = SelectingUpdater {
+        selected: Rc::clone(&selected),
+    };
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater);
+    let source_id = "src_01010101010101010101010101010101";
+    let request = request("source-update", ControlMethod::SubscriptionUpdate)
+        .with_params(ControlParams::subscription_update(
+            false,
+            false,
+            Some(source_id.to_owned()),
+        ))
+        .unwrap();
+
+    assert!(application.handle(request).ok());
+    application.run_ready().unwrap();
+    assert_eq!(selected.borrow().as_slice(), [Some(source_id.to_owned())]);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
 fn superseded_prepared_update_is_discarded_before_core_or_network_activation() {
     let updates = Rc::new(RefCell::new(Vec::new()));
     let attempts = Rc::new(RefCell::new(Vec::new()));
@@ -572,7 +1329,7 @@ fn enabling_a_configured_service_without_a_generation_attempts_initial_update() 
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 1\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n",
+        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -628,7 +1385,7 @@ fn stale_manager_apply_returns_current_observed_digest_without_sensitive_values(
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 1\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
+        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -654,7 +1411,7 @@ fn stale_manager_apply_returns_current_observed_digest_without_sensitive_values(
         .with_params(ControlParams::config_document(
             "0".repeat(64),
             json!({
-                "schema_version": 1,
+                "schema_version": 2,
                 "service": {"enabled": true},
                 "subscriptions": {"sources": [{"name": "Primary", "url": "https://new-secret.example/token"}]}
             }),
@@ -687,7 +1444,7 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 1\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
+        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -697,6 +1454,7 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
     let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
     let config_runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let source_status = SourceStatusStore::open(directory.path().join("nethop.db")).unwrap();
     let mut application = WorkerApplication::new(
         TestRecovery::default(),
         TestNetwork,
@@ -706,7 +1464,8 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
         PlanSlot::A,
         WorkerRuntimeLimits::default(),
     )
-    .with_configuration(config_runtime, false);
+    .with_configuration(config_runtime, false)
+    .with_source_status_store(source_status);
 
     let hello = request("hello", ControlMethod::ProtocolHello)
         .with_params(ControlParams::hello("manager-alpha".into(), 1, 1))
@@ -746,6 +1505,8 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
         .as_str()
         .unwrap();
     assert!(source_id.starts_with("src_"));
+    assert_eq!(config["source_status"][0]["source_id"], source_id);
+    assert_eq!(config["source_status"][0]["health"], "never");
     assert!(
         !serde_json::to_string(config)
             .unwrap()
@@ -759,6 +1520,19 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
             .iter()
             .any(|field| field["field_id"] == "subscriptions.sources[].source_id")
     );
+    for field_id in [
+        "routing.force_proxy_domains",
+        "routing.bypass_domains",
+        "routing.block_domains",
+    ] {
+        let field = fields
+            .iter()
+            .find(|field| field["field_id"] == field_id)
+            .unwrap_or_else(|| panic!("missing domain routing schema field: {field_id}"));
+        assert_eq!(field["value_type"], "domain_suffix_array");
+        assert_eq!(field["max_items"], 512);
+        assert_eq!(field["apply_impact"], "generation_activation");
+    }
     for field in fields {
         for key in [
             "field_id",
@@ -799,6 +1573,25 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
             && item["evidence"].is_object()
             && item["apply_effect"].is_string()
     }));
+
+    let exported = application.handle(request("export", ControlMethod::ConfigExport));
+    let exported = exported.result().unwrap();
+    assert_eq!(exported["format"], "nethop-config-backup-v1");
+    assert_eq!(exported["config_digest"], config["active_config_digest"]);
+    assert_eq!(
+        exported["document"]["subscriptions"]["sources"][0]["url"],
+        "https://secret.example/account-token"
+    );
+    assert!(
+        exported["document"]["subscriptions"]["sources"][0]
+            .get("source_id")
+            .is_none()
+    );
+    assert!(
+        serde_json::to_string(exported)
+            .unwrap()
+            .contains("account-token")
+    );
 }
 
 #[test]
@@ -812,7 +1605,7 @@ fn dry_run_prepares_and_discards_a_checked_candidate_without_capture() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 1\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[advanced]\ndry_run = true\n",
+        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[advanced]\ndry_run = true\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -851,6 +1644,69 @@ fn dry_run_prepares_and_discards_a_checked_candidate_without_capture() {
 
 #[test]
 #[cfg(feature = "subscription-update")]
+fn wifi_scene_can_transiently_disable_but_never_override_the_persistent_master_switch() {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[network.wifi_scenes]\nenabled = true\nprobe_interval_seconds = 30\n[[network.wifi_scenes.rules]]\nid = \"trusted-home\"\nssid = \"Trusted Home\"\nbssid = \"aa:bb:cc:dd:ee:ff\"\naction = \"disable_proxy\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = ConfigStore::new(&config_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let config_runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let attempts = Rc::new(RefCell::new(Vec::new()));
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let recovery = TestRecovery {
+        attempts: Rc::clone(&attempts),
+        ..TestRecovery::default()
+    };
+    let updater = TestUpdater {
+        events: Rc::clone(&updates),
+        fail_prepare: false,
+        needed: false,
+        generation: nethop_core::GenerationId::new(2).unwrap(),
+        current: true,
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater)
+    .with_wifi_facts_source(FixedWifiFacts)
+    .with_configuration(config_runtime, true);
+
+    application.run_ready().unwrap();
+    assert!(attempts.borrow().is_empty());
+    assert!(updates.borrow().is_empty());
+    assert_eq!(application.snapshot().state, RuntimeState::FailOpenDirect);
+    assert!(
+        fs::read_to_string(config_path)
+            .unwrap()
+            .contains("enabled = true")
+    );
+    let config = application.handle(request("wifi-config", ControlMethod::ConfigGet));
+    let encoded = serde_json::to_string(config.result().unwrap()).unwrap();
+    assert!(!encoded.contains("Trusted Home"));
+    assert!(!encoded.contains("aa:bb:cc"));
+    assert!(encoded.contains("ssid_configured"));
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
 fn advanced_apply_refreshes_runtime_probe_health_and_reconcile_policy() {
     use std::fs;
     #[cfg(unix)]
@@ -860,7 +1716,7 @@ fn advanced_apply_refreshes_runtime_probe_health_and_reconcile_policy() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 1\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
+        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -895,7 +1751,7 @@ fn advanced_apply_refreshes_runtime_probe_health_and_reconcile_policy() {
     .with_params(ControlParams::config_document(
         digest,
         json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "service": {"enabled": false},
             "subscriptions": {"sources": [{"name": "Primary", "url": ""}]},
             "advanced": {

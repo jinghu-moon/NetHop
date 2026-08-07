@@ -23,7 +23,8 @@ format-clash-yaml = ["parser", "dep:serde-saphyr"]
 format-singbox-json = ["parser"]
 format-surfboard = ["parser"]
 experimental-formats = ["format-surfboard"]
-fetch = ["parser", "dep:flate2", "dep:ureq", "dep:url"]
+source-url = ["dep:url"]
+fetch = ["parser", "source-url", "dep:flate2", "dep:ureq"]
 
 [dependencies]
 nethop-core = { version = "0.1.0", path = "../nethop-core" }

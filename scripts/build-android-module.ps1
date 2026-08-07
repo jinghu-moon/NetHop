@@ -205,6 +205,14 @@ $binaryRecords = foreach ($binary in @("nethopd", "nethopctl", "sing-box")) {
         sha256 = Get-Sha256 $path
     }
 }
+$ruleSetRecords = foreach ($ruleSet in @("cn-domain.srs", "cn-ip.srs")) {
+    $path = Join-Path $stage "rulesets/$ruleSet"
+    [ordered]@{
+        path = "rulesets/$ruleSet"
+        bytes = (Get-Item -LiteralPath $path).Length
+        sha256 = Get-Sha256 $path
+    }
+}
 $manifest = [ordered]@{
     schema = "nethop.android-build.v1"
     target = $target
@@ -230,11 +238,13 @@ $manifest = [ordered]@{
     reproducible = ($coreOrigin -eq "source") -and $goVersionMatches -and -not [bool]$rustDirty
     development_override = (-not $goVersionMatches) -and -not [bool]$SingBoxArchive
     binaries = @($binaryRecords)
+    rule_sets = @($ruleSetRecords)
 }
 $manifestPath = Join-Path $stage "build-manifest.json"
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
 
 $checksumEntries = @($binaryRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
+$checksumEntries += @($ruleSetRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
 $checksumEntries += "$(Get-Sha256 $manifestPath)  build-manifest.json"
 $checksumEntries | Set-Content -LiteralPath (Join-Path $stage "checksums.sha256") -Encoding ascii
 foreach ($entry in $checksumEntries) {
@@ -256,7 +266,7 @@ $archiveListing = & tar -tf $zipPath
 if ($LASTEXITCODE -ne 0 -or $archiveListing -contains ".gitkeep") {
     throw "module archive layout is invalid"
 }
-foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box")) {
+foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs")) {
     if ($archiveListing -notcontains $required) {
         throw "module archive is missing: $required"
     }

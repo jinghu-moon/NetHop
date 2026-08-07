@@ -1,9 +1,9 @@
 use std::io::Cursor;
 
 use nethop_protocol::{
-    ControlError, ControlMethod, ControlParams, ControlRequest, ControlResponse, ErrorCode,
-    ErrorDomain, FrameCodec, MAX_FRAME_BYTES, PROTOCOL_VERSION, ProtocolError, RequestId,
-    StreamFrame, StreamKind, WireFrame,
+    ApplicationTarget, ConfigMutation, ControlError, ControlMethod, ControlParams, ControlRequest,
+    ControlResponse, ErrorCode, ErrorDomain, EventKind, FrameCodec, MAX_FRAME_BYTES,
+    PROTOCOL_VERSION, ProtocolError, RequestId, StreamFrame, StreamKind, WireFrame,
 };
 use serde_json::json;
 
@@ -203,6 +203,40 @@ fn subscription_update_is_a_bounded_v1_empty_params_command() {
 }
 
 #[test]
+fn local_import_preview_and_apply_are_digest_bound_documents() {
+    let document = json!({"content":"ss://example","format_hint":"auto"});
+    let preview = ControlRequest::new(request_id(), ControlMethod::SubscriptionImportPreview)
+        .with_params(ControlParams::import_document(
+            "a".repeat(64),
+            None,
+            document.clone(),
+        ))
+        .unwrap();
+    assert_eq!(preview.params().candidate_digest(), None);
+    let candidate_digest = "b".repeat(64);
+    let apply = ControlRequest::new(request_id(), ControlMethod::SubscriptionImportApply)
+        .with_params(ControlParams::import_document(
+            "a".repeat(64),
+            Some(candidate_digest.clone()),
+            document,
+        ))
+        .unwrap();
+    assert_eq!(
+        apply.params().candidate_digest(),
+        Some(candidate_digest.as_str())
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::SubscriptionImportApply)
+            .with_params(ControlParams::import_document(
+                "a".repeat(64),
+                None,
+                json!({"content":"x"}),
+            ))
+            .is_err()
+    );
+}
+
+#[test]
 fn config_reload_is_a_bounded_v1_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
@@ -214,6 +248,199 @@ fn config_reload_is_a_bounded_v1_empty_params_command() {
         br#"{"version":1,"request_id":"req-001","method":"config.reload","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
+}
+
+#[test]
+fn config_export_has_a_stable_wire_name_and_accepts_only_empty_params() {
+    let request = ControlRequest::new(request_id(), ControlMethod::ConfigExport);
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert_eq!(encoded["method"], "config.export");
+    assert!(
+        request
+            .clone()
+            .with_params(ControlParams::default())
+            .is_ok()
+    );
+
+    let invalid = request.with_params(ControlParams::event_subscription(vec![EventKind::Config]));
+    assert_eq!(invalid.unwrap_err(), ProtocolError::InvalidEnvelope);
+}
+
+#[test]
+fn core_version_check_has_a_stable_wire_name_and_accepts_only_empty_params() {
+    let request = ControlRequest::new(request_id(), ControlMethod::CoreVersionCheck);
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert_eq!(encoded["method"], "core.version_check");
+    assert!(
+        request
+            .clone()
+            .with_params(ControlParams::default())
+            .is_ok()
+    );
+    assert_eq!(
+        request
+            .with_params(ControlParams::event_subscription(vec![EventKind::Runtime]))
+            .unwrap_err(),
+        ProtocolError::InvalidEnvelope
+    );
+}
+
+#[test]
+fn rule_set_methods_have_stable_names_and_only_update_accepts_wait() {
+    let status = ControlRequest::new(request_id(), ControlMethod::RuleSetStatus);
+    let status_value = serde_json::to_value(status).unwrap();
+    assert_eq!(status_value["method"], "ruleset.status");
+
+    let update = ControlRequest::new(request_id(), ControlMethod::RuleSetUpdate)
+        .with_params(ControlParams::new(true, false))
+        .unwrap();
+    let update_value = serde_json::to_value(update).unwrap();
+    assert_eq!(update_value["method"], "ruleset.update");
+    assert_eq!(update_value["params"]["wait"], true);
+
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::RuleSetStatus)
+            .with_params(ControlParams::new(true, false))
+            .is_err()
+    );
+}
+
+#[test]
+fn operational_methods_use_stable_wire_names_and_scoped_params() {
+    let cases = [
+        (ControlMethod::NodeList, "node.list"),
+        (ControlMethod::NodeTest, "node.test"),
+        (ControlMethod::NodeSelect, "node.select"),
+        (ControlMethod::NodeExport, "node.export"),
+        (ControlMethod::ConnectionsGet, "connections.get"),
+        (ControlMethod::ConnectionClose, "connection.close"),
+        (ControlMethod::ConnectionsCloseAll, "connections.close_all"),
+        (ControlMethod::LogsGet, "logs.get"),
+        (ControlMethod::LogsClear, "logs.clear"),
+        (ControlMethod::DiagnosticsBundle, "diagnostics.bundle"),
+        (ControlMethod::TopologyGet, "topology.get"),
+        (ControlMethod::TrafficGet, "traffic.get"),
+    ];
+    for (method, wire_name) in cases {
+        let params = match method {
+            ControlMethod::NodeTest
+            | ControlMethod::NodeSelect
+            | ControlMethod::NodeExport
+            | ControlMethod::ConnectionClose => ControlParams::target("stable-id".to_owned()),
+            ControlMethod::NodeList | ControlMethod::ConnectionsGet => {
+                ControlParams::list(Some("edge".to_owned()), Some(32))
+            }
+            ControlMethod::LogsGet => ControlParams::list(None, Some(32)),
+            _ => ControlParams::default(),
+        };
+        let request = WireFrame::Request(
+            ControlRequest::new(request_id(), method)
+                .with_params(params)
+                .unwrap(),
+        );
+        let encoded = FrameCodec::encode(&request).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&encoded[4..]).unwrap();
+        assert_eq!(payload["method"], wire_name);
+        assert_eq!(FrameCodec::decode(&encoded).unwrap(), request);
+    }
+}
+
+#[test]
+fn operational_targets_are_required_bounded_and_method_scoped() {
+    for method in [
+        ControlMethod::NodeTest,
+        ControlMethod::NodeSelect,
+        ControlMethod::NodeExport,
+        ControlMethod::ConnectionClose,
+    ] {
+        assert_eq!(
+            ControlRequest::new(request_id(), method)
+                .with_params(ControlParams::default())
+                .unwrap_err(),
+            ProtocolError::InvalidEnvelope
+        );
+        assert_eq!(
+            ControlRequest::new(request_id(), method)
+                .with_params(ControlParams::target("x".repeat(129)))
+                .unwrap_err(),
+            ProtocolError::InvalidEnvelope
+        );
+    }
+    assert_eq!(
+        ControlRequest::new(request_id(), ControlMethod::StatusGet)
+            .with_params(ControlParams::target("node".to_owned()))
+            .unwrap_err(),
+        ProtocolError::InvalidEnvelope
+    );
+}
+
+#[test]
+fn operational_list_filters_are_optional_bounded_and_method_scoped() {
+    for method in [ControlMethod::NodeList, ControlMethod::ConnectionsGet] {
+        ControlRequest::new(request_id(), method)
+            .with_params(ControlParams::list(None, Some(1)))
+            .unwrap();
+        ControlRequest::new(request_id(), method)
+            .with_params(ControlParams::list(Some("x".repeat(128)), Some(128)))
+            .unwrap();
+        assert_eq!(
+            ControlRequest::new(request_id(), method)
+                .with_params(ControlParams::list(Some("x".repeat(129)), None))
+                .unwrap_err(),
+            ProtocolError::InvalidEnvelope
+        );
+        assert_eq!(
+            ControlRequest::new(request_id(), method)
+                .with_params(ControlParams::list(None, Some(0)))
+                .unwrap_err(),
+            ProtocolError::InvalidEnvelope
+        );
+    }
+    ControlRequest::new(request_id(), ControlMethod::LogsGet)
+        .with_params(ControlParams::list(None, Some(128)))
+        .unwrap();
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::LogsGet)
+            .with_params(ControlParams::list(None, Some(0)))
+            .is_err()
+    );
+    assert_eq!(
+        ControlRequest::new(request_id(), ControlMethod::TopologyGet)
+            .with_params(ControlParams::list(None, Some(10)))
+            .unwrap_err(),
+        ProtocolError::InvalidEnvelope
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::LogsGet)
+            .with_params(ControlParams::list(Some("events".into()), Some(10)))
+            .is_err()
+    );
+}
+
+#[test]
+fn close_all_and_log_clear_accept_only_empty_params() {
+    for method in [ControlMethod::ConnectionsCloseAll, ControlMethod::LogsClear] {
+        ControlRequest::new(request_id(), method)
+            .with_params(ControlParams::default())
+            .unwrap();
+        assert!(
+            ControlRequest::new(request_id(), method)
+                .with_params(ControlParams::list(None, Some(1)))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn operational_params_reject_unknown_fields() {
+    let payload =
+        br#"{"version":1,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
+    let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
+    framed.extend_from_slice(payload);
+    assert_eq!(
+        FrameCodec::decode(&framed),
+        Err(ProtocolError::InvalidEnvelope)
+    );
 }
 
 #[test]
@@ -229,6 +456,28 @@ fn bounded_wait_options_are_method_scoped_and_round_trip() {
     assert!(
         ControlRequest::new(request_id(), ControlMethod::StatusGet)
             .with_params(ControlParams::new(true, false))
+            .is_err()
+    );
+}
+
+#[test]
+fn subscription_update_source_id_is_typed_and_method_scoped() {
+    let source_id = "src_01010101010101010101010101010101".to_owned();
+    let request = ControlRequest::new(request_id(), ControlMethod::SubscriptionUpdate)
+        .with_params(ControlParams::subscription_update(
+            true,
+            false,
+            Some(source_id.clone()),
+        ))
+        .unwrap();
+    assert_eq!(request.params().source_id(), Some(source_id.as_str()));
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::StatusGet)
+            .with_params(ControlParams::subscription_update(
+                false,
+                false,
+                Some(source_id),
+            ))
             .is_err()
     );
 }
@@ -269,6 +518,74 @@ fn manager_config_methods_require_bounded_cas_documents() {
             ))
             .is_err()
     );
+}
+
+#[test]
+fn application_target_mutations_are_typed_bounded_and_round_trip() {
+    let targets = vec![
+        ApplicationTarget::Package {
+            android_user_id: 0,
+            package: "com.example.video".into(),
+        },
+        ApplicationTarget::Uid { uid: 10123 },
+    ];
+    let request = ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+        .with_params(ControlParams::mutation(
+            "a".repeat(64),
+            ConfigMutation::ReplaceApplicationTargets {
+                targets: targets.clone(),
+            },
+        ))
+        .unwrap();
+    let frame = WireFrame::Request(request);
+    assert_eq!(
+        FrameCodec::decode(&FrameCodec::encode(&frame).unwrap()).unwrap(),
+        frame
+    );
+
+    for invalid in [
+        ApplicationTarget::Uid { uid: 0 },
+        ApplicationTarget::Package {
+            android_user_id: 0,
+            package: "bad\npackage".into(),
+        },
+        ApplicationTarget::Package {
+            android_user_id: 21_475,
+            package: "com.example.work".into(),
+        },
+    ] {
+        assert_eq!(
+            ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+                .with_params(ControlParams::mutation(
+                    "a".repeat(64),
+                    ConfigMutation::AddApplicationTarget { target: invalid },
+                ))
+                .unwrap_err(),
+            ProtocolError::InvalidEnvelope
+        );
+    }
+}
+
+#[test]
+fn remove_node_mutation_accepts_only_stable_lowercase_fingerprints() {
+    let valid = ConfigMutation::RemoveNode {
+        node_id: "nh1s-0123456789abcdef".into(),
+    };
+    ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+        .with_params(ControlParams::mutation("a".repeat(64), valid))
+        .unwrap();
+    for node_id in ["node", "nh1s-0123456789ABCDEf", "nh1s-0123"] {
+        assert!(
+            ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+                .with_params(ControlParams::mutation(
+                    "a".repeat(64),
+                    ConfigMutation::RemoveNode {
+                        node_id: node_id.into(),
+                    },
+                ))
+                .is_err()
+        );
+    }
 }
 
 #[test]

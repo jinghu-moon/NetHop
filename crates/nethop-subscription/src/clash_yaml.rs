@@ -10,7 +10,7 @@ use crate::{
     limits::ParserLimits,
     normalize::normalize_bytes,
     payload::{FormatHint, SourceId},
-    protocol::SourceRef,
+    protocol::{ProxyProtocol, SourceRef},
     semantic::{NodeSpec, semantic_diagnostic, validate_node_spec},
 };
 
@@ -286,6 +286,7 @@ struct ClashNode {
     server: Option<String>,
     port: Option<u16>,
     uuid: Option<String>,
+    username: Option<String>,
     password: Option<String>,
     cipher: Option<String>,
     #[serde(default)]
@@ -306,6 +307,28 @@ struct ClashNode {
     plugin_options: Option<ClashPluginOptions>,
     #[serde(rename = "udp-over-tcp")]
     udp_over_tcp: Option<bool>,
+    ports: Option<String>,
+    #[serde(rename = "hop-interval")]
+    hop_interval: Option<ClashScalar>,
+    up: Option<ClashScalar>,
+    down: Option<ClashScalar>,
+    #[serde(rename = "congestion-controller")]
+    congestion_controller: Option<String>,
+    #[serde(rename = "udp-relay-mode")]
+    udp_relay_mode: Option<String>,
+    #[serde(rename = "udp-over-stream")]
+    udp_over_stream: Option<bool>,
+    #[serde(rename = "zero-rtt")]
+    zero_rtt: Option<bool>,
+    #[serde(rename = "heartbeat-interval")]
+    heartbeat_interval: Option<ClashScalar>,
+    #[serde(rename = "idle-session-check-interval")]
+    idle_session_check_interval: Option<String>,
+    #[serde(rename = "idle-session-timeout")]
+    idle_session_timeout: Option<String>,
+    #[serde(rename = "min-idle-session")]
+    min_idle_session: Option<u32>,
+    fingerprint: Option<String>,
     obfs: Option<String>,
     #[serde(rename = "obfs-password")]
     obfs_password: Option<String>,
@@ -313,6 +336,8 @@ struct ClashNode {
     grpc_options: Option<GrpcOptions>,
     #[serde(rename = "ws-opts")]
     ws_options: Option<WsOptions>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, serde::de::IgnoredAny>,
 }
@@ -334,8 +359,21 @@ struct WsOptions {
 struct ClashPluginOptions {
     mode: Option<String>,
     host: Option<String>,
+    path: Option<String>,
+    tls: Option<bool>,
+    mux: Option<u16>,
     #[serde(flatten)]
     unknown: BTreeMap<String, serde::de::IgnoredAny>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ClashScalar {
+    Text(String),
+    Unsigned(u64),
+    Signed(i64),
+    Float(f64),
+    Boolean(bool),
 }
 
 fn clash_node_spec(
@@ -345,11 +383,13 @@ fn clash_node_spec(
     location: Option<SourceLocation>,
 ) -> Result<NodeSpec, DiagnosticCode> {
     let protocol = node.protocol.ok_or(DiagnosticCode::MissingRequiredField)?;
+    let protocol_kind = protocol.parse::<ProxyProtocol>().ok();
     let server = node.server.ok_or(DiagnosticCode::MissingRequiredField)?;
     let port = node.port.ok_or(DiagnosticCode::MissingRequiredField)?;
     let mut spec = NodeSpec::minimal(protocol, server, port);
     spec.display_name = node.name;
     spec.uuid = node.uuid;
+    spec.username = node.username;
     spec.password = node.password;
     spec.method = node.cipher;
     spec.tls = node.tls;
@@ -370,10 +410,29 @@ fn clash_node_spec(
     });
     if let Some(plugin_options) = node.plugin_options {
         if let Some(mode) = plugin_options.mode {
-            spec.plugin_options.insert("obfs".into(), mode);
+            let key = if spec.plugin.as_deref() == Some("obfs-local") {
+                "obfs"
+            } else {
+                "mode"
+            };
+            spec.plugin_options.insert(key.into(), mode);
         }
         if let Some(host) = plugin_options.host {
-            spec.plugin_options.insert("obfs-host".into(), host);
+            let key = if spec.plugin.as_deref() == Some("obfs-local") {
+                "obfs-host"
+            } else {
+                "host"
+            };
+            spec.plugin_options.insert(key.into(), host);
+        }
+        if let Some(path) = plugin_options.path {
+            spec.plugin_options.insert("path".into(), path);
+        }
+        if let Some(tls) = plugin_options.tls {
+            spec.plugin_options.insert("tls".into(), tls.to_string());
+        }
+        if let Some(mux) = plugin_options.mux {
+            spec.plugin_options.insert("mux".into(), mux.to_string());
         }
         if let Some(field) = plugin_options.unknown.keys().next() {
             spec.unknown_critical_field = Some(format!("plugin-opts.{field}"));
@@ -381,6 +440,63 @@ fn clash_node_spec(
     }
     spec.obfs = node.obfs;
     spec.obfs_password = node.obfs_password;
+    spec.server_ports = node
+        .ports
+        .map(|ports| {
+            ports
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    spec.hop_interval = node
+        .hop_interval
+        .as_ref()
+        .map(normalize_hop_interval)
+        .transpose()?;
+    spec.up_mbps = node
+        .up
+        .as_ref()
+        .map(ClashScalar::as_text)
+        .transpose()?
+        .as_deref()
+        .map(parse_bandwidth_mbps)
+        .transpose()?;
+    spec.down_mbps = node
+        .down
+        .as_ref()
+        .map(ClashScalar::as_text)
+        .transpose()?
+        .as_deref()
+        .map(parse_bandwidth_mbps)
+        .transpose()?;
+    spec.congestion_control = node.congestion_controller;
+    spec.udp_relay_mode = node.udp_relay_mode;
+    spec.udp_over_stream = node.udp_over_stream.unwrap_or(false);
+    spec.zero_rtt_handshake = node.zero_rtt.unwrap_or(false);
+    spec.heartbeat = node
+        .heartbeat_interval
+        .as_ref()
+        .map(normalize_heartbeat_interval)
+        .transpose()?;
+    spec.idle_session_check_interval = node.idle_session_check_interval;
+    spec.idle_session_timeout = node.idle_session_timeout;
+    spec.min_idle_session = node.min_idle_session;
+    if protocol_kind == Some(ProxyProtocol::Http) {
+        spec.http_headers = node.headers;
+    } else if !node.headers.is_empty() {
+        spec.unknown_critical_field = Some("headers".into());
+    }
+    if protocol_kind == Some(ProxyProtocol::Socks) {
+        spec.socks_version = Some("5".into());
+    }
+    if node.fingerprint.is_some() {
+        // Mihomo fingerprint pins the certificate DER hash, while sing-box
+        // 1.13.15 accepts the public-key hash in a different encoding.
+        spec.unknown_critical_field = Some("fingerprint".into());
+    }
     if let Some(grpc) = node.grpc_options {
         spec.service_name = grpc.service_name;
     }
@@ -411,10 +527,74 @@ fn clash_node_spec(
     Ok(spec)
 }
 
+fn parse_bandwidth_mbps(value: &str) -> Result<u32, DiagnosticCode> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let number = normalized
+        .strip_suffix("mbps")
+        .unwrap_or(&normalized)
+        .trim();
+    if number.is_empty() {
+        return Err(DiagnosticCode::UnsupportedSemantics);
+    }
+    number
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(DiagnosticCode::UnsupportedSemantics)
+}
+
+impl ClashScalar {
+    fn as_text(&self) -> Result<String, DiagnosticCode> {
+        match self {
+            Self::Text(value) => Ok(value.clone()),
+            Self::Unsigned(value) => Ok(value.to_string()),
+            Self::Signed(value) if *value >= 0 => Ok(value.to_string()),
+            Self::Float(value) if value.is_finite() && *value >= 0.0 => Ok(value.to_string()),
+            Self::Signed(_) | Self::Float(_) => Err(DiagnosticCode::UnsupportedSemantics),
+            Self::Boolean(value) => {
+                let _ = value;
+                Err(DiagnosticCode::UnsupportedSemantics)
+            }
+        }
+    }
+}
+
+fn normalize_hop_interval(value: &ClashScalar) -> Result<String, DiagnosticCode> {
+    let text = value.as_text()?.trim().to_owned();
+    if text.is_empty() || text.contains('-') {
+        return Err(DiagnosticCode::UnsupportedSemantics);
+    }
+    if text.chars().all(|character| character.is_ascii_digit()) {
+        return Ok(format!("{text}s"));
+    }
+    Ok(text)
+}
+
+fn normalize_heartbeat_interval(value: &ClashScalar) -> Result<String, DiagnosticCode> {
+    let text = value.as_text()?.trim().to_owned();
+    if text.is_empty() {
+        return Err(DiagnosticCode::UnsupportedSemantics);
+    }
+    if text.chars().all(|character| character.is_ascii_digit()) {
+        return Ok(format!("{text}ms"));
+    }
+    Ok(text)
+}
+
 fn is_critical_unknown_field(field: &str) -> bool {
     matches!(
         field,
-        "xhttp-opts" | "reality-opts" | "port-range" | "tfo" | "smux"
+        "xhttp-opts"
+            | "reality-opts"
+            | "port-range"
+            | "tfo"
+            | "smux"
+            | "certificate"
+            | "private-key"
+            | "name-cert-verify"
+            | "dialer-proxy"
+            | "interface-name"
+            | "routing-mark"
     )
 }
 

@@ -20,6 +20,8 @@ pub mod secret;
 pub mod semantic;
 #[cfg(feature = "format-singbox-json")]
 pub mod singbox_json;
+#[cfg(feature = "source-url")]
+pub mod source_url;
 #[cfg(feature = "format-surfboard")]
 pub mod surfboard;
 pub mod uri;
@@ -29,7 +31,9 @@ pub use base64_container::{
     Base64ContainerError, Base64Variant, DecodedSubscription, decode_base64,
     decode_base64_and_detect, decode_base64_at_depth,
 };
-pub use capability::{CapabilityEntry, CapabilityEvidence, CapabilityMatrix, CapabilityQuery};
+pub use capability::{
+    CapabilityEntry, CapabilityEvidence, CapabilityMatrix, CapabilityQuery, PINNED_SING_BOX_VERSION,
+};
 #[cfg(feature = "format-clash-yaml")]
 pub use clash_yaml::{ClashYamlError, parse_clash_yaml, yaml_options};
 pub use core_adapter::{
@@ -48,7 +52,7 @@ pub use fetch::{
     FetchEndpoint, FetchEndpointKind, FetchError, FetchOutcome, FetchPolicy, FetchPolicyError,
     FetchRequest, FetchTimeouts, SourceCache, UREQ_SECURITY_ADAPTER_VERSION, decode_response_body,
     is_denied_ssrf_address, next_redirect, validate_peer_address, validate_peer_in_approved_set,
-    validate_resolved_addresses, validate_response_limits, validate_source_url,
+    validate_resolved_addresses, validate_response_limits,
 };
 pub use ipc::{
     ACTIVE_OUTBOUND_BASELINE, CONVERSION_NODE_LIMIT, CandidateStatus, IpcPayloadOrigin,
@@ -66,16 +70,18 @@ pub use payload::{
 };
 pub use pipeline::{
     CURRENT_FINGERPRINT_SCHEMA, CURRENT_REPORT_SCHEMA_VERSION, CompactItemReport, CompactStatus,
-    ConversionReport, ConversionSummary, DedupedNode, NodeDisplayId, NodeFingerprint,
-    ReportCompatibility, ReportReadError, SourceBatch, SourceInput, SourceOutcome,
-    StableConversion, VersionedReport, canonical_node_bytes, compose_outbound,
-    compose_outbounds_json, convert_stable_sources, dedupe_sources, fingerprint_node,
-    read_versioned_report, report_from_adapter, write_versioned_report,
+    ConversionReport, ConversionSummary, DedupedNode, FilteredSourceInput, NodeDisplayId,
+    NodeFilter, NodeFilterError, NodeFingerprint, ReportCompatibility, ReportReadError,
+    SourceBatch, SourceInput, SourceOutcome, StableConversion, VersionedReport,
+    canonical_node_bytes, compose_outbound, compose_outbounds_json, convert_filtered_sources,
+    convert_stable_sources, dedupe_sources, fingerprint_node, read_versioned_report,
+    report_from_adapter, write_versioned_report,
 };
 pub use protocol::{
-    BoundedText, Capabilities, Credentials, DisplayName, Endpoint, Hysteria2Obfs, PluginSpec,
-    ProtocolOptions, ProxyNode, ProxyProtocol, RealityOptions, SourceRef, TlsOptions,
-    TransportKind, TransportOptions, UdpOverTcpOptions, UnvalidatedNode, UuidValue,
+    AnyTlsOptions, BoundedText, Capabilities, Credentials, DisplayName, Endpoint, HttpOptions,
+    Hysteria2Obfs, Hysteria2Options, PluginSpec, ProtocolOptions, ProxyNode, ProxyProtocol,
+    RealityOptions, SocksOptions, SourceRef, TlsOptions, TransportKind, TransportOptions,
+    TuicOptions, UdpOverTcpOptions, UnvalidatedNode, UuidValue,
 };
 pub use secret::SecretString;
 pub use semantic::{
@@ -84,6 +90,8 @@ pub use semantic::{
 };
 #[cfg(feature = "format-singbox-json")]
 pub use singbox_json::{SingboxJsonError, parse_singbox_json};
+#[cfg(feature = "source-url")]
+pub use source_url::{SourceUrlError, validate_source_url};
 #[cfg(feature = "format-surfboard")]
 pub use surfboard::{SurfboardIniError, parse_surfboard_ini};
 pub use uri::{

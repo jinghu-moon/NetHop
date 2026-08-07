@@ -4,7 +4,7 @@ use nethopd::{ConfigError, ConfigStore};
 use tempfile::tempdir;
 
 fn valid_config() -> &'static str {
-    r#"schema_version = 1
+    r#"schema_version = 2
 
 [service]
 enabled = true
@@ -102,7 +102,7 @@ fn source_name_and_file_limits_are_bounded_before_runtime_use() {
             "name = \"Primary\"",
             &format!("name = \"{}\"", "x".repeat(129)),
         ),
-        "schema_version = 1\n[service]\nenabled = true\n[subscriptions]\nsources = []\n".to_owned(),
+        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\nsources = []\n".to_owned(),
     ] {
         write_private(&path, &contents);
         assert!(ConfigStore::new(&path).unwrap().load().is_err());
@@ -145,7 +145,7 @@ fn service_enabled_is_persisted_as_canonical_toml_with_cas() {
 }
 
 #[test]
-fn module_default_is_the_complete_v1_toml_schema() {
+fn module_default_is_the_complete_v2_toml_schema() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../module/defaults/nethop.toml")
         .canonicalize()
@@ -158,11 +158,7 @@ fn module_default_is_the_complete_v1_toml_schema() {
     assert_eq!(snapshot.effective().sources().len(), 2);
     assert_eq!(snapshot.effective().sources()[0].name().as_str(), "Primary");
     assert!(snapshot.effective().sources()[0].enabled());
-    assert!(
-        snapshot.effective().sources()[0]
-            .url()
-            .starts_with("https://")
-    );
+    assert!(snapshot.effective().sources()[0].url().is_empty());
     assert!(!snapshot.effective().sources()[1].enabled());
     assert_eq!(
         snapshot.effective().proxy().urltest().interval_minutes(),

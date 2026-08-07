@@ -1,6 +1,8 @@
 use std::{collections::HashSet, fmt, fs, io::Read, path::PathBuf};
 
-use nethop_subscription::{Digest, FormatHint, RequestProfile, SourceId};
+use nethop_subscription::{
+    Digest, FormatHint, NodeFilter, ProxyProtocol, RequestProfile, SourceId,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -143,6 +145,7 @@ impl SourceRegistry {
                 mirrors: source.mirrors().to_vec(),
                 expected_format: source.format_hint().parser_hint(),
                 request_profile: source.request_profile(),
+                filter: source.filter().clone(),
             });
         }
 
@@ -276,6 +279,7 @@ fn source_config_from_binding(
             mirrors: source.mirrors().to_vec(),
             expected_format: source.format_hint().parser_hint(),
             request_profile: source.request_profile(),
+            filter: source.filter().clone(),
         });
     }
     Ok(SourceConfig {
@@ -341,6 +345,7 @@ pub struct SourceDefinition {
     mirrors: Vec<String>,
     expected_format: FormatHint,
     request_profile: RequestProfile,
+    filter: NodeFilter,
 }
 
 impl SourceDefinition {
@@ -375,6 +380,10 @@ impl SourceDefinition {
     pub const fn request_profile(&self) -> RequestProfile {
         self.request_profile
     }
+
+    pub const fn filter(&self) -> &NodeFilter {
+        &self.filter
+    }
 }
 
 impl fmt::Debug for SourceDefinition {
@@ -388,6 +397,13 @@ impl fmt::Debug for SourceDefinition {
             .field("mirror_count", &self.mirrors.len())
             .field("expected_format", &self.expected_format)
             .field("request_profile", &self.request_profile)
+            .field(
+                "filter_rule_count",
+                &(self.filter.include_names().len()
+                    + self.filter.exclude_names().len()
+                    + self.filter.excluded_node_ids().len()
+                    + self.filter.protocols().len()),
+            )
             .finish()
     }
 }
@@ -470,7 +486,10 @@ fn allocate_id(
         entropy.fill(&mut bytes)?;
         let value = format!("src_{}", hex(&bytes));
         let id = SourceId::new(value).map_err(|_| SourceRegistryError::InvalidRegistry)?;
-        if !assigned.contains(&id) && previous.iter().all(|entry| entry.source_id != id) {
+        if id != crate::ManualSource::source_id()
+            && !assigned.contains(&id)
+            && previous.iter().all(|entry| entry.source_id != id)
+        {
             return Ok(id);
         }
     }
@@ -483,7 +502,7 @@ fn digest(value: &str) -> String {
 
 fn source_config_digest(sources: &[SourceDefinition]) -> String {
     let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"nethop-source-config-v1\0");
+    canonical.extend_from_slice(b"nethop-source-config-v3\0");
     for source in sources {
         push_field(&mut canonical, source.id.as_str().as_bytes());
         canonical.push(u8::from(source.enabled));
@@ -494,8 +513,39 @@ fn source_config_digest(sources: &[SourceDefinition]) -> String {
         for mirror in &source.mirrors {
             push_field(&mut canonical, digest(mirror).as_bytes());
         }
+        canonical.extend_from_slice(&(source.filter.include_names().len() as u32).to_be_bytes());
+        for pattern in source.filter.include_names() {
+            push_field(&mut canonical, pattern.as_bytes());
+        }
+        canonical.extend_from_slice(&(source.filter.exclude_names().len() as u32).to_be_bytes());
+        for pattern in source.filter.exclude_names() {
+            push_field(&mut canonical, pattern.as_bytes());
+        }
+        canonical
+            .extend_from_slice(&(source.filter.excluded_node_ids().len() as u32).to_be_bytes());
+        for node_id in source.filter.excluded_node_ids() {
+            push_field(&mut canonical, node_id.as_bytes());
+        }
+        canonical.extend_from_slice(&(source.filter.protocols().len() as u32).to_be_bytes());
+        for protocol in source.filter.protocols() {
+            canonical.push(protocol_code(*protocol));
+        }
     }
     Digest::sha256(&canonical).hex()
+}
+
+const fn protocol_code(protocol: ProxyProtocol) -> u8 {
+    match protocol {
+        ProxyProtocol::Vless => 0,
+        ProxyProtocol::Vmess => 1,
+        ProxyProtocol::Shadowsocks => 2,
+        ProxyProtocol::Trojan => 3,
+        ProxyProtocol::Hysteria2 => 4,
+        ProxyProtocol::Tuic => 5,
+        ProxyProtocol::AnyTls => 6,
+        ProxyProtocol::Http => 7,
+        ProxyProtocol::Socks => 8,
+    }
 }
 
 fn push_field(output: &mut Vec<u8>, value: &[u8]) {

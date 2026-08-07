@@ -5,22 +5,30 @@ use std::{
     str::FromStr,
 };
 
-use nethop_android::{AppCatalog, AppSelectionMode, ResourceCandidate};
+use nethop_android::{
+    AppCatalog, AppSelectionMode, ResourceCandidate, WifiSceneAction, WifiSceneMatcher,
+    WifiSceneRule,
+};
 use nethop_core::{
-    CaptureMode, CapturePolicy, InterfacePolicy, ManagedLogLevel, ManagedOptions,
+    CaptureMode, CapturePolicy, ForwardingPolicy, InterfacePolicy, ManagedLogLevel, ManagedOptions,
     ManagedOutboundMode, ManagedSelectorMode, TunStack,
 };
-use nethop_subscription::{FetchPolicyError, FormatHint, RequestProfile, validate_source_url};
+use nethop_protocol::ApplicationTarget;
+#[cfg(feature = "subscription-update")]
+use nethop_subscription::FormatHint;
+use nethop_subscription::{NodeFilter, ProxyProtocol, RequestProfile};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::worker_config::{CONFIG_SCHEMA_VERSION, ConfigError, MAX_SOURCES};
 
 const MAX_SOURCE_NAME_BYTES: usize = 128;
 const MAX_SOURCE_NAME_CHARS: usize = 64;
 const MAX_MIRRORS: usize = 3;
-const MAX_PACKAGES: usize = 2_000;
-const MAX_UIDS: usize = 2_000;
+const MAX_APPLICATION_TARGETS: usize = 2_000;
 const MAX_CIDRS: usize = 512;
+const MAX_DOMAINS: usize = 512;
+const MAX_DOMAIN_BYTES: usize = 253;
 const MAX_INTERFACES: usize = 64;
 const MAX_INTERFACE_PATTERN_BYTES: usize = 64;
 const DEFAULT_INBOUND_PORT: u16 = 7893;
@@ -51,13 +59,19 @@ impl UserConfigWire {
         let mut wire = self.clone();
         // Validate before normalization so canonical output cannot hide invalid input.
         let _ = EffectiveConfig::from_wire(wire.clone())?;
-        wire.applications.packages.sort();
-        wire.applications.include_uids.sort_unstable();
-        wire.applications.exclude_uids.push(0);
-        wire.applications.exclude_uids.sort_unstable();
-        wire.applications.exclude_uids.dedup();
+        wire.applications.targets.sort();
+        for source in &mut wire.subscriptions.sources {
+            source.filter.include_names.sort();
+            source.filter.exclude_names.sort();
+            source.filter.excluded_node_ids.sort();
+            source.filter.protocols.sort();
+        }
         wire.network.interfaces.include.sort();
         wire.network.interfaces.exclude.sort();
+        wire.network
+            .wifi_scenes
+            .rules
+            .sort_by(|left, right| left.id.cmp(&right.id));
         wire.routing.force_proxy_cidrs = parse_cidrs(wire.routing.force_proxy_cidrs)?
             .into_iter()
             .map(|cidr| cidr.text)
@@ -66,6 +80,9 @@ impl UserConfigWire {
             .into_iter()
             .map(|cidr| cidr.text)
             .collect();
+        wire.routing.force_proxy_domains = parse_domains(wire.routing.force_proxy_domains)?;
+        wire.routing.bypass_domains = parse_domains(wire.routing.bypass_domains)?;
+        wire.routing.block_domains = parse_domains(wire.routing.block_domains)?;
         Ok(wire)
     }
 }
@@ -99,6 +116,21 @@ pub(crate) struct SubscriptionSourceWire {
     format_hint: SourceFormatHint,
     #[serde(default)]
     mirrors: Vec<String>,
+    #[serde(default)]
+    filter: SourceFilterWire,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SourceFilterWire {
+    #[serde(default)]
+    include_names: Vec<String>,
+    #[serde(default)]
+    exclude_names: Vec<String>,
+    #[serde(default)]
+    excluded_node_ids: Vec<String>,
+    #[serde(default)]
+    protocols: Vec<ProxyProtocol>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,9 +167,11 @@ pub enum SourceFormatHint {
     Base64List,
     ClashYaml,
     SingboxJson,
+    SurfboardIni,
 }
 
 impl SourceFormatHint {
+    #[cfg(feature = "subscription-update")]
     pub(crate) const fn parser_hint(self) -> FormatHint {
         match self {
             Self::Auto => FormatHint::Auto,
@@ -145,6 +179,7 @@ impl SourceFormatHint {
             Self::Base64List => FormatHint::Base64List,
             Self::ClashYaml => FormatHint::ClashYaml,
             Self::SingboxJson => FormatHint::SingboxJson,
+            Self::SurfboardIni => FormatHint::SurfboardIni,
         }
     }
 }
@@ -201,28 +236,13 @@ impl Default for UrltestWire {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApplicationsWire {
     #[serde(default)]
     mode: ApplicationMode,
     #[serde(default)]
-    packages: Vec<String>,
-    #[serde(default)]
-    include_uids: Vec<u32>,
-    #[serde(default = "default_exclude_uids")]
-    exclude_uids: Vec<u32>,
-}
-
-impl Default for ApplicationsWire {
-    fn default() -> Self {
-        Self {
-            mode: ApplicationMode::default(),
-            packages: Vec::new(),
-            include_uids: Vec::new(),
-            exclude_uids: default_exclude_uids(),
-        }
-    }
+    targets: Vec<ApplicationTarget>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -251,6 +271,8 @@ pub(crate) struct NetworkWire {
     tun_stack: TunStackIntent,
     #[serde(default)]
     interfaces: InterfacesWire,
+    #[serde(default)]
+    wifi_scenes: WifiScenesWire,
 }
 
 impl Default for NetworkWire {
@@ -263,6 +285,7 @@ impl Default for NetworkWire {
             dns_mode: DnsMode::default(),
             tun_stack: TunStackIntent::default(),
             interfaces: InterfacesWire::default(),
+            wifi_scenes: WifiScenesWire::default(),
         }
     }
 }
@@ -334,10 +357,49 @@ impl Default for InterfacesWire {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+struct WifiScenesWire {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_wifi_scene_probe_interval")]
+    probe_interval_seconds: u16,
+    #[serde(default)]
+    rules: Vec<WifiSceneRuleWire>,
+}
+
+impl Default for WifiScenesWire {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            probe_interval_seconds: default_wifi_scene_probe_interval(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WifiSceneRuleWire {
+    id: String,
+    #[serde(default)]
+    ssid: Option<String>,
+    #[serde(default)]
+    bssid: Option<String>,
+    action: WifiSceneActionWire,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum WifiSceneActionWire {
+    EnableProxy,
+    DisableProxy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RoutingWire {
     #[serde(default = "default_true")]
     bypass_private: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     bypass_cn: bool,
     #[serde(default)]
     block_quic: bool,
@@ -345,16 +407,25 @@ pub(crate) struct RoutingWire {
     force_proxy_cidrs: Vec<String>,
     #[serde(default)]
     bypass_cidrs: Vec<String>,
+    #[serde(default)]
+    force_proxy_domains: Vec<String>,
+    #[serde(default)]
+    bypass_domains: Vec<String>,
+    #[serde(default)]
+    block_domains: Vec<String>,
 }
 
 impl Default for RoutingWire {
     fn default() -> Self {
         Self {
             bypass_private: true,
-            bypass_cn: false,
+            bypass_cn: true,
             block_quic: false,
             force_proxy_cidrs: Vec::new(),
             bypass_cidrs: Vec::new(),
+            force_proxy_domains: Vec::new(),
+            bypass_domains: Vec::new(),
+            block_domains: Vec::new(),
         }
     }
 }
@@ -457,7 +528,7 @@ impl EffectiveConfig {
         let network = validate_network(wire.network)?;
         let routing = validate_routing(wire.routing)?;
         let logging = validate_logging(wire.logging)?;
-        let (advanced, allocations) = validate_advanced(wire.advanced, &applications)?;
+        let (advanced, allocations) = validate_advanced(wire.advanced)?;
         let capture_mode = match network.capture_mode {
             CaptureIntent::Auto | CaptureIntent::Tproxy => CaptureMode::Tproxy,
             CaptureIntent::Tun => CaptureMode::Tun,
@@ -466,8 +537,8 @@ impl EffectiveConfig {
             capture_mode,
             &network,
             &advanced,
-            applications.include_uids.clone(),
-            applications.exclude_uids.clone(),
+            applications.base_include_uids(),
+            applications.base_exclude_uids(),
         )?;
         Ok(Self {
             service_enabled: wire.service.enabled,
@@ -528,7 +599,8 @@ impl EffectiveConfig {
         &self,
         catalog: Option<&AppCatalog>,
     ) -> Result<CapturePolicy, ConfigError> {
-        if self.applications.packages.is_empty() {
+        let packages = self.applications.packages().collect::<Vec<_>>();
+        if packages.is_empty() {
             return Ok(self.capture.clone());
         }
         let mode = match self.applications.mode {
@@ -538,19 +610,13 @@ impl EffectiveConfig {
         };
         let selection = catalog
             .ok_or(ConfigError::ApplicationCatalogUnavailable)?
-            .compile_selection(
-                mode,
-                self.applications
-                    .packages
-                    .iter()
-                    .map(|package| (0, package.as_str())),
-            )
+            .compile_selection(mode, packages)
             .map_err(|_| ConfigError::InvalidApplications)?;
-        let mut include = self.applications.include_uids.clone();
+        let mut include = self.applications.base_include_uids();
         include.extend_from_slice(selection.include_uids());
         include.sort_unstable();
         include.dedup();
-        let mut exclude = self.applications.exclude_uids.clone();
+        let mut exclude = self.applications.base_exclude_uids();
         exclude.extend_from_slice(selection.exclude_uids());
         exclude.sort_unstable();
         exclude.dedup();
@@ -596,6 +662,7 @@ impl EffectiveConfig {
                 LogLevel::Trace => ManagedLogLevel::Trace,
             },
             self.routing.bypass_private,
+            self.routing.bypass_cn,
             self.routing
                 .force_proxy_cidrs
                 .iter()
@@ -607,6 +674,13 @@ impl EffectiveConfig {
                 .map(|cidr| cidr.text.clone())
                 .collect(),
         )
+        .and_then(|options| {
+            options.with_domain_rules(
+                self.routing.force_proxy_domains.clone(),
+                self.routing.bypass_domains.clone(),
+                self.routing.block_domains.clone(),
+            )
+        })
         .map_err(|_| ConfigError::InvalidProxy)
     }
 
@@ -689,6 +763,12 @@ fn build_capture(
     .map_err(|_| ConfigError::InvalidNetwork)?;
     capture
         .with_interface_policy(interfaces)
+        .and_then(|capture| {
+            capture.with_forwarding_policy(ForwardingPolicy::new(
+                network.interfaces.hotspot,
+                network.interfaces.usb,
+            ))
+        })
         .map_err(|_| ConfigError::InvalidNetwork)
 }
 
@@ -772,6 +852,7 @@ pub struct UserSource {
     request_profile: RequestProfile,
     format_hint: SourceFormatHint,
     mirrors: Vec<String>,
+    filter: NodeFilter,
 }
 
 impl UserSource {
@@ -798,6 +879,10 @@ impl UserSource {
     pub fn mirrors(&self) -> &[String] {
         &self.mirrors
     }
+
+    pub const fn filter(&self) -> &NodeFilter {
+        &self.filter
+    }
 }
 
 impl fmt::Debug for UserSource {
@@ -810,6 +895,13 @@ impl fmt::Debug for UserSource {
             .field("request_profile", &self.request_profile)
             .field("format_hint", &self.format_hint)
             .field("mirror_count", &self.mirrors.len())
+            .field(
+                "filter_rule_count",
+                &(self.filter.include_names().len()
+                    + self.filter.exclude_names().len()
+                    + self.filter.excluded_node_ids().len()
+                    + self.filter.protocols().len()),
+            )
             .finish()
     }
 }
@@ -891,9 +983,7 @@ impl UrltestSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplicationSettings {
     mode: ApplicationMode,
-    packages: Vec<String>,
-    include_uids: Vec<u32>,
-    exclude_uids: Vec<u32>,
+    targets: Vec<ApplicationTarget>,
 }
 
 impl ApplicationSettings {
@@ -901,16 +991,40 @@ impl ApplicationSettings {
         self.mode
     }
 
-    pub fn packages(&self) -> &[String] {
-        &self.packages
+    pub fn targets(&self) -> &[ApplicationTarget] {
+        &self.targets
     }
 
-    pub fn include_uids(&self) -> &[u32] {
-        &self.include_uids
+    fn packages(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.targets.iter().filter_map(|target| match target {
+            ApplicationTarget::Package {
+                android_user_id,
+                package,
+            } => Some((*android_user_id, package.as_str())),
+            ApplicationTarget::Uid { .. } => None,
+        })
     }
 
-    pub fn exclude_uids(&self) -> &[u32] {
-        &self.exclude_uids
+    fn direct_uids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.targets.iter().filter_map(|target| match target {
+            ApplicationTarget::Uid { uid } => Some(*uid),
+            ApplicationTarget::Package { .. } => None,
+        })
+    }
+
+    fn base_include_uids(&self) -> Vec<u32> {
+        match self.mode {
+            ApplicationMode::Whitelist => self.direct_uids().collect(),
+            ApplicationMode::All | ApplicationMode::Blacklist => Vec::new(),
+        }
+    }
+
+    fn base_exclude_uids(&self) -> Vec<u32> {
+        let mut excluded = vec![0];
+        if self.mode == ApplicationMode::Blacklist {
+            excluded.extend(self.direct_uids());
+        }
+        excluded
     }
 }
 
@@ -923,6 +1037,7 @@ pub struct NetworkSettings {
     dns_mode: DnsMode,
     tun_stack: TunStackIntent,
     interfaces: InterfaceSettings,
+    wifi_scenes: WifiSceneSettings,
 }
 
 impl NetworkSettings {
@@ -953,12 +1068,39 @@ impl NetworkSettings {
     pub const fn interfaces(&self) -> &InterfaceSettings {
         &self.interfaces
     }
+
+    pub const fn wifi_scenes(&self) -> &WifiSceneSettings {
+        &self.wifi_scenes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WifiSceneSettings {
+    enabled: bool,
+    probe_interval_seconds: u16,
+    matcher: WifiSceneMatcher,
+}
+
+impl WifiSceneSettings {
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub const fn probe_interval_seconds(&self) -> u16 {
+        self.probe_interval_seconds
+    }
+
+    pub const fn matcher(&self) -> &WifiSceneMatcher {
+        &self.matcher
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterfaceSettings {
     mobile: bool,
     wifi: bool,
+    hotspot: bool,
+    usb: bool,
     include: Vec<String>,
     exclude: Vec<String>,
 }
@@ -970,6 +1112,14 @@ impl InterfaceSettings {
 
     pub const fn wifi(&self) -> bool {
         self.wifi
+    }
+
+    pub const fn hotspot(&self) -> bool {
+        self.hotspot
+    }
+
+    pub const fn usb(&self) -> bool {
+        self.usb
     }
 
     pub fn include(&self) -> &[String] {
@@ -984,14 +1134,22 @@ impl InterfaceSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingSettings {
     bypass_private: bool,
+    bypass_cn: bool,
     block_quic: bool,
     force_proxy_cidrs: Vec<CanonicalCidr>,
     bypass_cidrs: Vec<CanonicalCidr>,
+    force_proxy_domains: Vec<String>,
+    bypass_domains: Vec<String>,
+    block_domains: Vec<String>,
 }
 
 impl RoutingSettings {
     pub const fn bypass_private(&self) -> bool {
         self.bypass_private
+    }
+
+    pub const fn bypass_cn(&self) -> bool {
+        self.bypass_cn
     }
 
     pub const fn block_quic(&self) -> bool {
@@ -1004,6 +1162,18 @@ impl RoutingSettings {
 
     pub fn bypass_cidrs(&self) -> &[CanonicalCidr] {
         &self.bypass_cidrs
+    }
+
+    pub fn force_proxy_domains(&self) -> &[String] {
+        &self.force_proxy_domains
+    }
+
+    pub fn bypass_domains(&self) -> &[String] {
+        &self.bypass_domains
+    }
+
+    pub fn block_domains(&self) -> &[String] {
+        &self.block_domains
     }
 }
 
@@ -1130,6 +1300,13 @@ fn validate_sources(wire: &[SubscriptionSourceWire]) -> Result<Vec<UserSource>, 
             request_profile: source.request_profile.effective(),
             format_hint: source.format_hint,
             mirrors: source.mirrors.clone(),
+            filter: NodeFilter::new_with_node_ids(
+                source.filter.include_names.clone(),
+                source.filter.exclude_names.clone(),
+                source.filter.excluded_node_ids.clone(),
+                source.filter.protocols.clone(),
+            )
+            .map_err(|_| ConfigError::InvalidSourceOptions)?,
         });
     }
     Ok(sources)
@@ -1139,11 +1316,14 @@ fn validate_optional_url(url: &str) -> Result<(), ConfigError> {
     if url.is_empty() {
         return Ok(());
     }
-    match validate_source_url(url) {
-        Ok(_) => Ok(()),
-        Err(FetchPolicyError::NonHttps) => Err(ConfigError::SourceUrlNonHttps),
-        Err(_) => Err(ConfigError::InvalidSourceUrl),
+    let parsed = Url::parse(url).map_err(|_| ConfigError::InvalidSourceUrl)?;
+    if parsed.scheme() != "https" {
+        return Err(ConfigError::SourceUrlNonHttps);
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.host_str().is_none() {
+        return Err(ConfigError::InvalidSourceUrl);
+    }
+    Ok(())
 }
 
 fn validate_proxy(wire: ProxyWire) -> Result<ProxySettings, ConfigError> {
@@ -1167,43 +1347,30 @@ fn validate_proxy(wire: ProxyWire) -> Result<ProxySettings, ConfigError> {
 }
 
 fn validate_applications(wire: ApplicationsWire) -> Result<ApplicationSettings, ConfigError> {
-    if wire.packages.len() > MAX_PACKAGES
-        || wire.include_uids.len() > MAX_UIDS
-        || wire.exclude_uids.len() > MAX_UIDS
-        || !all_unique(&wire.packages)
-        || !all_unique(&wire.include_uids)
-        || !all_unique(&wire.exclude_uids)
-        || wire.packages.iter().any(|package| !valid_package(package))
-        || wire
-            .include_uids
-            .iter()
-            .any(|uid| wire.exclude_uids.contains(uid))
+    if wire.targets.len() > MAX_APPLICATION_TARGETS
+        || !all_unique(&wire.targets)
+        || matches!(wire.mode, ApplicationMode::All) != wire.targets.is_empty()
+        || wire.targets.iter().any(|target| match target {
+            ApplicationTarget::Package {
+                android_user_id,
+                package,
+            } => *android_user_id > 21_474 || !valid_package(package),
+            ApplicationTarget::Uid { uid } => *uid == 0,
+        })
     {
         return Err(ConfigError::InvalidApplications);
     }
-    let mut packages = wire.packages;
-    packages.sort();
-    let mut include_uids = wire.include_uids;
-    include_uids.sort_unstable();
-    let mut exclude_uids = wire.exclude_uids;
-    if !exclude_uids.contains(&0) {
-        exclude_uids.push(0);
-    }
-    exclude_uids.sort_unstable();
+    let mut targets = wire.targets;
+    targets.sort();
     Ok(ApplicationSettings {
         mode: wire.mode,
-        packages,
-        include_uids,
-        exclude_uids,
+        targets,
     })
 }
 
 fn validate_network(wire: NetworkWire) -> Result<NetworkSettings, ConfigError> {
     if !wire.proxy_tcp && !wire.proxy_udp {
         return Err(ConfigError::InvalidNetwork);
-    }
-    if wire.interfaces.hotspot || wire.interfaces.usb {
-        return Err(ConfigError::UnsupportedNetwork);
     }
     if wire.capture_mode == CaptureIntent::Tun
         || wire.ipv6_mode != Ipv6Mode::Auto
@@ -1225,6 +1392,31 @@ fn validate_network(wire: NetworkWire) -> Result<NetworkSettings, ConfigError> {
     {
         return Err(ConfigError::InvalidNetwork);
     }
+    if !(15..=3600).contains(&wire.wifi_scenes.probe_interval_seconds)
+        || (wire.wifi_scenes.enabled && wire.wifi_scenes.rules.is_empty())
+    {
+        return Err(ConfigError::InvalidNetwork);
+    }
+    let mut wifi_rules = Vec::with_capacity(wire.wifi_scenes.rules.len());
+    for rule in wire.wifi_scenes.rules {
+        wifi_rules.push(
+            WifiSceneRule::new(
+                rule.id,
+                rule.ssid,
+                rule.bssid,
+                match rule.action {
+                    WifiSceneActionWire::EnableProxy => WifiSceneAction::EnableProxy,
+                    WifiSceneActionWire::DisableProxy => WifiSceneAction::DisableProxy,
+                },
+            )
+            .map_err(|_| ConfigError::InvalidNetwork)?,
+        );
+    }
+    let wifi_scenes = WifiSceneSettings {
+        enabled: wire.wifi_scenes.enabled,
+        probe_interval_seconds: wire.wifi_scenes.probe_interval_seconds,
+        matcher: WifiSceneMatcher::new(wifi_rules).map_err(|_| ConfigError::InvalidNetwork)?,
+    };
     Ok(NetworkSettings {
         capture_mode: wire.capture_mode,
         proxy_tcp: wire.proxy_tcp,
@@ -1235,9 +1427,12 @@ fn validate_network(wire: NetworkWire) -> Result<NetworkSettings, ConfigError> {
         interfaces: InterfaceSettings {
             mobile: wire.interfaces.mobile,
             wifi: wire.interfaces.wifi,
+            hotspot: wire.interfaces.hotspot,
+            usb: wire.interfaces.usb,
             include: wire.interfaces.include,
             exclude: wire.interfaces.exclude,
         },
+        wifi_scenes,
     })
 }
 
@@ -1259,7 +1454,7 @@ fn validate_patterns(patterns: &[String]) -> Result<(), ConfigError> {
 }
 
 fn validate_routing(wire: RoutingWire) -> Result<RoutingSettings, ConfigError> {
-    if wire.bypass_cn || wire.block_quic {
+    if wire.block_quic {
         return Err(ConfigError::UnsupportedRouting);
     }
     if wire.force_proxy_cidrs.len() > MAX_CIDRS || wire.bypass_cidrs.len() > MAX_CIDRS {
@@ -1273,12 +1468,81 @@ fn validate_routing(wire: RoutingWire) -> Result<RoutingSettings, ConfigError> {
     {
         return Err(ConfigError::InvalidRouting);
     }
+    if wire.force_proxy_domains.len() > MAX_DOMAINS
+        || wire.bypass_domains.len() > MAX_DOMAINS
+        || wire.block_domains.len() > MAX_DOMAINS
+    {
+        return Err(ConfigError::InvalidRouting);
+    }
+    let force_proxy_domains = parse_domains(wire.force_proxy_domains)?;
+    let bypass_domains = parse_domains(wire.bypass_domains)?;
+    let block_domains = parse_domains(wire.block_domains)?;
+    if domain_sets_overlap(&force_proxy_domains, &bypass_domains)
+        || domain_sets_overlap(&force_proxy_domains, &block_domains)
+        || domain_sets_overlap(&bypass_domains, &block_domains)
+    {
+        return Err(ConfigError::InvalidRouting);
+    }
     Ok(RoutingSettings {
         bypass_private: wire.bypass_private,
+        bypass_cn: wire.bypass_cn,
         block_quic: wire.block_quic,
         force_proxy_cidrs,
         bypass_cidrs,
+        force_proxy_domains,
+        bypass_domains,
+        block_domains,
     })
+}
+
+fn parse_domains(values: Vec<String>) -> Result<Vec<String>, ConfigError> {
+    let mut parsed = Vec::with_capacity(values.len());
+    let mut seen = HashSet::with_capacity(values.len());
+    for value in values {
+        if value.is_empty()
+            || value.len() > MAX_DOMAIN_BYTES
+            || value != value.trim()
+            || IpAddr::from_str(&value).is_ok()
+        {
+            return Err(ConfigError::InvalidRouting);
+        }
+        let value = value.to_ascii_lowercase();
+        if !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        }) || !value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                && label
+                    .bytes()
+                    .last()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        }) || !seen.insert(value.clone())
+        {
+            return Err(ConfigError::InvalidRouting);
+        }
+        parsed.push(value);
+    }
+    parsed.sort();
+    Ok(parsed)
+}
+
+fn domain_sets_overlap(left: &[String], right: &[String]) -> bool {
+    left.iter().any(|left| {
+        right
+            .iter()
+            .any(|right| domain_is_suffix_of(left, right) || domain_is_suffix_of(right, left))
+    })
+}
+
+fn domain_is_suffix_of(value: &str, suffix: &str) -> bool {
+    value == suffix
+        || value
+            .strip_suffix(suffix)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 fn parse_cidrs(values: Vec<String>) -> Result<Vec<CanonicalCidr>, ConfigError> {
@@ -1339,7 +1603,6 @@ fn validate_logging(wire: LoggingWire) -> Result<LoggingSettings, ConfigError> {
 
 fn validate_advanced(
     wire: AdvancedWire,
-    applications: &ApplicationSettings,
 ) -> Result<(AdvancedSettings, Vec<ResourceCandidate>), ConfigError> {
     if wire.inbound_port == 0
         || wire.bypass_mark == 0
@@ -1348,7 +1611,6 @@ fn validate_advanced(
         || wire.resource_candidates.is_empty()
         || wire.resource_candidates.len() > 16
         || !all_unique(&wire.resource_candidates)
-        || applications.include_uids.contains(&0)
     {
         return Err(ConfigError::InvalidAdvanced);
     }
@@ -1423,9 +1685,6 @@ const fn default_urltest_candidates() -> u16 {
 const fn default_urltest_concurrency() -> u8 {
     10
 }
-fn default_exclude_uids() -> Vec<u32> {
-    vec![0]
-}
 const fn default_retention_days() -> u8 {
     7
 }
@@ -1440,6 +1699,10 @@ const fn default_health_timeout() -> u8 {
 }
 const fn default_reconcile_interval() -> u16 {
     60
+}
+
+const fn default_wifi_scene_probe_interval() -> u16 {
+    30
 }
 
 fn default_resource_candidates() -> Vec<ResourceCandidateWire> {

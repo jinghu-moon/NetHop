@@ -6,9 +6,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use nethop_subscription::{
     ContentEncoding, FetchAgentConfig, FetchDiagnosticCode, FetchEndpointKind, FetchPolicy,
     FetchPolicyError, FetchRequest, ParserLimits, RequestProfile, SourceCache, SourceId,
-    UREQ_SECURITY_ADAPTER_VERSION, decode_response_body, is_denied_ssrf_address, next_redirect,
-    validate_peer_address, validate_peer_in_approved_set, validate_resolved_addresses,
-    validate_response_limits, validate_source_url,
+    SourceUrlError, UREQ_SECURITY_ADAPTER_VERSION, decode_response_body, is_denied_ssrf_address,
+    next_redirect, validate_peer_address, validate_peer_in_approved_set,
+    validate_resolved_addresses, validate_response_limits, validate_source_url,
 };
 
 #[test]
@@ -16,11 +16,11 @@ fn fetch_accepts_only_https_urls_without_user_info() {
     assert!(validate_source_url("https://subscription.example/path").is_ok());
     assert_eq!(
         validate_source_url("http://subscription.example").unwrap_err(),
-        FetchPolicyError::NonHttps
+        SourceUrlError::NonHttps
     );
     assert_eq!(
         validate_source_url("https://token@subscription.example").unwrap_err(),
-        FetchPolicyError::UserInfo
+        SourceUrlError::UserInfo
     );
 }
 

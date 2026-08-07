@@ -100,7 +100,7 @@ pub enum CapabilityError {
     InvalidProtocolSet,
 }
 
-const SING_BOX_VERSION: &str = "1.13.15";
+pub const PINNED_SING_BOX_VERSION: &str = "1.13.15";
 const SING_BOX_TAG: &str = "v1.13.15";
 const SING_BOX_COMMIT: &str = "3708fa18766cda1f11b77f6ed9c7bd61688f17df";
 const SING_BOX_GO_VERSION: &str = "1.24.7";
@@ -178,7 +178,7 @@ impl CapabilityMatrix {
         let manifest: MappingManifest =
             serde_json::from_str(input).map_err(|_| CapabilityError::InvalidManifest)?;
         if manifest.schema_version != 1
-            || manifest.sing_box_version != SING_BOX_VERSION
+            || manifest.sing_box_version != PINNED_SING_BOX_VERSION
             || manifest.sing_box_tag != SING_BOX_TAG
             || manifest.sing_box_commit != SING_BOX_COMMIT
             || manifest.go_version != SING_BOX_GO_VERSION

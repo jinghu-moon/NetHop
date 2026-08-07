@@ -268,7 +268,7 @@ impl FetchRequest {
         S: AsRef<str>,
     {
         let mut endpoints = vec![FetchEndpoint {
-            url: validate_source_url(primary)?,
+            url: validate_fetch_url(primary)?,
             kind: FetchEndpointKind::Primary,
         }];
         for mirror in mirrors {
@@ -276,7 +276,7 @@ impl FetchRequest {
                 return Err(FetchPolicyError::TooManyMirrors);
             }
             endpoints.push(FetchEndpoint {
-                url: validate_source_url(mirror.as_ref())?,
+                url: validate_fetch_url(mirror.as_ref())?,
                 kind: FetchEndpointKind::Mirror,
             });
         }
@@ -312,6 +312,7 @@ pub struct FetchOutcome {
     body: Vec<u8>,
     endpoint_kind: FetchEndpointKind,
     endpoint_digest: Digest,
+    content_type: Option<String>,
     etag: Option<String>,
     last_modified: Option<String>,
     not_modified: bool,
@@ -328,6 +329,10 @@ impl FetchOutcome {
 
     pub const fn was_not_modified(&self) -> bool {
         self.not_modified
+    }
+
+    pub fn content_type(&self) -> Option<&str> {
+        self.content_type.as_deref()
     }
 }
 
@@ -392,18 +397,12 @@ where
     Err(last_error.unwrap_or(FetchError::MirrorsExhausted))
 }
 
-pub fn validate_source_url(value: &str) -> Result<Url, FetchPolicyError> {
-    let url = Url::parse(value).map_err(|_| FetchPolicyError::MissingHost)?;
-    if url.scheme() != "https" {
-        return Err(FetchPolicyError::NonHttps);
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(FetchPolicyError::UserInfo);
-    }
-    if url.host_str().is_none() {
-        return Err(FetchPolicyError::MissingHost);
-    }
-    Ok(url)
+fn validate_fetch_url(value: &str) -> Result<Url, FetchPolicyError> {
+    crate::validate_source_url(value).map_err(|error| match error {
+        crate::SourceUrlError::NonHttps => FetchPolicyError::NonHttps,
+        crate::SourceUrlError::UserInfo => FetchPolicyError::UserInfo,
+        crate::SourceUrlError::MissingHost => FetchPolicyError::MissingHost,
+    })
 }
 
 pub fn is_denied_ssrf_address(address: IpAddr) -> bool {
@@ -485,7 +484,7 @@ pub fn next_redirect(
     let target = current
         .join(location)
         .map_err(|_| FetchPolicyError::InvalidRedirect)?;
-    validate_source_url(target.as_str())
+    validate_fetch_url(target.as_str())
 }
 
 pub fn validate_response_limits(
@@ -580,6 +579,37 @@ impl SourceCache {
         headers
     }
 
+    pub fn validator_snapshot(&self) -> (Option<&str>, Option<&str>, Option<Digest>) {
+        (
+            self.etag.as_deref(),
+            self.last_modified.as_deref(),
+            self.validator_endpoint,
+        )
+    }
+
+    pub fn restore(
+        &mut self,
+        body: Vec<u8>,
+        etag: Option<String>,
+        last_modified: Option<String>,
+        validator_endpoint: Digest,
+        limits: &ParserLimits,
+    ) -> Result<(), FetchPolicyError> {
+        if body.len() > limits.max_body_bytes()
+            || etag.as_deref().is_some_and(|value| !valid_validator(value))
+            || last_modified
+                .as_deref()
+                .is_some_and(|value| !valid_validator(value))
+        {
+            return Err(FetchPolicyError::InvalidResponseMetadata);
+        }
+        self.last_known_good = Some(body);
+        self.etag = etag;
+        self.last_modified = last_modified;
+        self.validator_endpoint = Some(validator_endpoint);
+        Ok(())
+    }
+
     pub(crate) fn conditional_headers_for(
         &self,
         endpoint_digest: Digest,
@@ -633,6 +663,14 @@ impl SourceCache {
     }
 }
 
+fn valid_validator(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 8 * 1024
+        && !value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == 0x7f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,6 +680,7 @@ mod tests {
             body: body.to_vec(),
             endpoint_kind: endpoint.kind(),
             endpoint_digest: endpoint.origin_digest(),
+            content_type: None,
             etag: None,
             last_modified: None,
             not_modified: false,

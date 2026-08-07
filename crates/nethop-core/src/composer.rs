@@ -15,6 +15,8 @@ const MAX_MANAGED_NODES: usize = 2_000;
 const MAX_AUTO_NODES: usize = 64;
 const MAX_ROUTING_CIDRS: usize = 512;
 const MAX_CIDR_BYTES: usize = 64;
+const MAX_ROUTING_DOMAINS: usize = 512;
+const MAX_DOMAIN_BYTES: usize = 253;
 const MIN_API_SECRET_BYTES: usize = 32;
 const MAX_API_SECRET_BYTES: usize = 128;
 
@@ -23,6 +25,10 @@ const BLOCK_TAG: &str = "block";
 const AUTO_TAG: &str = "nethop-auto";
 const SELECT_TAG: &str = "nethop-select";
 const INBOUND_TAG: &str = "nethop-in";
+const CN_DOMAIN_RULE_SET_TAG: &str = "nethop-cn-domain";
+const CN_IP_RULE_SET_TAG: &str = "nethop-cn-ip";
+const CN_DOMAIN_RULE_SET_PATH: &str = "/data/adb/nethop/rulesets/cn-domain.srs";
+const CN_IP_RULE_SET_PATH: &str = "/data/adb/nethop/rulesets/cn-ip.srs";
 const RESERVED_TAGS: &[&str] = &[DIRECT_TAG, BLOCK_TAG, AUTO_TAG, SELECT_TAG, INBOUND_TAG];
 
 const RESERVED_FIELDS: &[&str] = &[
@@ -196,8 +202,12 @@ pub struct ManagedOptions {
     urltest_max_candidates: usize,
     log_level: ManagedLogLevel,
     bypass_private: bool,
+    bypass_cn: bool,
     force_proxy_cidrs: Vec<String>,
     bypass_cidrs: Vec<String>,
+    force_proxy_domains: Vec<String>,
+    bypass_domains: Vec<String>,
+    block_domains: Vec<String>,
 }
 
 impl Default for ManagedOptions {
@@ -210,8 +220,12 @@ impl Default for ManagedOptions {
             urltest_max_candidates: MAX_AUTO_NODES,
             log_level: ManagedLogLevel::Warn,
             bypass_private: true,
+            bypass_cn: true,
             force_proxy_cidrs: Vec::new(),
             bypass_cidrs: Vec::new(),
+            force_proxy_domains: Vec::new(),
+            bypass_domains: Vec::new(),
+            block_domains: Vec::new(),
         }
     }
 }
@@ -226,6 +240,7 @@ impl ManagedOptions {
         urltest_max_candidates: usize,
         log_level: ManagedLogLevel,
         bypass_private: bool,
+        bypass_cn: bool,
         force_proxy_cidrs: Vec<String>,
         bypass_cidrs: Vec<String>,
     ) -> Result<Self, ComposerError> {
@@ -249,10 +264,57 @@ impl ManagedOptions {
             urltest_max_candidates,
             log_level,
             bypass_private,
+            bypass_cn,
             force_proxy_cidrs,
             bypass_cidrs,
+            force_proxy_domains: Vec::new(),
+            bypass_domains: Vec::new(),
+            block_domains: Vec::new(),
         })
     }
+
+    pub fn with_domain_rules(
+        mut self,
+        force_proxy_domains: Vec<String>,
+        bypass_domains: Vec<String>,
+        block_domains: Vec<String>,
+    ) -> Result<Self, ComposerError> {
+        if force_proxy_domains.len() > MAX_ROUTING_DOMAINS
+            || bypass_domains.len() > MAX_ROUTING_DOMAINS
+            || block_domains.len() > MAX_ROUTING_DOMAINS
+            || force_proxy_domains
+                .iter()
+                .chain(&bypass_domains)
+                .chain(&block_domains)
+                .any(|domain| !valid_domain_suffix(domain))
+        {
+            return Err(ComposerError::InvalidManagedOptions);
+        }
+        self.force_proxy_domains = force_proxy_domains;
+        self.bypass_domains = bypass_domains;
+        self.block_domains = block_domains;
+        Ok(self)
+    }
+}
+
+fn valid_domain_suffix(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_DOMAIN_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        })
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                && label
+                    .bytes()
+                    .last()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -414,6 +476,8 @@ impl ManagedConfig {
                 .map(Value::Object),
         );
 
+        let rule_mode_with_cn =
+            profile.options.outbound_mode == ManagedOutboundMode::Rule && profile.options.bypass_cn;
         let mut route_rules = vec![
             serde_json::json!({ "inbound": [INBOUND_TAG], "action": "sniff" }),
             serde_json::json!({
@@ -426,8 +490,23 @@ impl ManagedConfig {
                 "action": "hijack-dns"
             }),
         ];
-        if profile.options.bypass_private {
-            route_rules.push(serde_json::json!({ "ip_is_private": true, "outbound": DIRECT_TAG }));
+        if !profile.options.block_domains.is_empty() {
+            route_rules.push(serde_json::json!({
+                "domain_suffix": profile.options.block_domains,
+                "outbound": BLOCK_TAG
+            }));
+        }
+        if !profile.options.force_proxy_domains.is_empty() {
+            route_rules.push(serde_json::json!({
+                "domain_suffix": profile.options.force_proxy_domains,
+                "outbound": SELECT_TAG
+            }));
+        }
+        if !profile.options.bypass_domains.is_empty() {
+            route_rules.push(serde_json::json!({
+                "domain_suffix": profile.options.bypass_domains,
+                "outbound": DIRECT_TAG
+            }));
         }
         if !profile.options.force_proxy_cidrs.is_empty() {
             route_rules.push(serde_json::json!({
@@ -441,9 +520,71 @@ impl ManagedConfig {
                 "outbound": DIRECT_TAG
             }));
         }
+        if profile.options.bypass_private {
+            route_rules.push(serde_json::json!({ "ip_is_private": true, "outbound": DIRECT_TAG }));
+        }
+        if rule_mode_with_cn {
+            route_rules.push(serde_json::json!({
+                "rule_set": [CN_DOMAIN_RULE_SET_TAG],
+                "outbound": DIRECT_TAG
+            }));
+            route_rules.push(serde_json::json!({
+                "action": "resolve",
+                "strategy": "prefer_ipv4",
+                "server": "dns-proxy"
+            }));
+            route_rules.push(serde_json::json!({
+                "rule_set": [CN_IP_RULE_SET_TAG],
+                "outbound": DIRECT_TAG
+            }));
+        }
         let route_final = match profile.options.outbound_mode {
             ManagedOutboundMode::Rule | ManagedOutboundMode::Global => SELECT_TAG,
             ManagedOutboundMode::Direct => DIRECT_TAG,
+        };
+        let dns_final = match profile.options.outbound_mode {
+            ManagedOutboundMode::Direct => "dns-direct",
+            ManagedOutboundMode::Rule | ManagedOutboundMode::Global => "dns-proxy",
+        };
+        let mut dns_rules = Vec::new();
+        if !profile.options.force_proxy_domains.is_empty() {
+            dns_rules.push(serde_json::json!({
+                "domain_suffix": profile.options.force_proxy_domains,
+                "action": "route",
+                "server": "dns-proxy"
+            }));
+        }
+        if !profile.options.bypass_domains.is_empty() {
+            dns_rules.push(serde_json::json!({
+                "domain_suffix": profile.options.bypass_domains,
+                "action": "route",
+                "server": "dns-direct"
+            }));
+        }
+        if rule_mode_with_cn {
+            dns_rules.push(serde_json::json!({
+                "rule_set": [CN_DOMAIN_RULE_SET_TAG],
+                "action": "route",
+                "server": "dns-direct"
+            }));
+        }
+        let route_rule_sets = if rule_mode_with_cn {
+            vec![
+                serde_json::json!({
+                    "type": "local",
+                    "tag": CN_DOMAIN_RULE_SET_TAG,
+                    "format": "binary",
+                    "path": CN_DOMAIN_RULE_SET_PATH
+                }),
+                serde_json::json!({
+                    "type": "local",
+                    "tag": CN_IP_RULE_SET_TAG,
+                    "format": "binary",
+                    "path": CN_IP_RULE_SET_PATH
+                }),
+            ]
+        } else {
+            Vec::new()
         };
         let value = serde_json::json!({
             "log": {
@@ -454,7 +595,7 @@ impl ManagedConfig {
                 "servers": [
                     {
                         "type": "https",
-                        "tag": "dns-bootstrap",
+                        "tag": "dns-direct",
                         "server": "223.5.5.5",
                         "server_port": 443,
                         "path": "/dns-query",
@@ -472,7 +613,8 @@ impl ManagedConfig {
                         "detour": SELECT_TAG
                     }
                 ],
-                "final": "dns-proxy",
+                "rules": dns_rules,
+                "final": dns_final,
                 "strategy": "prefer_ipv4",
                 "disable_cache": false,
                 "cache_capacity": 4096
@@ -481,7 +623,8 @@ impl ManagedConfig {
             "outbounds": outbounds,
             "route": {
                 "auto_detect_interface": true,
-                "default_domain_resolver": "dns-bootstrap",
+                "default_domain_resolver": "dns-direct",
+                "rule_set": route_rule_sets,
                 "rules": route_rules,
                 "final": route_final
             },

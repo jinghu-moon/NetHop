@@ -42,11 +42,11 @@ $mapping = Read-Json $MappingPath
 if ($android.status -ne "reference_verified" -or $android.device.abi -ne "arm64-v8a") {
     throw "reference Android evidence is not release-eligible"
 }
-if (($android.variants | Where-Object { $_.features -eq "stable-parser" }).accepted -ne 7) {
-    throw "reference Android evidence does not cover all seven parser protocols"
+if (($android.variants | Where-Object { $_.features -eq "stable-parser" }).accepted -ne 9) {
+    throw "reference Android evidence does not cover all nine parser protocols"
 }
-if ($mapping.protocols.Count -ne 7) {
-    throw "sing-box mapping manifest must contain seven protocols"
+if ($mapping.protocols.Count -ne 9) {
+    throw "sing-box mapping manifest must contain nine protocols"
 }
 
 $stableEvidence = @(
@@ -63,6 +63,11 @@ $formats = @(
 
 $protocols = @()
 foreach ($protocol in $mapping.protocols) {
+    $formatsForProtocol = if ($protocol.protocol -in @("http", "socks")) {
+        @("clash_yaml", "singbox_json")
+    } else {
+        @("uri_list", "base64_list", "clash_yaml", "singbox_json")
+    }
     $protocols += [ordered]@{
         protocol = $protocol.protocol
         parser_support = "reference_verified"
@@ -70,6 +75,7 @@ foreach ($protocol in $mapping.protocols) {
         mapping_fields = @($protocol.mapped_fields)
         capability_variants = $protocol.capabilities.Count
         sing_box_version = $mapping.sing_box_version
+        formats = $formatsForProtocol
         evidence = @((New-EvidenceRef $MappingPath), (New-EvidenceRef $AndroidEvidencePath))
     }
 }
@@ -82,11 +88,9 @@ $supportMatrix = [ordered]@{
     formats = $formats
     protocols = @($protocols | Sort-Object protocol)
     unsupported_protocols = @(
-        [ordered]@{ protocol = "http"; support_level = "unsupported"; reason = "outside_alpha_protocol_whitelist" },
-        [ordered]@{ protocol = "socks5"; support_level = "unsupported"; reason = "outside_alpha_protocol_whitelist" },
-        [ordered]@{ protocol = "wireguard"; support_level = "unsupported"; reason = "outside_alpha_protocol_whitelist" },
-        [ordered]@{ protocol = "naive"; support_level = "unsupported"; reason = "outside_alpha_protocol_whitelist" },
-        [ordered]@{ protocol = "mieru"; support_level = "unsupported"; reason = "outside_alpha_protocol_whitelist" },
+        [ordered]@{ protocol = "wireguard"; support_level = "unsupported"; reason = "sing_box_1_13_15_endpoint_outside_terminal_outbound_contract" },
+        [ordered]@{ protocol = "naive"; support_level = "unsupported"; reason = "android_sing_box_1_13_15_missing_with_naive_outbound" },
+        [ordered]@{ protocol = "mieru"; support_level = "unsupported"; reason = "not_implemented_by_sing_box_1_13_15" },
         [ordered]@{ protocol = "shadowsocksr"; support_level = "unsupported"; reason = "outside_alpha_protocol_whitelist" }
     )
     features = @(

@@ -6,9 +6,10 @@ use crate::{
     capability::CapabilityMatrix,
     diagnostics::{DiagnosticCode, NodeDiagnostic, Severity, SourceLocation},
     protocol::{
-        BoundedText, Capabilities, Credentials, DisplayName, Endpoint, Hysteria2Obfs, PluginSpec,
-        ProtocolOptions, ProxyNode, ProxyProtocol, RealityOptions, SourceRef, TlsOptions,
-        TransportKind, TransportOptions, UdpOverTcpOptions, UuidValue,
+        AnyTlsOptions, BoundedText, Capabilities, Credentials, DisplayName, Endpoint, HttpOptions,
+        Hysteria2Obfs, Hysteria2Options, PluginSpec, ProtocolOptions, ProxyNode, ProxyProtocol,
+        RealityOptions, SocksOptions, SourceRef, TlsOptions, TransportKind, TransportOptions,
+        TuicOptions, UdpOverTcpOptions, UuidValue,
     },
     secret::SecretString,
     uri::{UriNodeCandidate, UriScheme, percent_decode_field},
@@ -23,6 +24,7 @@ pub struct NodeSpec {
     pub port: u16,
     pub uuid: Option<String>,
     pub password: Option<String>,
+    pub username: Option<String>,
     pub method: Option<String>,
     pub vmess_security: Option<String>,
     pub alter_id: Option<u16>,
@@ -38,6 +40,7 @@ pub struct NodeSpec {
     pub flow: Option<String>,
     pub transport: Option<String>,
     pub path: Option<String>,
+    pub hosts: Vec<String>,
     pub service_name: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub udp: bool,
@@ -45,6 +48,20 @@ pub struct NodeSpec {
     pub obfs: Option<String>,
     pub obfs_password: Option<String>,
     pub congestion_control: Option<String>,
+    pub server_ports: Vec<String>,
+    pub hop_interval: Option<String>,
+    pub up_mbps: Option<u32>,
+    pub down_mbps: Option<u32>,
+    pub udp_relay_mode: Option<String>,
+    pub udp_over_stream: bool,
+    pub zero_rtt_handshake: bool,
+    pub heartbeat: Option<String>,
+    pub idle_session_check_interval: Option<String>,
+    pub idle_session_timeout: Option<String>,
+    pub min_idle_session: Option<u32>,
+    pub http_path: Option<String>,
+    pub http_headers: BTreeMap<String, String>,
+    pub socks_version: Option<String>,
     pub source_ref: Option<SourceRef>,
     pub location: Option<SourceLocation>,
     pub unknown_critical_field: Option<String>,
@@ -60,6 +77,7 @@ impl NodeSpec {
             port,
             uuid: None,
             password: None,
+            username: None,
             method: None,
             vmess_security: None,
             alter_id: None,
@@ -75,6 +93,7 @@ impl NodeSpec {
             flow: None,
             transport: None,
             path: None,
+            hosts: Vec::new(),
             service_name: None,
             headers: BTreeMap::new(),
             udp: false,
@@ -82,6 +101,20 @@ impl NodeSpec {
             obfs: None,
             obfs_password: None,
             congestion_control: None,
+            server_ports: Vec::new(),
+            hop_interval: None,
+            up_mbps: None,
+            down_mbps: None,
+            udp_relay_mode: None,
+            udp_over_stream: false,
+            zero_rtt_handshake: false,
+            heartbeat: None,
+            idle_session_check_interval: None,
+            idle_session_timeout: None,
+            min_idle_session: None,
+            http_path: None,
+            http_headers: BTreeMap::new(),
+            socks_version: None,
             source_ref: None,
             location: None,
             unknown_critical_field: None,
@@ -136,6 +169,44 @@ pub fn validate_node_spec(
         .protocol
         .parse::<ProxyProtocol>()
         .map_err(|_| SemanticError::UnsupportedProtocol)?;
+    if protocol != ProxyProtocol::Hysteria2
+        && (!spec.server_ports.is_empty()
+            || spec.hop_interval.is_some()
+            || spec.up_mbps.is_some()
+            || spec.down_mbps.is_some())
+    {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
+    if protocol != ProxyProtocol::Tuic
+        && (spec.congestion_control.is_some()
+            || spec.udp_relay_mode.is_some()
+            || spec.udp_over_stream
+            || spec.zero_rtt_handshake
+            || spec.heartbeat.is_some())
+    {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
+    if protocol != ProxyProtocol::AnyTls
+        && (spec.idle_session_check_interval.is_some()
+            || spec.idle_session_timeout.is_some()
+            || spec.min_idle_session.is_some())
+    {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
+    if protocol != ProxyProtocol::Http
+        && (spec.http_path.is_some() || !spec.http_headers.is_empty())
+    {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
+    if protocol != ProxyProtocol::Socks && spec.socks_version.is_some() {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
+    if protocol == ProxyProtocol::Socks && spec.tls {
+        return Err(SemanticError::InvalidTlsCombination);
+    }
+    if protocol == ProxyProtocol::Hysteria2 && !valid_server_ports(&spec.server_ports) {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
     let tls = make_tls(&spec, protocol)?;
     let credentials = make_credentials(&spec, protocol)?;
     let endpoint =
@@ -144,6 +215,7 @@ pub fn validate_node_spec(
         protocol,
         spec.transport.as_deref(),
         spec.path,
+        spec.hosts,
         spec.service_name,
         spec.headers,
     )?;
@@ -158,17 +230,78 @@ pub fn validate_node_spec(
         ProxyProtocol::Shadowsocks => ProtocolOptions::Shadowsocks {
             udp_over_tcp: spec.udp_over_tcp,
         },
-        ProxyProtocol::Tuic => ProtocolOptions::Tuic {
+        ProxyProtocol::Hysteria2 => ProtocolOptions::Hysteria2(Hysteria2Options {
+            server_ports: spec
+                .server_ports
+                .into_iter()
+                .map(|value| text(value, 64))
+                .collect::<Result<_, _>>()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            hop_interval: spec
+                .hop_interval
+                .map(|value| text(value, 64))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            up_mbps: spec.up_mbps,
+            down_mbps: spec.down_mbps,
+        }),
+        ProxyProtocol::Tuic => ProtocolOptions::Tuic(TuicOptions {
             congestion_control: spec
                 .congestion_control
                 .as_deref()
                 .map(|value| text(value, 64))
                 .transpose()
                 .map_err(|_| SemanticError::UnsupportedSemantics)?,
-        },
+            udp_relay_mode: spec
+                .udp_relay_mode
+                .as_deref()
+                .map(|value| text(value, 64))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            udp_over_stream: spec.udp_over_stream,
+            zero_rtt_handshake: spec.zero_rtt_handshake,
+            heartbeat: spec
+                .heartbeat
+                .map(|value| text(value, 64))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+        }),
+        ProxyProtocol::AnyTls => ProtocolOptions::AnyTls(AnyTlsOptions {
+            idle_session_check_interval: spec
+                .idle_session_check_interval
+                .map(|value| text(value, 64))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            idle_session_timeout: spec
+                .idle_session_timeout
+                .map(|value| text(value, 64))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            min_idle_session: spec.min_idle_session,
+        }),
+        ProxyProtocol::Http => ProtocolOptions::Http(HttpOptions {
+            path: spec
+                .http_path
+                .map(|value| text(value, 8 * 1024))
+                .transpose()
+                .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            headers: map_http_headers(spec.http_headers)?,
+        }),
+        ProxyProtocol::Socks => {
+            let version = spec.socks_version.unwrap_or_else(|| "5".into());
+            if !matches!(version.as_str(), "4" | "4a" | "5") {
+                return Err(SemanticError::UnsupportedSemantics);
+            }
+            ProtocolOptions::Socks(SocksOptions {
+                version: text(version, 8).map_err(|_| SemanticError::UnsupportedSemantics)?,
+                udp_over_tcp: spec.udp_over_tcp,
+            })
+        }
         _ => ProtocolOptions::None,
     };
-    if spec.udp_over_tcp.is_some() && protocol != ProxyProtocol::Shadowsocks {
+    if spec.udp_over_tcp.is_some()
+        && !matches!(protocol, ProxyProtocol::Shadowsocks | ProxyProtocol::Socks)
+    {
         return Err(SemanticError::UnsupportedSemantics);
     }
     if let Some(congestion) = spec.congestion_control.as_deref()
@@ -239,6 +372,17 @@ pub fn node_spec_from_uri(candidate: &UriNodeCandidate<'_>) -> Result<NodeSpec, 
     }
     let port = candidate.port().ok_or(SemanticError::InvalidEndpoint)?;
     let mut spec = NodeSpec::minimal(candidate.protocol().as_str(), candidate.server(), port);
+    if let Some(port_spec) = candidate.port_spec() {
+        if !matches!(candidate.protocol(), ProxyProtocol::Hysteria2) {
+            return Err(SemanticError::UnsupportedSemantics);
+        }
+        spec.server_ports = port_spec
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
     spec.display_name = candidate
         .display_name()
         .map_err(|_| SemanticError::UnsupportedSemantics)?;
@@ -297,12 +441,43 @@ pub fn node_spec_from_uri(candidate: &UriNodeCandidate<'_>) -> Result<NodeSpec, 
             "sid" | "short-id" => spec.reality_short_id = Some(value),
             "flow" => spec.flow = Some(value),
             "path" => spec.path = Some(value),
+            "host" => spec.hosts.extend(
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|host| !host.is_empty())
+                    .map(str::to_owned),
+            ),
             "serviceName" | "service_name" => spec.service_name = Some(value),
             "udp" => spec.udp = matches!(value.as_str(), "1" | "true"),
             "obfs" => spec.obfs = Some(value),
             "obfs-password" | "obfs_password" => spec.obfs_password = Some(value),
             "congestion_control" => spec.congestion_control = Some(value),
-            "plugin" => spec.plugin = Some(value),
+            "udp_relay_mode" => spec.udp_relay_mode = Some(value),
+            "udp_over_stream" => spec.udp_over_stream = matches!(value.as_str(), "1" | "true"),
+            "zero_rtt_handshake" => {
+                spec.zero_rtt_handshake = matches!(value.as_str(), "1" | "true")
+            }
+            "heartbeat" => spec.heartbeat = Some(value),
+            "hop_interval" => spec.hop_interval = Some(value),
+            "server_ports" => {
+                spec.server_ports = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|port| !port.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            }
+            "up_mbps" => spec.up_mbps = value.parse().ok(),
+            "down_mbps" => spec.down_mbps = value.parse().ok(),
+            "idle_session_check_interval" => spec.idle_session_check_interval = Some(value),
+            "idle_session_timeout" => spec.idle_session_timeout = Some(value),
+            "min_idle_session" => spec.min_idle_session = value.parse().ok(),
+            "plugin" => {
+                let (plugin, options) = parse_uri_plugin_value(&value)?;
+                spec.plugin = Some(plugin);
+                spec.plugin_options = options;
+            }
             "allowInsecure" | "insecure" => spec.insecure = matches!(value.as_str(), "1" | "true"),
             _ => spec.unknown_harmless_fields = spec.unknown_harmless_fields.saturating_add(1),
         }
@@ -371,6 +546,18 @@ fn node_spec_from_vmess_json(candidate: &UriNodeCandidate<'_>) -> Result<NodeSpe
         .get("path")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
+    spec.hosts = object
+        .get("host")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|host| !host.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
     spec.tls = matches!(
         object.get("tls").and_then(serde_json::Value::as_str),
         Some("tls")
@@ -405,6 +592,21 @@ fn make_credentials(
     spec: &NodeSpec,
     protocol: ProxyProtocol,
 ) -> Result<Credentials, SemanticError> {
+    if !matches!(protocol, ProxyProtocol::Http | ProxyProtocol::Socks) && spec.username.is_some() {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
+    if matches!(protocol, ProxyProtocol::Http | ProxyProtocol::Socks)
+        && (spec.uuid.is_some()
+            || spec.method.is_some()
+            || spec.vmess_security.is_some()
+            || spec.alter_id.is_some()
+            || spec.plugin.is_some()
+            || !spec.plugin_options.is_empty()
+            || spec.obfs.is_some()
+            || spec.obfs_password.is_some())
+    {
+        return Err(SemanticError::UnsupportedSemantics);
+    }
     let password = || {
         spec.password
             .as_deref()
@@ -481,6 +683,43 @@ fn make_credentials(
                         options,
                     })
                 }
+                Some("v2ray-plugin") => {
+                    if spec.plugin_options.keys().any(|key| {
+                        !matches!(key.as_str(), "mode" | "host" | "path" | "tls" | "mux")
+                    }) || !matches!(
+                        spec.plugin_options.get("mode").map(String::as_str),
+                        Some("websocket" | "quic")
+                    ) {
+                        return Err(SemanticError::UnsupportedSemantics);
+                    }
+                    if let Some(tls) = spec.plugin_options.get("tls")
+                        && tls != "true"
+                        && tls != "false"
+                    {
+                        return Err(SemanticError::UnsupportedSemantics);
+                    }
+                    if let Some(mux) = spec.plugin_options.get("mux")
+                        && mux.parse::<u16>().is_err()
+                    {
+                        return Err(SemanticError::UnsupportedSemantics);
+                    }
+                    let options = spec
+                        .plugin_options
+                        .iter()
+                        .map(|(key, value)| {
+                            Ok((
+                                key.clone(),
+                                text(value, 256)
+                                    .map_err(|_| SemanticError::UnsupportedSemantics)?,
+                            ))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, SemanticError>>()?;
+                    Some(PluginSpec {
+                        name: text("v2ray-plugin", 64)
+                            .map_err(|_| SemanticError::UnsupportedSemantics)?,
+                        options,
+                    })
+                }
                 _ => return Err(SemanticError::UnsupportedSemantics),
             };
             Ok(Credentials::Shadowsocks {
@@ -516,7 +755,46 @@ fn make_credentials(
         ProxyProtocol::AnyTls => Ok(Credentials::AnyTls {
             password: password()?,
         }),
+        ProxyProtocol::Http => optional_user_password(spec)
+            .map(|(username, password)| Credentials::Http { username, password }),
+        ProxyProtocol::Socks => optional_user_password(spec)
+            .map(|(username, password)| Credentials::Socks { username, password }),
     }
+}
+
+fn optional_user_password(
+    spec: &NodeSpec,
+) -> Result<(Option<SecretString>, Option<SecretString>), SemanticError> {
+    match (spec.username.as_deref(), spec.password.as_deref()) {
+        (None, None) => Ok((None, None)),
+        (Some(username), Some(password)) if !username.is_empty() && !password.is_empty() => Ok((
+            Some(SecretString::new(username)),
+            Some(SecretString::new(password)),
+        )),
+        _ => Err(SemanticError::InvalidCredential),
+    }
+}
+
+fn parse_uri_plugin_value(
+    value: &str,
+) -> Result<(String, BTreeMap<String, String>), SemanticError> {
+    let mut parts = value.split(';');
+    let name = parts
+        .next()
+        .filter(|name| !name.is_empty())
+        .ok_or(SemanticError::UnsupportedSemantics)?
+        .to_owned();
+    let mut options = BTreeMap::new();
+    for part in parts {
+        let (key, value) = part
+            .split_once('=')
+            .filter(|(key, value)| !key.is_empty() && !value.is_empty())
+            .ok_or(SemanticError::UnsupportedSemantics)?;
+        if options.insert(key.to_owned(), value.to_owned()).is_some() {
+            return Err(SemanticError::UnsupportedSemantics);
+        }
+    }
+    Ok((name, options))
 }
 
 fn make_tls(spec: &NodeSpec, protocol: ProxyProtocol) -> Result<TlsOptions, SemanticError> {
@@ -580,9 +858,15 @@ fn make_transport(
     protocol: ProxyProtocol,
     requested: Option<&str>,
     path: Option<String>,
+    hosts: Vec<String>,
     service_name: Option<String>,
     headers: BTreeMap<String, String>,
 ) -> Result<TransportOptions, SemanticError> {
+    if matches!(protocol, ProxyProtocol::Http | ProxyProtocol::Socks)
+        && requested.is_some_and(|value| value != "tcp")
+    {
+        return Err(SemanticError::UnsupportedTransport);
+    }
     let default = if matches!(protocol, ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic) {
         "quic"
     } else {
@@ -594,7 +878,8 @@ fn make_transport(
         .map_err(|_| SemanticError::UnsupportedTransport)?;
     match kind {
         TransportKind::Tcp => {
-            if path.is_some() || service_name.is_some() || !headers.is_empty() {
+            if path.is_some() || !hosts.is_empty() || service_name.is_some() || !headers.is_empty()
+            {
                 return Err(SemanticError::UnsupportedSemantics);
             }
             Ok(TransportOptions::Tcp)
@@ -602,7 +887,18 @@ fn make_transport(
         TransportKind::WebSocket | TransportKind::HttpUpgrade => {
             let path = text(path.unwrap_or_else(|| "/".into()), 8 * 1024)
                 .map_err(|_| SemanticError::UnsupportedSemantics)?;
-            let headers = map_headers(headers)?;
+            let mut headers = map_headers(headers)?;
+            if let Some(host) = hosts.first()
+                && !headers.keys().any(|key| key.eq_ignore_ascii_case("host"))
+            {
+                headers.insert(
+                    "Host".into(),
+                    text(host, 256).map_err(|_| SemanticError::UnsupportedSemantics)?,
+                );
+            }
+            if hosts.len() > 1 {
+                return Err(SemanticError::UnsupportedSemantics);
+            }
             Ok(if kind == TransportKind::WebSocket {
                 TransportOptions::WebSocket { path, headers }
             } else {
@@ -612,19 +908,56 @@ fn make_transport(
         TransportKind::Http => Ok(TransportOptions::Http {
             path: text(path.unwrap_or_else(|| "/".into()), 8 * 1024)
                 .map_err(|_| SemanticError::UnsupportedSemantics)?,
-            hosts: Vec::new(),
+            hosts: hosts
+                .into_iter()
+                .map(|host| text(host, 256).map_err(|_| SemanticError::UnsupportedSemantics))
+                .collect::<Result<_, _>>()?,
         }),
-        TransportKind::Grpc => Ok(TransportOptions::Grpc {
-            service_name: text(service_name.unwrap_or_else(|| "grpc".into()), 256)
-                .map_err(|_| SemanticError::UnsupportedSemantics)?,
-        }),
+        TransportKind::Grpc => {
+            // gRPC has no V2Ray host list in sing-box 1.13.15.
+            // Host values are therefore rejected instead of silently dropped.
+            if !hosts.is_empty() {
+                return Err(SemanticError::UnsupportedSemantics);
+            }
+            Ok(TransportOptions::Grpc {
+                service_name: text(service_name.unwrap_or_else(|| "grpc".into()), 256)
+                    .map_err(|_| SemanticError::UnsupportedSemantics)?,
+            })
+        }
         TransportKind::Quic => {
-            if path.is_some() || service_name.is_some() || !headers.is_empty() {
+            if path.is_some() || !hosts.is_empty() || service_name.is_some() || !headers.is_empty()
+            {
                 return Err(SemanticError::UnsupportedSemantics);
             }
             Ok(TransportOptions::Quic)
         }
     }
+}
+
+fn valid_server_ports(values: &[String]) -> bool {
+    if values.is_empty() || values.len() > 64 {
+        return values.is_empty();
+    }
+    values.iter().all(|value| {
+        let value = value.trim();
+        if value.is_empty() {
+            return false;
+        }
+        if let Some((start, end)) = value.split_once('-') {
+            if start.is_empty() || end.is_empty() || end.contains('-') {
+                return false;
+            }
+            let Ok(start) = start.parse::<u16>() else {
+                return false;
+            };
+            let Ok(end) = end.parse::<u16>() else {
+                return false;
+            };
+            start != 0 && start <= end
+        } else {
+            value.parse::<u16>().is_ok_and(|port| port != 0)
+        }
+    })
 }
 
 fn map_headers(
@@ -636,6 +969,19 @@ fn map_headers(
             let key = text(key, 256).map_err(|_| SemanticError::UnsupportedSemantics)?;
             let value = text(value, 8 * 1024).map_err(|_| SemanticError::UnsupportedSemantics)?;
             Ok((key.as_str().to_owned(), value))
+        })
+        .collect()
+}
+
+fn map_http_headers(
+    headers: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, SecretString>, SemanticError> {
+    headers
+        .into_iter()
+        .map(|(key, value)| {
+            let key = text(key, 256).map_err(|_| SemanticError::UnsupportedSemantics)?;
+            text(&value, 8 * 1024).map_err(|_| SemanticError::UnsupportedSemantics)?;
+            Ok((key.as_str().to_owned(), SecretString::new(value)))
         })
         .collect()
 }

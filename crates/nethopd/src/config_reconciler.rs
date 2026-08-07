@@ -107,6 +107,10 @@ impl ConfigRuntime {
         )
     }
 
+    pub fn source_config(&self) -> &SourceConfig {
+        &self.current_sources
+    }
+
     pub fn capture_policy(&self) -> Result<nethop_core::CapturePolicy, ConfigRuntimeError> {
         self.current
             .effective()
@@ -612,17 +616,21 @@ fn apply_mutation(
             list.insert(target, value);
             preferred_ids.insert(target, preferred_id);
         }
-        ConfigMutation::AddPackage { package } => {
-            array_mut(document, "/applications/packages")?.push(serde_json::json!(package));
+        ConfigMutation::AddApplicationTarget { target } => {
+            array_mut(document, "/applications/targets")?
+                .push(serde_json::to_value(target).map_err(|_| ConfigError::InvalidToml)?);
         }
-        ConfigMutation::RemovePackage { package } => {
-            remove_string(array_mut(document, "/applications/packages")?, package)?;
+        ConfigMutation::RemoveApplicationTarget { target } => {
+            remove_value(
+                array_mut(document, "/applications/targets")?,
+                &serde_json::to_value(target).map_err(|_| ConfigError::InvalidToml)?,
+            )?;
         }
-        ConfigMutation::ReplacePackages { packages } => {
+        ConfigMutation::ReplaceApplicationTargets { targets } => {
             set_value(
                 document,
-                "/applications/packages",
-                serde_json::json!(packages),
+                "/applications/targets",
+                serde_json::to_value(targets).map_err(|_| ConfigError::InvalidToml)?,
             )?;
         }
         ConfigMutation::AddRoutingCidr { list, cidr } => {
@@ -630,6 +638,25 @@ fn apply_mutation(
         }
         ConfigMutation::RemoveRoutingCidr { list, cidr } => {
             remove_string(array_mut(document, routing_pointer(*list))?, cidr)?;
+        }
+        ConfigMutation::RemoveNode { node_id } => {
+            let source_list = array_mut(document, "/subscriptions/sources")?;
+            for source in source_list {
+                let source = source.as_object_mut().ok_or(ConfigError::InvalidToml)?;
+                let filter = source
+                    .entry("filter")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .ok_or(ConfigError::InvalidToml)?;
+                let excluded = filter
+                    .entry("excluded_node_ids")
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .ok_or(ConfigError::InvalidToml)?;
+                if !excluded.iter().any(|value| value.as_str() == Some(node_id)) {
+                    excluded.push(serde_json::json!(node_id));
+                }
+            }
         }
         ConfigMutation::SetScalarField { field_id, value } => {
             let pointer = scalar_pointer(field_id).ok_or(ConfigError::UnknownField)?;
@@ -680,6 +707,18 @@ fn remove_string(
     Ok(())
 }
 
+fn remove_value(
+    values: &mut Vec<serde_json::Value>,
+    target: &serde_json::Value,
+) -> Result<(), ConfigRuntimeError> {
+    let index = values
+        .iter()
+        .position(|value| value == target)
+        .ok_or(ConfigError::InvalidValue)?;
+    values.remove(index);
+    Ok(())
+}
+
 const fn routing_pointer(list: RoutingCidrList) -> &'static str {
     match list {
         RoutingCidrList::ForceProxy => "/routing/force_proxy_cidrs",
@@ -709,6 +748,10 @@ fn scalar_pointer(field_id: &str) -> Option<&'static str> {
         "network.interfaces.wifi" => Some("/network/interfaces/wifi"),
         "network.interfaces.hotspot" => Some("/network/interfaces/hotspot"),
         "network.interfaces.usb" => Some("/network/interfaces/usb"),
+        "network.wifi_scenes.enabled" => Some("/network/wifi_scenes/enabled"),
+        "network.wifi_scenes.probe_interval_seconds" => {
+            Some("/network/wifi_scenes/probe_interval_seconds")
+        }
         "routing.bypass_private" => Some("/routing/bypass_private"),
         "routing.bypass_cn" => Some("/routing/bypass_cn"),
         "routing.block_quic" => Some("/routing/block_quic"),

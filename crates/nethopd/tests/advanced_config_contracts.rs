@@ -8,7 +8,7 @@ use nethopd::{
 use tempfile::tempdir;
 
 fn complete_config() -> &'static str {
-    r#"schema_version = 1
+    r#"schema_version = 2
 
 [service]
 enabled = true
@@ -24,6 +24,7 @@ url = "https://subscription.example/primary"
 request_profile = "sing_box_android"
 format_hint = "auto"
 mirrors = ["https://mirror.example/primary"]
+filter = { include_names = ["alpha"], exclude_names = ["backup"], protocols = ["vless"] }
 
 [[subscriptions.sources]]
 name = "Backup"
@@ -45,9 +46,12 @@ concurrency = 10
 
 [applications]
 mode = "whitelist"
-packages = ["com.example.alpha", "com.example.beta"]
-include_uids = [10123, 10124]
-exclude_uids = [0]
+targets = [
+  { kind = "package", android_user_id = 0, package = "com.example.alpha" },
+  { kind = "package", android_user_id = 10, package = "com.example.beta" },
+  { kind = "uid", uid = 10123 },
+  { kind = "uid", uid = 10124 },
+]
 
 [network]
 capture_mode = "auto"
@@ -67,10 +71,13 @@ exclude = ["wlan-test"]
 
 [routing]
 bypass_private = true
-bypass_cn = false
+bypass_cn = true
 block_quic = false
 force_proxy_cidrs = ["203.0.113.7/24"]
 bypass_cidrs = ["192.0.2.0/24"]
+force_proxy_domains = ["Video.Example"]
+bypass_domains = ["direct.example"]
+block_domains = ["ads.example"]
 
 [logging]
 level = "info"
@@ -102,7 +109,7 @@ fn write_private(path: &std::path::Path, contents: &str) {
 }
 
 #[test]
-fn complete_v1_schema_builds_typed_effective_sections() {
+fn complete_v2_schema_builds_typed_effective_sections() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("nethop.toml");
     write_private(&path, complete_config());
@@ -117,11 +124,15 @@ fn complete_v1_schema_builds_typed_effective_sections() {
     );
     assert_eq!(config.sources()[0].format_hint(), SourceFormatHint::Auto);
     assert_eq!(config.sources()[0].mirrors().len(), 1);
+    assert_eq!(config.sources()[0].filter().include_names(), ["alpha"]);
+    assert_eq!(config.sources()[0].filter().exclude_names(), ["backup"]);
     assert_eq!(config.proxy().outbound_mode(), OutboundMode::Rule);
     assert_eq!(config.proxy().selector_mode(), SelectorMode::Urltest);
     assert_eq!(config.proxy().urltest().max_candidates(), 64);
     assert_eq!(config.applications().mode(), ApplicationMode::Whitelist);
-    assert_eq!(config.applications().packages().len(), 2);
+    assert_eq!(config.applications().targets().len(), 4);
+    assert_eq!(config.capture().include_uids(), [10123, 10124]);
+    assert_eq!(config.capture().exclude_uids(), [0]);
     assert_eq!(config.network().capture_mode(), CaptureIntent::Auto);
     assert_eq!(config.network().ipv6_mode(), Ipv6Mode::Auto);
     assert_eq!(config.network().dns_mode(), DnsMode::Auto);
@@ -134,6 +145,10 @@ fn complete_v1_schema_builds_typed_effective_sections() {
         config.routing().force_proxy_cidrs()[0].as_str(),
         "203.0.113.0/24"
     );
+    assert!(config.routing().bypass_cn());
+    assert_eq!(config.routing().force_proxy_domains(), ["video.example"]);
+    assert_eq!(config.routing().bypass_domains(), ["direct.example"]);
+    assert_eq!(config.routing().block_domains(), ["ads.example"]);
     assert_eq!(config.logging().level(), LogLevel::Info);
     assert_eq!(config.advanced().health_timeout_seconds(), 3);
     assert_eq!(config.allocations().len(), 1);
@@ -144,12 +159,31 @@ fn complete_v1_schema_builds_typed_effective_sections() {
 }
 
 #[test]
+fn surfboard_format_hint_is_an_explicit_android_import_choice() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    write_private(
+        &path,
+        &complete_config().replacen(
+            "format_hint = \"auto\"",
+            "format_hint = \"surfboard_ini\"",
+            1,
+        ),
+    );
+    let snapshot = ConfigStore::new(path).unwrap().load().unwrap();
+    assert_eq!(
+        snapshot.effective().sources()[0].format_hint(),
+        SourceFormatHint::SurfboardIni
+    );
+}
+
+#[test]
 fn minimal_phase_one_document_receives_frozen_phase_two_defaults() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("nethop.toml");
     write_private(
         &path,
-        "schema_version = 1\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
+        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
     );
 
     let snapshot = ConfigStore::new(path).unwrap().load().unwrap();
@@ -159,6 +193,7 @@ fn minimal_phase_one_document_receives_frozen_phase_two_defaults() {
     assert_eq!(config.proxy().outbound_mode(), OutboundMode::Rule);
     assert_eq!(config.applications().mode(), ApplicationMode::All);
     assert_eq!(config.network().capture_mode(), CaptureIntent::Auto);
+    assert!(config.routing().bypass_cn());
     assert_eq!(config.logging().retention_days(), 7);
     assert_eq!(config.allocations().len(), 3);
 }
@@ -220,13 +255,16 @@ fn duplicate_or_conflicting_advanced_values_are_rejected() {
     let cases = [
         (
             complete_config().replace(
-                "packages = [\"com.example.alpha\", \"com.example.beta\"]",
-                "packages = [\"com.example.alpha\", \"com.example.alpha\"]",
+                "{ kind = \"package\", android_user_id = 10, package = \"com.example.beta\" }",
+                "{ kind = \"package\", android_user_id = 0, package = \"com.example.alpha\" }",
             ),
             ConfigError::InvalidApplications,
         ),
         (
-            complete_config().replace("include_uids = [10123, 10124]", "include_uids = [0, 10124]"),
+            complete_config().replace(
+                "{ kind = \"uid\", uid = 10123 }",
+                "{ kind = \"uid\", uid = 0 }",
+            ),
             ConfigError::InvalidApplications,
         ),
         (
@@ -237,12 +275,18 @@ fn duplicate_or_conflicting_advanced_values_are_rejected() {
             ConfigError::InvalidRouting,
         ),
         (
-            complete_config().replace("hotspot = false", "hotspot = true"),
-            ConfigError::UnsupportedNetwork,
+            complete_config().replace(
+                "bypass_domains = [\"direct.example\"]",
+                "bypass_domains = [\"sub.video.example\"]",
+            ),
+            ConfigError::InvalidRouting,
         ),
         (
-            complete_config().replace("bypass_cn = false", "bypass_cn = true"),
-            ConfigError::UnsupportedRouting,
+            complete_config().replace(
+                "block_domains = [\"ads.example\"]",
+                "block_domains = [\"bad domain\"]",
+            ),
+            ConfigError::InvalidRouting,
         ),
     ];
     for (contents, expected) in cases {
@@ -255,19 +299,52 @@ fn duplicate_or_conflicting_advanced_values_are_rejected() {
 }
 
 #[test]
+fn hotspot_and_usb_are_admitted_into_the_capture_policy() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let contents = complete_config()
+        .replace("hotspot = false", "hotspot = true")
+        .replace("usb = false", "usb = true");
+    write_private(&path, &contents);
+
+    let snapshot = ConfigStore::new(&path).unwrap().load().unwrap();
+    let forwarding = snapshot.effective().capture().forwarding_policy();
+    assert!(snapshot.effective().network().interfaces().hotspot());
+    assert!(snapshot.effective().network().interfaces().usb());
+    assert!(forwarding.hotspot());
+    assert!(forwarding.usb());
+}
+
+#[test]
+fn wifi_scene_rules_are_typed_bounded_and_part_of_network_diff() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let scene = "\n[network.wifi_scenes]\nenabled = true\nprobe_interval_seconds = 30\n\n[[network.wifi_scenes.rules]]\nid = \"trusted-home\"\nssid = \"Private Home\"\nbssid = \"aa:bb:cc:dd:ee:ff\"\naction = \"disable_proxy\"\n";
+    let contents = complete_config().replace("\n[routing]", &format!("{scene}\n[routing]"));
+    write_private(&path, &contents);
+
+    let snapshot = ConfigStore::new(&path).unwrap().load().unwrap();
+    let settings = snapshot.effective().network().wifi_scenes();
+    assert!(settings.enabled());
+    assert_eq!(settings.probe_interval_seconds(), 30);
+
+    let invalid = contents.replace("probe_interval_seconds = 30", "probe_interval_seconds = 5");
+    write_private(&path, &invalid);
+    assert_eq!(
+        ConfigStore::new(&path).unwrap().load().unwrap_err(),
+        ConfigError::InvalidNetwork
+    );
+}
+
+#[test]
 fn canonical_write_preserves_the_complete_typed_document() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("nethop.toml");
     let unsorted = complete_config()
         .replace(
-            "packages = [\"com.example.alpha\", \"com.example.beta\"]",
-            "packages = [\"com.example.beta\", \"com.example.alpha\"]",
+            "{ kind = \"package\", android_user_id = 0, package = \"com.example.alpha\" },\n  { kind = \"package\", android_user_id = 10, package = \"com.example.beta\" },",
+            "{ kind = \"package\", android_user_id = 10, package = \"com.example.beta\" },\n  { kind = \"package\", android_user_id = 0, package = \"com.example.alpha\" },",
         )
-        .replace(
-            "include_uids = [10123, 10124]",
-            "include_uids = [10124, 10123]",
-        )
-        .replace("exclude_uids = [0]", "exclude_uids = []")
         .replace(
             "force_proxy_cidrs = [\"203.0.113.7/24\"]",
             "force_proxy_cidrs = [\"203.0.114.7/24\", \"203.0.113.7/24\"]",
@@ -295,8 +372,8 @@ fn canonical_write_preserves_the_complete_typed_document() {
     assert!(text.contains("# sing-box 1.13.15 uses a fixed internal URL-test concurrency of 10."));
     assert!(text.find("com.example.alpha").unwrap() < text.find("com.example.beta").unwrap());
     assert!(text.find("10123").unwrap() < text.find("10124").unwrap());
-    assert!(text.contains("exclude_uids = [0]"));
     assert!(text.find("203.0.113.0/24").unwrap() < text.find("203.0.114.0/24").unwrap());
+    assert!(text.contains("force_proxy_domains = [\"video.example\"]"));
     assert_eq!(after.effective().sources()[0].mirrors().len(), 1);
 }
 

@@ -3,12 +3,12 @@ use std::{cell::RefCell, rc::Rc};
 use nethop_android::{
     AllocationCapability, CapabilityError, CapabilityProbe, CapabilityReport, CapabilityStatus,
     CommandFailure, CommandInvocation, CommandOutput, ExecutionError, FamilyCapability, IpFamily,
-    NetfilterBackend, NetworkCommandBackend, NetworkExecutor, NetworkHealthDiagnosticCode,
-    NetworkHealthError, NetworkHealthVerifier, NetworkOperationKind, NetworkPlanVerifier,
-    NetworkPlanner, NetworkProgram, PlanSlot, ProbeBackend, ProbeCommand, ProbeOutput,
-    ResourceCandidate,
+    NetfilterBackend, NetfilterTable, NetworkCommandBackend, NetworkExecutor,
+    NetworkHealthDiagnosticCode, NetworkHealthError, NetworkHealthVerifier, NetworkOperationKind,
+    NetworkPlanVerifier, NetworkPlanner, NetworkProgram, PlanSlot, ProbeBackend, ProbeCommand,
+    ProbeOutput, ResourceCandidate,
 };
-use nethop_core::{CaptureMode, CapturePolicy, GenerationId, InterfacePolicy};
+use nethop_core::{CaptureMode, CapturePolicy, ForwardingPolicy, GenerationId, InterfacePolicy};
 
 const PORT: u16 = 7893;
 
@@ -97,6 +97,7 @@ struct AppliedPlanProbe {
     reply_bypass_present: bool,
     loopback_bypass_present: bool,
     dns_capture_present: bool,
+    dns_guard_present: bool,
     rule_present: bool,
     route_present: bool,
     port_present: bool,
@@ -106,7 +107,22 @@ impl ProbeBackend for AppliedPlanProbe {
     fn run(&mut self, command: ProbeCommand) -> Result<ProbeOutput, CapabilityError> {
         let allocation = candidate(0x100, 100, 10_000);
         let output = match command {
-            ProbeCommand::NetfilterSnapshot(_) => ProbeOutput::new(
+            ProbeCommand::NetfilterSnapshot(_, NetfilterTable::Filter) => ProbeOutput::new(
+                true,
+                if self.dns_guard_present {
+                    "-A OUTPUT -m comment --comment \"nethop:g=7\" -j NH_DNS_A\n\
+-A NH_DNS_A -o lo -j RETURN\n\
+-A NH_DNS_A -m mark --mark 0x100/0xff00 -j RETURN\n\
+-A NH_DNS_A -m mark --mark 0x200 -j RETURN\n\
+-A NH_DNS_A -p udp --dport 53 -j DROP\n\
+-A NH_DNS_A -p tcp --dport 53 -j DROP\n\
+-A NH_DNS_A -p tcp --dport 853 -j DROP"
+                } else {
+                    ""
+                },
+                "",
+            ),
+            ProbeCommand::NetfilterSnapshot(_, NetfilterTable::Mangle) => ProbeOutput::new(
                 true,
                 if self.owner_present {
                     if self.reply_bypass_present && self.loopback_bypass_present {
@@ -195,9 +211,10 @@ impl ProbeBackend for GuardPlanProbe {
             ProbeCommand::ListeningSockets => {
                 ProbeOutput::new(true, "udp UNCONN 0 0 127.0.0.1:7893 0.0.0.0:*", "")
             }
-            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv4) => ProbeOutput::new(
-                true,
-                "-A OUTPUT -m comment --comment nethop:g=8 -j NH_OUT_B\n\
+            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv4, NetfilterTable::Mangle) => {
+                ProbeOutput::new(
+                    true,
+                    "-A OUTPUT -m comment --comment nethop:g=8 -j NH_OUT_B\n\
 -A NH_OUT_B -m conntrack --ctdir REPLY -j ACCEPT\n\
 -A NH_OUT_B -p tcp --dport 53 -j MARK --set-xmark 0x100/0xff00\n\
 -A NH_OUT_B -p udp --dport 53 -j MARK --set-xmark 0x100/0xff00\n\
@@ -208,13 +225,29 @@ impl ProbeBackend for GuardPlanProbe {
 -A NH_PRE_B -p tcp --dport 53 -j TPROXY --on-port 7893\n\
 -A NH_PRE_B -p udp --dport 53 -j TPROXY --on-port 7893\n\
 -A NH_PRE_B -j TPROXY --on-port 7893",
-                "",
-            ),
-            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv6) => ProbeOutput::new(
-                true,
-                "-A OUTPUT -m comment --comment nethop:g=8 -j NH_V6G_B",
-                "",
-            ),
+                    "",
+                )
+            }
+            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv4, NetfilterTable::Filter) => {
+                ProbeOutput::new(
+                    true,
+                    "-A OUTPUT -m comment --comment nethop:g=8 -j NH_DNS_B\n\
+-A NH_DNS_B -o lo -j RETURN\n\
+-A NH_DNS_B -m mark --mark 0x100/0xff00 -j RETURN\n\
+-A NH_DNS_B -m mark --mark 0x200/0xffffffff -j RETURN\n\
+-A NH_DNS_B -p udp --dport 53 -j DROP\n\
+-A NH_DNS_B -p tcp --dport 53 -j DROP\n\
+-A NH_DNS_B -p tcp --dport 853 -j DROP",
+                    "",
+                )
+            }
+            ProbeCommand::NetfilterSnapshot(IpFamily::Ipv6, NetfilterTable::Filter) => {
+                ProbeOutput::new(
+                    true,
+                    "-A OUTPUT -m comment --comment nethop:g=8 -j NH_V6G_B",
+                    "",
+                )
+            }
             ProbeCommand::PolicyRules(IpFamily::Ipv4) => {
                 ProbeOutput::new(true, "10000: from all fwmark 0x100/0xff00 lookup 100", "")
             }
@@ -248,10 +281,17 @@ impl ProbeBackend for ReadOnlyProbe {
             ProbeCommand::NetfilterVersion(_) => {
                 ProbeOutput::new(true, "iptables v1.8.9 (nf_tables)", "")
             }
-            ProbeCommand::NetfilterSnapshot(_) if self.chain_conflict => {
+            ProbeCommand::NetfilterSnapshot(_, _) if self.chain_conflict => {
                 ProbeOutput::new(true, ":NH_OUT_A - [0:0]", "")
             }
-            ProbeCommand::NetfilterSnapshot(_) => ProbeOutput::new(true, "*mangle\nCOMMIT", ""),
+            ProbeCommand::NetfilterSnapshot(_, table) => ProbeOutput::new(
+                true,
+                match table {
+                    NetfilterTable::Filter => "*filter\nCOMMIT",
+                    NetfilterTable::Mangle => "*mangle\nCOMMIT",
+                },
+                "",
+            ),
             ProbeCommand::Addresses(IpFamily::Ipv4) => {
                 ProbeOutput::new(true, "inet 192.0.2.2/24", "")
             }
@@ -266,7 +306,11 @@ impl ProbeBackend for ReadOnlyProbe {
             ProbeCommand::PolicyRules(_) => ProbeOutput::new(true, "0: from all lookup local", ""),
             ProbeCommand::RouteTable(_, _)
             | ProbeCommand::ListeningSockets
-            | ProbeCommand::PackageList(_) => ProbeOutput::new(true, "", ""),
+            | ProbeCommand::PrivateDnsMode
+            | ProbeCommand::WifiStatus
+            | ProbeCommand::CoreUpdateNotification
+            | ProbeCommand::UserList
+            | ProbeCommand::PackageList { .. } => ProbeOutput::new(true, "", ""),
             ProbeCommand::TunDevice
             | ProbeCommand::NetfilterRestoreHelp(_)
             | ProbeCommand::TproxyHelp(_)
@@ -363,6 +407,7 @@ fn applied_plan_verifier_checks_owned_rules_routes_and_listener_without_mutation
             reply_bypass_present: true,
             loopback_bypass_present: true,
             dns_capture_present: true,
+            dns_guard_present: true,
             rule_present: true,
             route_present: true,
             port_present: true,
@@ -381,6 +426,7 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
         reply_bypass_present,
         loopback_bypass_present,
         dns_capture_present,
+        dns_guard_present,
         rule_present,
         route_present,
         port_present,
@@ -388,6 +434,7 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
     ) in [
         (
             false,
+            true,
             true,
             true,
             true,
@@ -404,12 +451,14 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
             true,
             true,
             true,
+            true,
             NetworkHealthDiagnosticCode::ReplyBypassMissing,
         ),
         (
             true,
             true,
             false,
+            true,
             true,
             true,
             true,
@@ -424,6 +473,7 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
             true,
             true,
             true,
+            true,
             NetworkHealthDiagnosticCode::DnsCaptureMissing,
         ),
         (
@@ -434,9 +484,22 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
             false,
             true,
             true,
+            true,
+            NetworkHealthDiagnosticCode::DnsGuardMissing,
+        ),
+        (
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
             NetworkHealthDiagnosticCode::PolicyRuleMissing,
         ),
         (
+            true,
             true,
             true,
             true,
@@ -453,6 +516,7 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
             true,
             true,
             true,
+            true,
             false,
             NetworkHealthDiagnosticCode::InboundPortMissing,
         ),
@@ -463,6 +527,7 @@ fn applied_plan_verifier_fails_closed_for_each_missing_runtime_primitive() {
                 reply_bypass_present,
                 loopback_bypass_present,
                 dns_capture_present,
+                dns_guard_present,
                 rule_present,
                 route_present,
                 port_present,
@@ -499,7 +564,7 @@ fn pure_plan_is_deterministic_owned_and_never_flushes_system_tables() {
     let first = full_plan();
     let second = full_plan();
     assert_eq!(first, second);
-    assert_eq!(first.operation_kinds().len(), 6);
+    assert_eq!(first.operation_kinds().len(), 8);
     assert!(!first.ipv6_guarded());
 
     for (_, payload) in first.restore_payloads() {
@@ -509,6 +574,33 @@ fn pure_plan_is_deterministic_owned_and_never_flushes_system_tables() {
         assert!(!payload.contains("-F PREROUTING"));
         assert!(!payload.contains("--flush"));
         assert!(!payload.contains("iptables"));
+    }
+}
+
+#[test]
+fn dns_guard_allows_owned_flows_before_blocking_plain_dns_and_dot() {
+    let plan = full_plan();
+    let payload = plan
+        .restore_payloads()
+        .find(|(family, payload)| *family == IpFamily::Ipv4 && payload.starts_with("*filter"))
+        .expect("IPv4 DNS guard payload")
+        .1;
+    let loopback = payload.find("-A NH_DNS_A -o lo -j RETURN").unwrap();
+    let capture = payload
+        .find("-A NH_DNS_A -m mark --mark 0x100/0xff00 -j RETURN")
+        .unwrap();
+    let bypass = payload
+        .find("-A NH_DNS_A -m mark --mark 0x200/0xffffffff -j RETURN")
+        .unwrap();
+    for drop_rule in [
+        "-A NH_DNS_A -p udp --dport 53 -j DROP",
+        "-A NH_DNS_A -p tcp --dport 53 -j DROP",
+        "-A NH_DNS_A -p tcp --dport 853 -j DROP",
+    ] {
+        let drop_index = payload.find(drop_rule).expect("DNS leak rule");
+        assert!(loopback < drop_index);
+        assert!(capture < drop_index);
+        assert!(bypass < drop_index);
     }
 }
 
@@ -666,6 +758,16 @@ fn tproxy_plan_resolves_interface_globs_before_building_rules() {
     assert!(!payload.contains("-o wlan-test"));
     assert!(!payload.contains("-o rmnet_data0"));
     assert!(!payload.contains("wlan*"));
+
+    let dns_guard = plan
+        .restore_payloads()
+        .find(|(family, payload)| *family == IpFamily::Ipv4 && payload.starts_with("*filter"))
+        .unwrap()
+        .1;
+    assert!(dns_guard.contains("-A NH_DNS_A -o wlan0 -p udp --dport 53 -j DROP"));
+    assert!(!dns_guard.contains("-o wlan-test"));
+    assert!(!dns_guard.contains("-o rmnet_data0"));
+    assert!(!dns_guard.contains("wlan*"));
 }
 
 #[test]
@@ -702,6 +804,87 @@ fn tproxy_plan_rejects_an_interface_scope_that_matches_nothing() {
     assert_eq!(
         error.code().as_str(),
         "network_plan_interface_selection_empty"
+    );
+}
+
+#[test]
+fn tproxy_plan_adds_only_requested_detected_tether_interfaces() {
+    let capabilities = report(
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            candidate(0x100, 100, 10_000),
+            CapabilityStatus::Supported,
+        )],
+    )
+    .with_interfaces(vec![
+        "lo".into(),
+        "rmnet_data0".into(),
+        "rndis0".into(),
+        "usb0".into(),
+        "wlan0".into(),
+        "wlan1".into(),
+    ])
+    .unwrap();
+    let policy = policy(true)
+        .with_forwarding_policy(ForwardingPolicy::new(true, false))
+        .unwrap();
+
+    let plan = NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(12).unwrap(),
+            PlanSlot::A,
+            &policy,
+            &capabilities,
+        )
+        .unwrap();
+
+    assert_eq!(plan.forwarding_interfaces(), ["wlan1"]);
+    let payload = plan
+        .restore_payloads()
+        .find(|(_, payload)| payload.contains("NH_FWD_A"))
+        .unwrap()
+        .1;
+    assert!(payload.contains("-A PREROUTING -i wlan1"));
+    assert!(!payload.contains("-i wlan0"));
+    assert!(!payload.contains("-i rndis0"));
+    assert!(!payload.contains("-i usb0"));
+    assert!(!payload.contains("-A OUTPUT"));
+    assert!(!payload.contains("--uid-owner"));
+    let ipv6_guard = plan
+        .restore_payloads()
+        .find(|(family, payload)| *family == IpFamily::Ipv6 && payload.contains("NH_FWD6_A"))
+        .unwrap()
+        .1;
+    assert!(ipv6_guard.contains("-A FORWARD -i wlan1"));
+    assert!(ipv6_guard.contains("-A NH_FWD6_A -j DROP"));
+}
+
+#[test]
+fn tproxy_plan_rejects_requested_tethering_without_a_safe_interface() {
+    let capabilities = report(
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            candidate(0x100, 100, 10_000),
+            CapabilityStatus::Supported,
+        )],
+    )
+    .with_interfaces(vec!["lo".into(), "rmnet_data0".into(), "wlan0".into()])
+    .unwrap();
+    let policy = policy(true)
+        .with_forwarding_policy(ForwardingPolicy::new(false, true))
+        .unwrap();
+
+    let error = NetworkPlanner
+        .build_tproxy(
+            GenerationId::new(13).unwrap(),
+            PlanSlot::A,
+            &policy,
+            &capabilities,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code().as_str(),
+        "network_plan_forwarding_interface_selection_empty"
     );
 }
 

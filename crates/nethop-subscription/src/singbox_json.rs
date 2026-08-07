@@ -109,6 +109,7 @@ fn extract_outbounds(input: &str) -> Result<(Vec<Box<RawValue>>, usize), Singbox
                     code: DiagnosticCode::InvalidJson,
                 })?;
             let boundary_count = probe.boundary_count();
+            let endpoints_present = probe.endpoints.is_some();
             if let Some(outbounds) = probe.outbounds {
                 Ok((outbounds, boundary_count))
             } else if probe.protocol.is_some() {
@@ -117,6 +118,8 @@ fn extract_outbounds(input: &str) -> Result<(Vec<Box<RawValue>>, usize), Singbox
                         code: DiagnosticCode::InvalidJson,
                     })?;
                 Ok((vec![raw], 0))
+            } else if endpoints_present {
+                Ok((Vec::new(), boundary_count))
             } else {
                 Err(SingboxJsonError {
                     code: DiagnosticCode::InvalidJson,
@@ -133,6 +136,7 @@ fn extract_outbounds(input: &str) -> Result<(Vec<Box<RawValue>>, usize), Singbox
 struct SingboxRootProbe {
     #[serde(default)]
     outbounds: Option<Vec<Box<RawValue>>>,
+    endpoints: Option<serde::de::IgnoredAny>,
     #[serde(rename = "type")]
     protocol: Option<serde::de::IgnoredAny>,
     log: Option<serde::de::IgnoredAny>,
@@ -149,6 +153,7 @@ impl SingboxRootProbe {
             self.log.is_some(),
             self.dns.is_some(),
             self.inbounds.is_some(),
+            self.endpoints.is_some(),
             self.route.is_some(),
             self.services.is_some(),
             self.experimental.is_some(),
@@ -167,6 +172,7 @@ struct SingboxOutbound {
     server: Option<String>,
     server_port: Option<u16>,
     uuid: Option<String>,
+    username: Option<String>,
     password: Option<String>,
     method: Option<String>,
     security: Option<String>,
@@ -176,6 +182,22 @@ struct SingboxOutbound {
     plugin_opts: Option<String>,
     udp_over_tcp: Option<SingboxUdpOverTcp>,
     congestion_control: Option<String>,
+    server_ports: Option<SingboxStringList>,
+    hop_interval: Option<String>,
+    up_mbps: Option<u32>,
+    down_mbps: Option<u32>,
+    udp_relay_mode: Option<String>,
+    udp_over_stream: Option<bool>,
+    zero_rtt_handshake: Option<bool>,
+    heartbeat: Option<String>,
+    idle_session_check_interval: Option<String>,
+    idle_session_timeout: Option<String>,
+    min_idle_session: Option<u32>,
+    version: Option<String>,
+    network: Option<SingboxNetworkList>,
+    path: Option<String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
     tls: Option<SingboxTls>,
     transport: Option<SingboxTransport>,
     obfs: Option<SingboxObfs>,
@@ -216,11 +238,28 @@ struct SingboxTransport {
     #[serde(rename = "type")]
     kind: Option<String>,
     path: Option<String>,
+    host: Option<SingboxHost>,
     service_name: Option<String>,
     #[serde(default)]
     headers: BTreeMap<String, String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, serde::de::IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SingboxHost {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl SingboxHost {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::One(value) => vec![value],
+            Self::Many(values) => values,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -235,6 +274,53 @@ struct SingboxObfs {
 enum SingboxUdpOverTcp {
     Enabled(bool),
     Options(SingboxUdpOverTcpOptions),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SingboxStringList {
+    One(String),
+    Many(Vec<String>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SingboxNetworkList {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl SingboxNetworkList {
+    fn socks_udp(self) -> Result<bool, DiagnosticCode> {
+        let values = match self {
+            Self::One(value) => vec![value],
+            Self::Many(values) => values,
+        };
+        if values.is_empty() || values.len() > 2 {
+            return Err(DiagnosticCode::UnsupportedSemantics);
+        }
+        let tcp = values
+            .iter()
+            .filter(|value| value.as_str() == "tcp")
+            .count();
+        let udp = values
+            .iter()
+            .filter(|value| value.as_str() == "udp")
+            .count();
+        if tcp != 1 || tcp + udp != values.len() || udp > 1 {
+            return Err(DiagnosticCode::UnsupportedSemantics);
+        }
+        Ok(udp == 1)
+    }
+}
+
+impl SingboxStringList {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::One(value) => vec![value],
+            Self::Many(values) => values,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -254,9 +340,9 @@ fn singbox_node_spec(
     location: Option<SourceLocation>,
 ) -> Result<NodeSpec, DiagnosticCode> {
     let protocol = node.protocol.ok_or(DiagnosticCode::MissingRequiredField)?;
-    if protocol.parse::<ProxyProtocol>().is_err() {
-        return Err(DiagnosticCode::UnsupportedProtocol);
-    }
+    let parsed_protocol = protocol
+        .parse::<ProxyProtocol>()
+        .map_err(|_| DiagnosticCode::UnsupportedProtocol)?;
     let server = node.server.ok_or(DiagnosticCode::MissingRequiredField)?;
     let port = node
         .server_port
@@ -264,6 +350,7 @@ fn singbox_node_spec(
     let mut spec = NodeSpec::minimal(protocol, server, port);
     spec.display_name = node.tag;
     spec.uuid = node.uuid;
+    spec.username = node.username;
     spec.password = node.password;
     spec.method = node.method;
     spec.vmess_security = node.security;
@@ -296,7 +383,38 @@ fn singbox_node_spec(
         }
     }
     spec.congestion_control = node.congestion_control;
-    spec.udp = node.udp;
+    spec.server_ports = node
+        .server_ports
+        .map(SingboxStringList::into_vec)
+        .unwrap_or_default();
+    spec.hop_interval = node.hop_interval;
+    spec.up_mbps = node.up_mbps;
+    spec.down_mbps = node.down_mbps;
+    spec.udp_relay_mode = node.udp_relay_mode;
+    spec.udp_over_stream = node.udp_over_stream.unwrap_or(false);
+    spec.zero_rtt_handshake = node.zero_rtt_handshake.unwrap_or(false);
+    spec.heartbeat = node.heartbeat;
+    spec.idle_session_check_interval = node.idle_session_check_interval;
+    spec.idle_session_timeout = node.idle_session_timeout;
+    spec.min_idle_session = node.min_idle_session;
+    spec.socks_version = node.version;
+    spec.udp = if parsed_protocol == ProxyProtocol::Socks {
+        match node.network {
+            Some(network) => network.socks_udp()?,
+            None => true,
+        }
+    } else {
+        if node.network.is_some() {
+            spec.unknown_critical_field = Some("network".into());
+        }
+        node.udp
+    };
+    if parsed_protocol == ProxyProtocol::Http {
+        spec.http_path = node.path;
+        spec.http_headers = node.headers;
+    } else if node.path.is_some() || !node.headers.is_empty() {
+        spec.unknown_critical_field = Some("path/headers".into());
+    }
     if let Some(obfs) = node.obfs {
         spec.obfs = obfs.kind;
         spec.obfs_password = obfs.password;
@@ -330,6 +448,10 @@ fn singbox_node_spec(
     if let Some(transport) = node.transport {
         spec.transport = transport.kind;
         spec.path = transport.path;
+        spec.hosts = transport
+            .host
+            .map(SingboxHost::into_vec)
+            .unwrap_or_default();
         spec.service_name = transport.service_name;
         spec.headers = transport.headers;
         if let Some(field) = transport
@@ -420,14 +542,14 @@ fn is_critical_tls_field(field: &str) -> bool {
 fn is_critical_transport_field(field: &str) -> bool {
     matches!(
         field,
-        "host" | "method" | "max_early_data" | "early_data_header_name"
+        "method" | "max_early_data" | "early_data_header_name"
     )
 }
 
 fn json_node_error_code(error: &serde_json::Error) -> DiagnosticCode {
     let message = error.to_string();
     if message.contains("duplicate field") {
-        if ["uuid", "password", "method", "security"]
+        if ["uuid", "username", "password", "method", "security"]
             .iter()
             .any(|field| message.contains(field))
         {

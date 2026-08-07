@@ -681,6 +681,8 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "ureq",
+ "url",
 ]
 
 [[package]]

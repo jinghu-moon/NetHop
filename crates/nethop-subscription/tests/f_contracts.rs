@@ -103,6 +103,173 @@ proxies:
 }
 
 #[test]
+fn clash_yaml_preserves_hysteria2_tuic_and_anytls_options() {
+    let output = parse(
+        r#"
+proxies:
+  - name: hy2
+    type: hysteria2
+    server: hy2.example
+    port: 443
+    password: secret
+    tls: true
+    network: quic
+    ports: 443,5000-6000
+    hop-interval: 30s
+    up: 100 Mbps
+    down: 500 Mbps
+  - name: tuic
+    type: tuic
+    server: tuic.example
+    port: 443
+    uuid: 550e8400-e29b-41d4-a716-446655440000
+    password: secret
+    tls: true
+    network: quic
+    congestion-controller: bbr
+    udp-relay-mode: native
+    udp-over-stream: true
+    zero-rtt: true
+    heartbeat-interval: 10s
+  - name: anytls
+    type: anytls
+    server: anytls.example
+    port: 443
+    password: secret
+    tls: true
+    idle-session-check-interval: 30s
+    idle-session-timeout: 2m
+    min-idle-session: 2
+"#,
+    );
+    assert_eq!(output.accepted_count(), 3);
+    assert_eq!(output.rejected_count(), 0);
+    let conversion = nethop_subscription::convert_stable_sources(
+        vec![nethop_subscription::SourceInput {
+            source_id: nethop_subscription::SourceId::new("clash-options").unwrap(),
+            format_hint: nethop_subscription::FormatHint::ClashYaml,
+            bytes: br#"
+proxies:
+  - { name: hy2, type: hysteria2, server: hy2.example, port: 443, password: secret, tls: true, network: quic, ports: "443,5000-6000", hop-interval: 30s, up: "100 Mbps", down: "500 Mbps" }
+"#
+                .to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert!(outbounds[0].get("server_port").is_none());
+    assert_eq!(outbounds[0]["server_ports"][1], "5000-6000");
+    assert_eq!(outbounds[0]["up_mbps"], 100);
+    assert_eq!(outbounds[0]["down_mbps"], 500);
+}
+
+#[test]
+fn clash_yaml_maps_audited_http_and_socks5_fields() {
+    let output = parse(
+        r#"proxies:
+  - name: http
+    type: http
+    server: http.example
+    port: 8443
+    username: fixture-user
+    password: fixture-password
+    tls: true
+    sni: proxy.example
+    headers: { X-Fixture: bounded }
+  - name: socks
+    type: socks5
+    server: socks.example
+    port: 1080
+    username: fixture-user
+    password: fixture-password
+    udp: true
+"#,
+    );
+    assert_eq!(output.accepted_count(), 2);
+    assert_eq!(
+        output.nodes[0].node.as_ref().unwrap().protocol().as_str(),
+        "http"
+    );
+    assert_eq!(
+        output.nodes[1].node.as_ref().unwrap().protocol().as_str(),
+        "socks"
+    );
+}
+
+#[test]
+fn clash_socks_tls_and_local_certificate_fields_are_not_silently_dropped() {
+    let output = parse(
+        r#"proxies:
+  - { name: socks-tls, type: socks5, server: socks.example, port: 1080, tls: true }
+  - { name: http-cert, type: http, server: http.example, port: 8443, tls: true, certificate: /data/local/cert.pem }
+"#,
+    );
+    assert_eq!(output.rejected_count(), 2);
+    assert!(output.nodes.iter().all(|item| {
+        item.diagnostic.as_ref().unwrap().code == DiagnosticCode::UnsupportedSemantics
+            || item.diagnostic.as_ref().unwrap().code == DiagnosticCode::InvalidTlsCombination
+    }));
+}
+
+#[test]
+fn clash_yaml_rejects_mihomo_certificate_fingerprint_without_silent_downgrade() {
+    let output = parse(
+        r#"
+proxies:
+  - name: hy2-pin
+    type: hysteria2
+    server: hy2.example
+    port: 443
+    password: secret
+    tls: true
+    fingerprint: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#,
+    );
+    assert_eq!(output.accepted_count(), 0);
+    assert_eq!(output.rejected_count(), 1);
+    assert_eq!(
+        output.nodes[0].diagnostic.as_ref().unwrap().code,
+        DiagnosticCode::UnsupportedSemantics
+    );
+}
+
+#[test]
+fn clash_yaml_normalizes_mihomo_numeric_intervals_to_sing_box_durations() {
+    let conversion = nethop_subscription::convert_stable_sources(
+        vec![nethop_subscription::SourceInput {
+            source_id: nethop_subscription::SourceId::new("clash-numeric-intervals").unwrap(),
+            format_hint: nethop_subscription::FormatHint::ClashYaml,
+            bytes: br#"
+proxies:
+  - name: hy2
+    type: hysteria2
+    server: hy2.example
+    port: 443
+    password: secret
+    tls: true
+    hop-interval: 15
+  - name: tuic
+    type: tuic
+    server: tuic.example
+    port: 443
+    uuid: 550e8400-e29b-41d4-a716-446655440000
+    password: secret
+    tls: true
+    heartbeat-interval: 10000
+"#
+            .to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    assert_eq!(conversion.report.summary.accepted, 2);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert_eq!(outbounds[0]["hop_interval"], "15s");
+    assert_eq!(outbounds[1]["heartbeat"], "10000ms");
+}
+
+#[test]
 fn clash_shadowsocks_rejects_unknown_obfs_plugin_option() {
     let output = parse(
         r#"
@@ -148,6 +315,43 @@ proxies:
     assert_eq!(
         output.nodes[0].diagnostic.as_ref().unwrap().code,
         DiagnosticCode::UnsupportedSemantics
+    );
+}
+
+#[test]
+fn clash_shadowsocks_maps_audited_v2ray_plugin_options() {
+    let conversion = nethop_subscription::convert_stable_sources(
+        vec![nethop_subscription::SourceInput {
+            source_id: nethop_subscription::SourceId::new("ss-v2ray-plugin").unwrap(),
+            format_hint: nethop_subscription::FormatHint::ClashYaml,
+            bytes: br#"
+proxies:
+  - name: ss-v2ray
+    type: ss
+    server: ss.example
+    port: 443
+    cipher: aes-128-gcm
+    password: secret
+    plugin: v2ray-plugin
+    plugin-opts:
+      mode: websocket
+      host: edge.example
+      path: /ws
+      tls: true
+      mux: 1
+"#
+            .to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    assert_eq!(conversion.report.summary.accepted, 1);
+    assert_eq!(conversion.report.summary.rejected, 0);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert_eq!(outbounds[0]["plugin"], "v2ray-plugin");
+    assert_eq!(
+        outbounds[0]["plugin_opts"],
+        "host=edge.example;mode=websocket;mux=1;path=/ws;tls=true"
     );
 }
 

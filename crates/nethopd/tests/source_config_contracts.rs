@@ -35,7 +35,7 @@ impl SourceIdEntropy for FakeEntropy {
 
 fn config(primary_name: &str, primary_url: &str, backup: Option<(&str, &str)>) -> String {
     let mut value = format!(
-        "schema_version = 1\n[service]\nenabled = true\n[subscriptions]\n\n[[subscriptions.sources]]\nname = \"{primary_name}\"\nurl = \"{primary_url}\"\n"
+        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n\n[[subscriptions.sources]]\nname = \"{primary_name}\"\nurl = \"{primary_url}\"\n"
     );
     if let Some((name, url)) = backup {
         value.push_str(&format!(

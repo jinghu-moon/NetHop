@@ -10,7 +10,7 @@ use crate::{
     secret::SecretString,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProxyProtocol {
     Vless,
@@ -20,10 +20,12 @@ pub enum ProxyProtocol {
     Hysteria2,
     Tuic,
     AnyTls,
+    Http,
+    Socks,
 }
 
 impl ProxyProtocol {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Vless,
         Self::Vmess,
         Self::Shadowsocks,
@@ -31,6 +33,8 @@ impl ProxyProtocol {
         Self::Hysteria2,
         Self::Tuic,
         Self::AnyTls,
+        Self::Http,
+        Self::Socks,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -41,6 +45,8 @@ impl ProxyProtocol {
             Self::Hysteria2 => "hysteria2",
             Self::Tuic => "tuic",
             Self::AnyTls => "anytls",
+            Self::Http => "http",
+            Self::Socks => "socks",
         }
     }
 }
@@ -63,6 +69,8 @@ impl FromStr for ProxyProtocol {
             "hysteria2" | "hy2" => Ok(Self::Hysteria2),
             "tuic" => Ok(Self::Tuic),
             "anytls" => Ok(Self::AnyTls),
+            "http" => Ok(Self::Http),
+            "socks" | "socks5" => Ok(Self::Socks),
             _ => Err(UnsupportedProtocol(value.to_owned())),
         }
     }
@@ -200,6 +208,42 @@ pub struct UdpOverTcpOptions {
     pub version: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Hysteria2Options {
+    pub server_ports: Vec<BoundedText>,
+    pub hop_interval: Option<BoundedText>,
+    pub up_mbps: Option<u32>,
+    pub down_mbps: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TuicOptions {
+    pub congestion_control: Option<BoundedText>,
+    pub udp_relay_mode: Option<BoundedText>,
+    pub udp_over_stream: bool,
+    pub zero_rtt_handshake: bool,
+    pub heartbeat: Option<BoundedText>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AnyTlsOptions {
+    pub idle_session_check_interval: Option<BoundedText>,
+    pub idle_session_timeout: Option<BoundedText>,
+    pub min_idle_session: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct HttpOptions {
+    pub path: Option<BoundedText>,
+    pub headers: BTreeMap<String, SecretString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SocksOptions {
+    pub version: BoundedText,
+    pub udp_over_tcp: Option<UdpOverTcpOptions>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Credentials {
     Vless {
@@ -229,6 +273,14 @@ pub enum Credentials {
     AnyTls {
         password: SecretString,
     },
+    Http {
+        username: Option<SecretString>,
+        password: Option<SecretString>,
+    },
+    Socks {
+        username: Option<SecretString>,
+        password: Option<SecretString>,
+    },
 }
 impl Credentials {
     pub fn protocol(&self) -> ProxyProtocol {
@@ -240,6 +292,8 @@ impl Credentials {
             Self::Hysteria2 { .. } => ProxyProtocol::Hysteria2,
             Self::Tuic { .. } => ProxyProtocol::Tuic,
             Self::AnyTls { .. } => ProxyProtocol::AnyTls,
+            Self::Http { .. } => ProxyProtocol::Http,
+            Self::Socks { .. } => ProxyProtocol::Socks,
         }
     }
 }
@@ -330,11 +384,11 @@ pub enum ProtocolOptions {
         udp_over_tcp: Option<UdpOverTcpOptions>,
     },
     Trojan,
-    Hysteria2,
-    Tuic {
-        congestion_control: Option<BoundedText>,
-    },
-    AnyTls,
+    Hysteria2(Hysteria2Options),
+    Tuic(TuicOptions),
+    AnyTls(AnyTlsOptions),
+    Http(HttpOptions),
+    Socks(SocksOptions),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -484,17 +538,30 @@ impl ProxyNode {
                     | "2022-blake3-aes-128-gcm"
                     | "2022-blake3-aes-256-gcm"
                     | "2022-blake3-chacha20-poly1305"
-            ) || plugin.as_ref().is_some_and(|plugin| {
-                plugin.name.as_str() != "obfs-local"
-                    || plugin
-                        .options
-                        .keys()
-                        .any(|key| !matches!(key.as_str(), "obfs" | "obfs-host"))
-                    || !matches!(
-                        plugin.options.get("obfs").map(BoundedText::as_str),
-                        Some("http" | "tls")
-                    )
-            }) {
+            ) || plugin
+                .as_ref()
+                .is_some_and(|plugin| match plugin.name.as_str() {
+                    "obfs-local" => {
+                        plugin
+                            .options
+                            .keys()
+                            .any(|key| !matches!(key.as_str(), "obfs" | "obfs-host"))
+                            || !matches!(
+                                plugin.options.get("obfs").map(BoundedText::as_str),
+                                Some("http" | "tls")
+                            )
+                    }
+                    "v2ray-plugin" => {
+                        plugin.options.keys().any(|key| {
+                            !matches!(key.as_str(), "mode" | "host" | "path" | "tls" | "mux")
+                        }) || !matches!(
+                            plugin.options.get("mode").map(BoundedText::as_str),
+                            Some("websocket" | "quic")
+                        )
+                    }
+                    _ => true,
+                })
+            {
                 return Err(NodeValidationError::UnsupportedSemantics);
             }
         }

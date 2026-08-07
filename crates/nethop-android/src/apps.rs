@@ -7,6 +7,7 @@ use crate::{PackageListKind, ProbeBackend, ProbeCommand};
 const MAX_APPS: usize = 20_000;
 const MAX_PACKAGES_PER_UID: usize = 128;
 const MAX_PACKAGE_BYTES: usize = 255;
+const MAX_STARTED_USERS: usize = 32;
 const PER_USER_RANGE: u32 = 100_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,25 +94,24 @@ pub struct AppCatalog {
 }
 
 impl AppCatalog {
-    pub fn load_primary_user(backend: &mut impl ProbeBackend) -> Result<Self, AppCatalogError> {
-        let all = backend
-            .run(ProbeCommand::PackageList(PackageListKind::All))
+    pub fn load_started_users(backend: &mut impl ProbeBackend) -> Result<Self, AppCatalogError> {
+        let user_list = backend
+            .run(ProbeCommand::UserList)
             .map_err(|_| AppCatalogError::QueryFailed)?;
-        let system = backend
-            .run(ProbeCommand::PackageList(PackageListKind::System))
-            .map_err(|_| AppCatalogError::QueryFailed)?;
-        let user = backend
-            .run(ProbeCommand::PackageList(PackageListKind::User))
-            .map_err(|_| AppCatalogError::QueryFailed)?;
-        if !all.success() || !system.success() || !user.success() {
+        if !user_list.success() {
             return Err(AppCatalogError::QueryFailed);
         }
-        Self::from_snapshots([PackageSnapshot::new(
-            0,
-            all.stdout(),
-            system.stdout(),
-            user.stdout(),
-        )])
+        let user_ids = parse_started_users(user_list.stdout())?;
+        let mut outputs = Vec::with_capacity(user_ids.len());
+        for android_user_id in user_ids {
+            let all = query_packages(backend, PackageListKind::All, android_user_id)?;
+            let system = query_packages(backend, PackageListKind::System, android_user_id)?;
+            let user = query_packages(backend, PackageListKind::User, android_user_id)?;
+            outputs.push((android_user_id, all, system, user));
+        }
+        Self::from_snapshots(outputs.iter().map(|(android_user_id, all, system, user)| {
+            PackageSnapshot::new(*android_user_id, all, system, user)
+        }))
     }
 
     pub fn from_snapshots<'a>(
@@ -286,6 +286,8 @@ impl CompiledAppSelection {
 pub enum AppCatalogError {
     #[error("package manager query failed")]
     QueryFailed,
+    #[error("Android started-user list is invalid or empty")]
+    InvalidUserList,
     #[error("package catalog contains an invalid line")]
     InvalidLine,
     #[error("package name is invalid or too long")]
@@ -308,6 +310,54 @@ pub enum AppCatalogError {
     SharedUidTooLarge,
     #[error("selected package is absent from the current catalog")]
     UnknownPackage,
+}
+
+fn query_packages(
+    backend: &mut impl ProbeBackend,
+    kind: PackageListKind,
+    android_user_id: u32,
+) -> Result<String, AppCatalogError> {
+    let output = backend
+        .run(ProbeCommand::PackageList {
+            kind,
+            android_user_id,
+        })
+        .map_err(|_| AppCatalogError::QueryFailed)?;
+    if !output.success() {
+        return Err(AppCatalogError::QueryFailed);
+    }
+    Ok(output.stdout().to_owned())
+}
+
+fn parse_started_users(input: &str) -> Result<Vec<u32>, AppCatalogError> {
+    let mut users = BTreeSet::new();
+    for line in input.lines().map(str::trim) {
+        let Some(info) = line.strip_prefix("UserInfo{") else {
+            continue;
+        };
+        let Some((body, state)) = info.split_once('}') else {
+            return Err(AppCatalogError::InvalidUserList);
+        };
+        if !state
+            .split_ascii_whitespace()
+            .any(|value| value == "running")
+        {
+            continue;
+        }
+        let user_id = body
+            .split_once(':')
+            .and_then(|(value, _)| value.parse::<u32>().ok())
+            .filter(|value| *value <= u32::MAX / PER_USER_RANGE)
+            .ok_or(AppCatalogError::InvalidUserList)?;
+        users.insert(user_id);
+        if users.len() > MAX_STARTED_USERS {
+            return Err(AppCatalogError::InvalidUserList);
+        }
+    }
+    if users.is_empty() {
+        return Err(AppCatalogError::InvalidUserList);
+    }
+    Ok(users.into_iter().collect())
 }
 
 fn parse_packages(input: &str) -> Result<BTreeMap<String, u32>, AppCatalogError> {

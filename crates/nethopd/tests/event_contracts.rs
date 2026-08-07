@@ -49,6 +49,45 @@ fn slow_consumer_is_told_to_resync_then_receives_a_new_snapshot() {
 }
 
 #[test]
+fn structured_history_is_bounded_newest_first_and_clear_reopens_the_log() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let hub = EventHub::new(json!({"kind":"snapshot"}), 8).unwrap();
+    hub.install_file_log(&root).unwrap();
+    hub.publish(EventKind::Runtime, json!({"kind":"first","token":"secret"}));
+    hub.publish(EventKind::Network, json!({"kind":"second"}));
+
+    let history = hub.structured_log_history(1).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["payload"]["kind"], "second");
+
+    assert_eq!(hub.clear_structured_logs().unwrap(), 1);
+    assert!(hub.structured_log_history(8).unwrap().is_empty());
+    hub.publish(EventKind::Config, json!({"kind":"after-clear"}));
+    assert_eq!(
+        hub.structured_log_history(8).unwrap()[0]["payload"]["kind"],
+        "after-clear"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn structured_log_clear_never_follows_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let target = outside.path().join("outside.log");
+    std::fs::write(&target, "keep").unwrap();
+    symlink(&target, root.join("linked.log")).unwrap();
+    let hub = EventHub::new(json!({"kind":"snapshot"}), 8).unwrap();
+    hub.install_file_log(&root).unwrap();
+    hub.clear_structured_logs().unwrap();
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "keep");
+}
+
+#[test]
 fn subscriber_count_and_ring_capacity_are_bounded() {
     assert!(EventHub::new(json!({}), 0).is_err());
     let hub = EventHub::new(json!({"kind":"snapshot"}), 1).unwrap();

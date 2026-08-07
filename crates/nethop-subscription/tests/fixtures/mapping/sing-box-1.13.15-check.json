@@ -67,6 +67,27 @@
       "server_port": 443,
       "password": "fixture-password",
       "tls": {"enabled": true, "server_name": "example.com", "insecure": true}
+    },
+    {
+      "type": "http",
+      "tag": "fixture-http",
+      "server": "127.0.0.1",
+      "server_port": 8443,
+      "username": "fixture-user",
+      "password": "fixture-password",
+      "path": "/connect",
+      "headers": {"X-Fixture": "bounded"},
+      "tls": {"enabled": true, "server_name": "example.com", "insecure": true}
+    },
+    {
+      "type": "socks",
+      "tag": "fixture-socks",
+      "server": "127.0.0.1",
+      "server_port": 1080,
+      "version": "5",
+      "username": "fixture-user",
+      "password": "fixture-password",
+      "network": ["tcp", "udp"]
     }
   ]
 }

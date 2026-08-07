@@ -13,6 +13,7 @@ fn spec(protocol: &str) -> NodeSpec {
                 spec.password = Some("secret".into());
             }
         }
+        "http" | "socks" => {}
         _ => spec.password = Some("secret".into()),
     }
     match protocol {
@@ -29,7 +30,7 @@ fn spec(protocol: &str) -> NodeSpec {
 }
 
 #[test]
-fn seven_protocols_are_validated_only_through_the_capability_matrix() {
+fn nine_protocols_are_validated_only_through_the_capability_matrix() {
     let matrix = CapabilityMatrix::default();
     for protocol in [
         "vless",
@@ -39,6 +40,8 @@ fn seven_protocols_are_validated_only_through_the_capability_matrix() {
         "hysteria2",
         "tuic",
         "anytls",
+        "http",
+        "socks",
     ] {
         let outcome = validate_node_spec(spec(protocol), &matrix).unwrap();
         assert_eq!(outcome.node.protocol().as_str(), protocol);
@@ -200,7 +203,7 @@ fn uri_candidates_enter_the_same_semantic_gate_as_other_adapters() {
 }
 
 #[test]
-fn canonical_seeds_are_semantically_equivalent_across_format_boundaries() {
+fn seven_uri_capable_protocols_are_equivalent_across_format_boundaries() {
     let matrix = CapabilityMatrix::default();
     for protocol in [
         "vless",
@@ -232,4 +235,54 @@ fn canonical_seeds_are_semantically_equivalent_across_format_boundaries() {
                 && pair[0].credentials() == pair[1].credentials()
         }));
     }
+}
+
+#[test]
+fn http_and_socks_use_protocol_specific_auth_and_capability_shapes() {
+    let matrix = CapabilityMatrix::default();
+
+    let mut http = NodeSpec::minimal("http", "http.example", 8443);
+    http.display_name = Some("http-node".into());
+    http.username = Some("fixture-user".into());
+    http.password = Some("fixture-password".into());
+    http.tls = true;
+    http.server_name = Some("proxy.example".into());
+    http.http_path = Some("/connect".into());
+    http.http_headers
+        .insert("X-Fixture".into(), "bounded".into());
+    let http = validate_node_spec(http, &matrix).unwrap().node;
+    assert_eq!(http.protocol(), ProxyProtocol::Http);
+    assert!(http.tls().enabled);
+    assert!(!http.capabilities().udp);
+
+    let mut socks = NodeSpec::minimal("socks", "socks.example", 1080);
+    socks.display_name = Some("socks-node".into());
+    socks.username = Some("fixture-user".into());
+    socks.password = Some("fixture-password".into());
+    socks.socks_version = Some("5".into());
+    socks.udp = true;
+    let socks = validate_node_spec(socks, &matrix).unwrap().node;
+    assert_eq!(socks.protocol(), ProxyProtocol::Socks);
+    assert!(!socks.tls().enabled);
+    assert!(socks.capabilities().udp);
+    assert_eq!(ProxyProtocol::ALL.len(), 9);
+}
+
+#[test]
+fn http_and_socks_reject_partial_auth_and_unmappable_tls() {
+    let matrix = CapabilityMatrix::default();
+
+    let mut partial_auth = NodeSpec::minimal("http", "http.example", 8080);
+    partial_auth.username = Some("fixture-user".into());
+    assert_eq!(
+        validate_node_spec(partial_auth, &matrix).unwrap_err(),
+        SemanticError::InvalidCredential
+    );
+
+    let mut socks_tls = NodeSpec::minimal("socks", "socks.example", 1080);
+    socks_tls.tls = true;
+    assert_eq!(
+        validate_node_spec(socks_tls, &matrix).unwrap_err(),
+        SemanticError::InvalidTlsCombination
+    );
 }

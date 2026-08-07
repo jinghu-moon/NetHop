@@ -2,7 +2,7 @@
 
 use nethop_subscription::{
     CandidateAcceptance, FetchClient, FetchDiagnosticCode, FetchError, FetchPolicy,
-    FetchPolicyError, FetchRequest, ParserLimits, RequestProfile, SourceId,
+    FetchPolicyError, FetchRequest, ParserLimits, RequestProfile, SourceId, SourceUrlError,
     UREQ_SECURITY_ADAPTER_VERSION, validate_source_url,
 };
 
@@ -37,7 +37,7 @@ fn url_admission_handles_idna_ipv6_and_rejects_http_without_network() {
     assert!(validate_source_url("https://[2606:4700:4700::1111]:443/sub").is_ok());
     assert_eq!(
         validate_source_url("http://token-canary@example.com/sub").unwrap_err(),
-        FetchPolicyError::NonHttps
+        SourceUrlError::NonHttps
     );
 }
 

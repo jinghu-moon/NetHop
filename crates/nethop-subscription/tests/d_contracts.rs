@@ -1,9 +1,84 @@
 use base64::Engine;
 use nethop_subscription::{
-    Base64Variant, DiagnosticCode, FormatHint, ParserLimits, PayloadOrigin, UriNodeResult,
-    decode_base64, decode_base64_and_detect, decode_vmess_inner_json, parse_uri_line,
-    parse_uri_list, percent_decode_field,
+    Base64Variant, CapabilityMatrix, DiagnosticCode, FormatHint, ParserLimits, PayloadOrigin,
+    SourceId, SourceInput, UriNodeResult, convert_stable_sources, decode_base64,
+    decode_base64_and_detect, decode_vmess_inner_json, parse_uri_line, parse_uri_list,
+    percent_decode_field,
 };
+
+#[test]
+fn uri_host_parameter_is_preserved_for_v2ray_transports() {
+    let conversion = convert_stable_sources(
+        vec![SourceInput {
+            source_id: SourceId::new("uri-host").unwrap(),
+            format_hint: FormatHint::UriList,
+            bytes: b"vless://550e8400-e29b-41d4-a716-446655440000@edge.example:443?security=tls&type=ws&path=%2Fws&host=cdn.example#node\nvmess://eyJhZGQiOiJ2bWVzcy5leGFtcGxlIiwicG9ydCI6NDQzLCJpZCI6IjU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMCIsIm5ldCI6Imh0dHAiLCJ0bHMiOiJ0bHMiLCJob3N0IjoiY2RuMi5leGFtcGxlIiwicGF0aCI6Ii9odHRwIn0=".to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    assert_eq!(conversion.report.summary.accepted, 2);
+    assert_eq!(conversion.report.summary.rejected, 0);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert_eq!(outbounds[0]["transport"]["headers"]["Host"], "cdn.example");
+    assert_eq!(outbounds[1]["transport"]["host"][0], "cdn2.example");
+}
+
+#[test]
+fn hysteria2_uri_preserves_bounded_port_hopping_without_conflicting_server_port() {
+    let conversion = convert_stable_sources(
+        vec![SourceInput {
+            source_id: SourceId::new("hy2-port-hop").unwrap(),
+            format_hint: FormatHint::UriList,
+            bytes: b"hysteria2://secret@hy2.example:443,5000-6000?hop_interval=30s#hy2".to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    assert_eq!(conversion.report.summary.accepted, 1);
+    assert_eq!(conversion.report.summary.rejected, 0);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert!(outbounds[0].get("server_port").is_none());
+    assert_eq!(outbounds[0]["server_ports"][0], "443");
+    assert_eq!(outbounds[0]["server_ports"][1], "5000-6000");
+    assert_eq!(outbounds[0]["hop_interval"], "30s");
+}
+
+#[test]
+fn non_hysteria_uri_rejects_port_hopping_syntax() {
+    let conversion = convert_stable_sources(
+        vec![SourceInput {
+            source_id: SourceId::new("invalid-port-hop").unwrap(),
+            format_hint: FormatHint::UriList,
+            bytes: b"trojan://secret@example.com:443,444?security=tls".to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    assert_eq!(conversion.report.summary.accepted, 0);
+    assert_eq!(conversion.report.summary.rejected, 1);
+}
+
+#[test]
+fn shadowsocks_uri_parses_audited_sip003_plugin_options() {
+    let conversion = convert_stable_sources(
+        vec![SourceInput {
+            source_id: SourceId::new("ss-uri-plugin").unwrap(),
+            format_hint: FormatHint::UriList,
+            bytes: b"ss://aes-128-gcm:secret@example.com:443?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bhost%3Dedge.example%3Bpath%3D%2Fws%3Btls%3Dtrue%3Bmux%3D1".to_vec(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+    assert_eq!(conversion.report.summary.accepted, 1);
+    assert_eq!(conversion.report.summary.rejected, 0);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert_eq!(outbounds[0]["plugin"], "v2ray-plugin");
+    assert_eq!(
+        outbounds[0]["plugin_opts"],
+        "host=edge.example;mode=websocket;mux=1;path=/ws;tls=true"
+    );
+}
 
 #[test]
 fn uri_line_parser_preserves_order_and_one_based_lines_without_allocating_line_strings() {
