@@ -45,7 +45,14 @@ captures/
 # JavaScript / web build output
 node_modules/
 dist/
+module/webroot/
 coverage/
+.vite/
+.vitest/
+.nyc_output/
+playwright-report/
+blob-report/
+.eslintcache
 .parcel-cache/
 .turbo/
 
@@ -79,6 +86,10 @@ test-reports/
 
 # Local Android module packages and build staging.
 out/android-arm64/
+
+# Reproducible WebUI release reports and device-local evidence.
+# CI and module builds regenerate these from the lockfile and production bundle.
+artifacts/webui/
 
 # cargo-fuzz generated outputs; deterministic seed corpora remain tracked.
 crates/nethop-subscription/fuzz/target/
