@@ -34,7 +34,8 @@ $AllowedLicenseExpressions = @(
 
 function Get-Sha256File {
     param([Parameter(Mandatory = $true)][string]$Path)
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $text = [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false, $true))
+    return Get-Sha256Text ($text.Replace("`r`n", "`n"))
 }
 
 function Get-Sha256Text {

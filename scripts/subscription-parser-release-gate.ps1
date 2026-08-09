@@ -43,7 +43,15 @@ function Write-JsonFile {
 
 function Get-Sha256File {
     param([Parameter(Mandatory = $true)][string]$RelativePath)
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $WorkspaceRoot $RelativePath)).Hash.ToLowerInvariant()
+    $path = Join-Path $WorkspaceRoot $RelativePath
+    $text = [System.IO.File]::ReadAllText($path, [System.Text.UTF8Encoding]::new($false, $true)).Replace("`r`n", "`n")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [Convert]::ToHexString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
 }
 
 function New-ArtifactRef {

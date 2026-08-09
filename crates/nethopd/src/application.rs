@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 use std::sync::mpsc::Receiver;
 
 use thiserror::Error;
@@ -18,7 +18,7 @@ use crate::{
     WorkerSupervisor,
 };
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 use crate::{
     AndroidDataPlaneHealthProbe, ControlServerLimits, CoreProcessLimits, CoreProcessRunner,
     MonotonicClock, RunnerLimits, SingBoxCheckRunner, StartupLivenessProbe, TunRunner,
@@ -35,7 +35,7 @@ use crate::{
     RuleSetUpdateService, SelectorStore, SourceRegistry, SourceStatusStore, SourceUpdateService,
     StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy, WebUiPayloadStore,
 };
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 use nethop_android::{
     AndroidToolPaths, AppCatalog, CapabilityProbe, CommandPrivateDnsFactsSource,
     CommandProbeBackend, CommandUpdateNotifier, CommandWifiFactsSource, NetworkExecutor,
@@ -44,7 +44,7 @@ use nethop_android::{
 };
 #[cfg(all(unix, feature = "subscription-update"))]
 use nethop_core::ClashApi;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 use nethop_core::GenerationStore;
 #[cfg(all(unix, feature = "subscription-update"))]
 use nethop_subscription::{CapabilityMatrix, PINNED_SING_BOX_VERSION, ParserLimits};
@@ -229,13 +229,13 @@ pub fn run_system_supervisor(runtime: &RuntimeRoot) -> Result<(), ApplicationErr
     run_supervisor_loop(&mut supervisor, &mut driver)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 #[derive(Debug)]
 struct SystemWorkerServiceDriver {
     wake_receiver: Receiver<()>,
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 impl SystemWorkerServiceDriver {
     fn install(wake_receiver: Receiver<()>) -> Result<Self, ApplicationError> {
         STOP_REQUESTED.store(false, Ordering::Release);
@@ -244,7 +244,7 @@ impl SystemWorkerServiceDriver {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 impl WorkerServiceDriver for SystemWorkerServiceDriver {
     fn wait(&mut self, timeout: Duration) -> WorkerServiceSignal {
         if STOP_REQUESTED.load(Ordering::Acquire) {
@@ -259,7 +259,7 @@ impl WorkerServiceDriver for SystemWorkerServiceDriver {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> {
     report_worker_stage("begin");
     ensure_root()?;
@@ -606,9 +606,14 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
     run_worker_service(&server, &mut application, &mut driver).map_err(ApplicationError::Worker)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "subscription-update"))]
 fn report_worker_stage(stage: &'static str) {
     eprintln!("nethopd worker init stage: {stage}");
+}
+
+#[cfg(all(unix, not(feature = "subscription-update")))]
+pub fn run_system_worker(_runtime: &RuntimeRoot) -> Result<(), ApplicationError> {
+    Err(ApplicationError::WorkerInitializationFailed)
 }
 
 #[cfg(not(unix))]

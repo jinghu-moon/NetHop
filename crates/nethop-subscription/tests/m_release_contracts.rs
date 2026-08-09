@@ -425,7 +425,9 @@ fn sha256_workspace_file(path: &str) -> String {
     use sha2::{Digest, Sha256};
 
     let bytes = std::fs::read(common::workspace_root().join(path)).expect("workspace file");
-    hex_lower(&Sha256::digest(bytes))
+    let text = String::from_utf8(bytes).expect("release evidence must be UTF-8 text");
+    let canonical = text.replace("\r\n", "\n");
+    hex_lower(&Sha256::digest(canonical.as_bytes()))
 }
 
 fn workspace_source_digest() -> String {

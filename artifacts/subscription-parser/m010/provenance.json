@@ -7,14 +7,14 @@
     "workspace_manifest_sha256": "11980132743dd49957587851dee4fbd1523d264511089d573d445a51f8a64d06",
     "crate_manifest_sha256": "e215909c9329ae4234ab0b88906a4aeebecdb51427655b6f202ddf740ccc434b",
     "mapping_manifest_sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84",
-    "workspace_source_sha256": "308afe0638780c825eb4a7b3a7a3741e29d6f66a9f4c59069f07471a2a8b68de"
+    "workspace_source_sha256": "e923d489c78731f64054dbcae56de51d964c7a63e07a157ddaa6f23beb444f7c"
   },
   "toolchain": {
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26100 (Windows 11 IoTEnterpriseS) [64-bit]"
   },
   "source_control": {
-    "git_head": "bb751e66113ad859bbb94e6626a8d1e579dfc0a1",
+    "git_head": "9eb91149775680b352dc3fbbca9709f806337504",
     "working_tree": "dirty"
   },
   "gates": {
@@ -28,26 +28,26 @@
       "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json",
       "package_count": 41,
       "feature_leakage": false,
-      "bom_sha256": "0b5296c4fe8415fee7e2b96ecb863d832dad14a4fb55cc91f2d3e7d4dac65e95"
+      "bom_sha256": "3bee238bb56200afd52f082ae0d03954a2c1803f57ac4a610d78f652ce2b98a6"
     },
     "fetch": {
       "features": "parser,format-uri,format-base64,format-clash-yaml,format-singbox-json,fetch",
       "package_count": 103,
       "feature_leakage": false,
-      "bom_sha256": "f3095f9115b603dc3a418291bfb3edd8c582266267a0099877965deb70970896"
+      "bom_sha256": "8a1652920e02ccceba535ff735ec8ee6c2b5d0515408cd280b49e4e732ad25ac"
     },
     "dev-test": {
       "features": "all",
       "package_count": 154,
       "feature_leakage": false,
-      "bom_sha256": "9ef5eb7d41dfa6e148f8e6b570578fc05fb694121a91a943e20ae4d66ebc0663"
+      "bom_sha256": "cef0a3f17e3244e7f30a9a7b2f90df6cc510ef16bd31f7b7e45738b6471a2af9"
     }
   },
   "tools": {
     "cargo_deny": {
       "status": "passed",
       "version": "cargo-deny 0.20.2",
-      "report_sha256": "2ded6a6ba54a5a2434a004a575bed6d676de8db6d80c114875cdd3177669f171",
+      "report_sha256": "c5bff4771d78883157119f878c87d6fb41c8cb443c1b9002d730474bf9e0ee7c",
       "required_for_runtime": false
     },
     "cargo_cyclonedx": {

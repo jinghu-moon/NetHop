@@ -18,9 +18,11 @@ use nethop_android::{CapabilityStatus, ResourceCandidate, WifiFactsSource};
 use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
 #[cfg(feature = "subscription-update")]
 use nethop_core::{ManagedOptions, TunStack};
+#[cfg(feature = "subscription-update")]
+use nethop_protocol::PROTOCOL_VERSION;
 use nethop_protocol::{
     ControlError, ControlMethod, ControlParams, ControlRequest, ControlResponse, ErrorDomain,
-    EventKind, PROTOCOL_VERSION, WebUiErrorKind, WebUiPayloadOperation,
+    EventKind, WebUiErrorKind, WebUiPayloadOperation,
 };
 use serde_json::json;
 

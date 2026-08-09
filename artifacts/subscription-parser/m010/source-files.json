@@ -139,7 +139,7 @@
     },
     {
       "path": "scripts/generate-subscription-parser-release-evidence.ps1",
-      "sha256": "d041ef82b4bbad77e66c5f02582a0d048fce0ae30f68306acb456aa167f54f5d"
+      "sha256": "899c9305cf100a90791acade850a910cf2122f9efef9a2ef57eaafb429b5aa16"
     }
   ]
 }
