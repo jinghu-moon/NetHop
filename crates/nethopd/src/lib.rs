@@ -22,6 +22,7 @@ pub mod ruleset_provider;
 #[cfg(feature = "subscription-update")]
 pub mod ruleset_update;
 pub mod runner;
+pub mod runtime_metrics;
 pub mod scheduler;
 #[cfg(feature = "subscription-update")]
 pub mod source_config;
@@ -30,8 +31,10 @@ pub mod source_update;
 pub mod stats;
 pub mod storage;
 pub mod supervisor;
+pub mod tun_runner;
 pub mod uds;
 pub mod version_check;
+pub mod webui_payload;
 pub mod worker_activation;
 pub mod worker_application;
 pub mod worker_config;
@@ -61,7 +64,7 @@ pub use auto_update::{
 };
 pub use clash_api::{
     ClashApiClient, ClashApiError, ClashApiLimits, ConnectionSummary, DelayResult, NodeSummary,
-    TrafficSample,
+    TrafficSample, TrafficTotals,
 };
 pub use config_model::{
     AdvancedSettings, ApplicationMode, ApplicationSettings, ApplyImpact, CanonicalCidr,
@@ -107,6 +110,10 @@ pub use runner::{
     CheckOutputSummary, CheckReport, RunnerDiagnosticCode, RunnerError, RunnerLimits,
     SingBoxCheckRunner,
 };
+pub use runtime_metrics::{
+    OutboundRoute, ProcessMetrics, collect_outbound_route, collect_process_metrics,
+    parse_default_route_interface, parse_process_stat, parse_statm_rss_bytes,
+};
 pub use scheduler::{
     InMemoryScheduleStore, ScheduleKey, SchedulePolicy, ScheduleRecord, ScheduleStore,
     SchedulerEngine, SchedulerError,
@@ -134,6 +141,7 @@ pub use supervisor::{
     SystemWorkerProcess, WorkerExit, WorkerProcess, WorkerProcessBackend, WorkerSignal,
     WorkerSupervisor,
 };
+pub use tun_runner::{TunRunner, TunRunnerError, TunRunnerLimits, TunRuntime};
 #[cfg(unix)]
 pub use uds::UnixControlServer;
 pub use uds::{
@@ -147,9 +155,13 @@ pub use version_check::{
     CoreVersionChecker, CoreVersionStateSink, CoreVersionStatus, JsonCoreVersionStateStore,
     ReleaseMetadata,
 };
+pub use webui_payload::{
+    MAX_PAYLOAD_BYTES, MAX_PAYLOAD_CHUNK_BYTES, PAYLOAD_TTL, WebUiPayloadError, WebUiPayloadStore,
+};
 pub use worker_activation::{
-    ActiveRuntime, CapabilitySource, CurrentGenerationActivator, DataPlaneHealthError,
-    DataPlaneHealthProbe, NetworkController, NetworkDataPlaneHealthProbe, RuntimeStopError,
+    ActiveRuntime, AndroidDataPlaneHealthProbe, CapabilitySource, CurrentGenerationActivator,
+    DataPlaneHealthError, DataPlaneHealthProbe, NetworkController, RuntimeAttachment,
+    RuntimeAttachmentView, RuntimeHealthVerifier, RuntimeStopError, TproxyDataPlaneHealthProbe,
     WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator, WorkerRecovery,
     WorkerRecoveryError,
 };

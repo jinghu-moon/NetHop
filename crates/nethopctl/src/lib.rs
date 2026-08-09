@@ -2,12 +2,13 @@
 
 use nethop_protocol::{
     ConfigMutation, ControlMethod, ControlParams, ControlRequest, ControlResponse, EventKind,
-    RequestId,
+    LogChannel, RequestId, WebUiPayloadNamespace, WebUiPayloadOperation,
 };
 use serde_json::Value;
 use thiserror::Error;
 
 pub const DEFAULT_SOCKET_PATH: &str = "/data/adb/nethop/run/nethopd.sock";
+pub const EVENT_SESSION_MAX_RUNTIME_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliCommand {
@@ -27,6 +28,7 @@ pub enum CliCommand {
     Events,
     NodeList,
     NodeTest,
+    NodeTestAll,
     NodeSelect,
     NodeRemove,
     NodeExport,
@@ -54,11 +56,16 @@ pub enum CliCommand {
     DiagnosticsBundle,
     TopologyGet,
     TrafficGet,
+    MetricsGet,
     BackupExport,
     BackupRestore,
     CoreVersionCheck,
     RuleSetStatus,
     RuleSetUpdate,
+    WebUiPayloadCreate,
+    WebUiPayloadAppend,
+    WebUiPayloadCommit,
+    WebUiPayloadRemove,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +81,7 @@ pub struct CliInvocation {
     target: Option<String>,
     query: Option<String>,
     limit: Option<u8>,
+    log_channel: Option<LogChannel>,
     before: Option<String>,
     positional: Vec<String>,
     candidate_digest: Option<String>,
@@ -82,6 +90,8 @@ pub struct CliInvocation {
     import_format: Option<String>,
     source_id: Option<String>,
     human: bool,
+    event_session_id: Option<String>,
+    event_max_runtime_seconds: Option<u64>,
 }
 
 impl CliInvocation {
@@ -116,6 +126,116 @@ impl CliInvocation {
     pub const fn human(&self) -> bool {
         self.human
     }
+
+    pub fn event_session_id(&self) -> Option<&str> {
+        self.event_session_id.as_deref()
+    }
+
+    pub const fn event_max_runtime_seconds(&self) -> Option<u64> {
+        self.event_max_runtime_seconds
+    }
+}
+
+pub fn valid_event_session_id(value: &str) -> bool {
+    value.len() == 36
+        && value.starts_with("evt_")
+        && value[4..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub fn parse_event_termination<I, S>(arguments: I) -> Result<Option<String>, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let arguments: Vec<String> = arguments
+        .into_iter()
+        .map(|value| value.as_ref().to_owned())
+        .collect();
+    if arguments.first().map(String::as_str) != Some("webui")
+        || arguments.get(1).map(String::as_str) != Some("events")
+    {
+        return Ok(None);
+    }
+    if arguments.len() != 5
+        || arguments.get(2).map(String::as_str) != Some("terminate")
+        || arguments.get(4).map(String::as_str) != Some("--json")
+        || !valid_event_session_id(&arguments[3])
+    {
+        return Err(CliError::Usage);
+    }
+    Ok(Some(arguments[3].clone()))
+}
+
+pub fn matches_event_session(arguments: &[&str], session_id: &str) -> bool {
+    if !valid_event_session_id(session_id) || arguments.get(1).copied() != Some("events") {
+        return false;
+    }
+    let mut matches = arguments
+        .windows(2)
+        .filter(|pair| pair[0] == "--session-id" && pair[1] == session_id);
+    matches.next().is_some() && matches.next().is_none()
+}
+
+#[cfg(unix)]
+pub fn terminate_event_session(session_id: &str) -> Result<usize, CliError> {
+    use std::{
+        fs,
+        io::Read,
+        os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    };
+
+    if !valid_event_session_id(session_id) {
+        return Err(CliError::Usage);
+    }
+    let current_pid = std::process::id();
+    let current = fs::metadata("/proc/self/exe").map_err(|_| CliError::RequestFailed)?;
+    let mut terminated = 0;
+    let entries = fs::read_dir("/proc").map_err(|_| CliError::RequestFailed)?;
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == current_pid {
+            continue;
+        }
+        let process = entry.path();
+        let Ok(executable) = fs::metadata(process.join("exe")) else {
+            continue;
+        };
+        if executable.dev() != current.dev() || executable.ino() != current.ino() {
+            continue;
+        }
+        let Ok(file) = fs::File::open(process.join("cmdline")) else {
+            continue;
+        };
+        let mut command = Vec::new();
+        if file.take(16 * 1024 + 1).read_to_end(&mut command).is_err() || command.len() > 16 * 1024
+        {
+            continue;
+        }
+        let arguments: Vec<&str> = command
+            .split(|byte| *byte == 0)
+            .filter(|value| !value.is_empty())
+            .filter_map(|value| std::ffi::OsStr::from_bytes(value).to_str())
+            .collect();
+        if !matches_event_session(&arguments, session_id) {
+            continue;
+        }
+        // SAFETY: pid comes from a numeric /proc entry for this exact executable and session.
+        let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        if result == 0 {
+            terminated += 1;
+        } else if std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
+            return Err(CliError::RequestFailed);
+        }
+    }
+    Ok(terminated)
 }
 
 impl CliCommand {
@@ -137,6 +257,7 @@ impl CliCommand {
             Self::Events => ControlMethod::EventsSubscribe,
             Self::NodeList => ControlMethod::NodeList,
             Self::NodeTest => ControlMethod::NodeTest,
+            Self::NodeTestAll => ControlMethod::NodeTestAll,
             Self::NodeSelect => ControlMethod::NodeSelect,
             Self::NodeExport => ControlMethod::NodeExport,
             Self::NodeRemove => ControlMethod::ConfigMutate,
@@ -164,11 +285,16 @@ impl CliCommand {
             Self::DiagnosticsBundle => ControlMethod::DiagnosticsBundle,
             Self::TopologyGet => ControlMethod::TopologyGet,
             Self::TrafficGet => ControlMethod::TrafficGet,
+            Self::MetricsGet => ControlMethod::MetricsGet,
             Self::BackupExport => ControlMethod::ConfigExport,
             Self::BackupRestore => ControlMethod::ConfigApply,
             Self::CoreVersionCheck => ControlMethod::CoreVersionCheck,
             Self::RuleSetStatus => ControlMethod::RuleSetStatus,
             Self::RuleSetUpdate => ControlMethod::RuleSetUpdate,
+            Self::WebUiPayloadCreate => ControlMethod::WebUiPayloadCreate,
+            Self::WebUiPayloadAppend => ControlMethod::WebUiPayloadAppend,
+            Self::WebUiPayloadCommit => ControlMethod::WebUiPayloadCommit,
+            Self::WebUiPayloadRemove => ControlMethod::WebUiPayloadRemove,
         }
     }
 }
@@ -202,6 +328,7 @@ where
         Some("node") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("list") => CliCommand::NodeList,
             Some("test") => CliCommand::NodeTest,
+            Some("test-all") => CliCommand::NodeTestAll,
             Some("select") => CliCommand::NodeSelect,
             Some("remove") => CliCommand::NodeRemove,
             Some("export") => CliCommand::NodeExport,
@@ -218,6 +345,7 @@ where
         Some("diagnose") => CliCommand::DiagnosticsBundle,
         Some("topology") => CliCommand::TopologyGet,
         Some("traffic") => CliCommand::TrafficGet,
+        Some("metrics") => CliCommand::MetricsGet,
         Some("backup") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("export") => CliCommand::BackupExport,
             Some("restore") => CliCommand::BackupRestore,
@@ -231,6 +359,15 @@ where
             Some("update") => CliCommand::RuleSetUpdate,
             _ => return Err(CliError::Usage),
         },
+        Some("webui") if arguments.next().as_ref().map(AsRef::as_ref) == Some("payload") => {
+            match arguments.next().as_ref().map(AsRef::as_ref) {
+                Some("create") => CliCommand::WebUiPayloadCreate,
+                Some("append") => CliCommand::WebUiPayloadAppend,
+                Some("commit") => CliCommand::WebUiPayloadCommit,
+                Some("remove") => CliCommand::WebUiPayloadRemove,
+                _ => return Err(CliError::Usage),
+            }
+        }
         Some("logs") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("get") => CliCommand::LogsGet,
             Some("tail") => CliCommand::LogsTail,
@@ -283,6 +420,7 @@ where
         .collect();
     let command_length = match arguments.first().map(String::as_str) {
         Some("subscription") if arguments.get(1).map(String::as_str) == Some("import") => 3,
+        Some("webui") if arguments.get(1).map(String::as_str) == Some("payload") => 3,
         Some(
             "config" | "capability" | "node" | "connection" | "logs" | "subscription"
             | "application" | "network" | "backup" | "core" | "ruleset",
@@ -304,6 +442,8 @@ where
     let mut import_format = None;
     let mut source_id = None;
     let mut human = false;
+    let mut event_session_id = None;
+    let mut event_max_runtime_seconds = None;
     let mut structured_output = false;
     let mut manager_version = None;
     let mut protocol_min = None;
@@ -312,6 +452,7 @@ where
     let mut target = None;
     let mut query = None;
     let mut limit = None;
+    let mut log_channel = None;
     let mut before = None;
     let mut positional = Vec::new();
     let mut options = arguments[command_length..].iter();
@@ -375,6 +516,22 @@ where
                 let value = options.next().ok_or(CliError::Usage)?;
                 event_kinds = parse_event_kinds(value)?;
             }
+            "--session-id" if event_session_id.is_none() => {
+                let value = options.next().cloned().ok_or(CliError::Usage)?;
+                if !valid_event_session_id(&value) {
+                    return Err(CliError::Usage);
+                }
+                event_session_id = Some(value);
+            }
+            "--max-runtime-seconds" if event_max_runtime_seconds.is_none() => {
+                event_max_runtime_seconds = Some(
+                    options
+                        .next()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .filter(|value| (30..=3600).contains(value))
+                        .ok_or(CliError::Usage)?,
+                );
+            }
             "--limit" if limit.is_none() => {
                 limit = Some(
                     options
@@ -383,6 +540,14 @@ where
                         .filter(|value| (1..=128).contains(value))
                         .ok_or(CliError::Usage)?,
                 );
+            }
+            "--channel" if log_channel.is_none() && command == CliCommand::LogsGet => {
+                log_channel = Some(match options.next().map(String::as_str) {
+                    Some("service") => LogChannel::Service,
+                    Some("subscription") => LogChannel::Subscription,
+                    Some("core") => LogChannel::Core,
+                    _ => return Err(CliError::Usage),
+                });
             }
             "--before" if before.is_none() => {
                 before = Some(options.next().cloned().ok_or(CliError::Usage)?);
@@ -423,6 +588,10 @@ where
                             | CliCommand::ApplicationRemoveUid
                             | CliCommand::ApplicationMode
                             | CliCommand::NetworkSet
+                            | CliCommand::WebUiPayloadCreate
+                            | CliCommand::WebUiPayloadAppend
+                            | CliCommand::WebUiPayloadCommit
+                            | CliCommand::WebUiPayloadRemove
                     ) =>
             {
                 positional.push(value.to_owned());
@@ -496,6 +665,14 @@ where
     if !event_kinds.is_empty() && !matches!(command, CliCommand::Events | CliCommand::LogsTail) {
         return Err(CliError::Usage);
     }
+    let event_session = event_session_id.is_some() || event_max_runtime_seconds.is_some();
+    if event_session
+        && (command != CliCommand::Events
+            || event_session_id.is_none()
+            || event_max_runtime_seconds.is_none())
+    {
+        return Err(CliError::Usage);
+    }
     let target_command = matches!(
         command,
         CliCommand::NodeTest
@@ -518,6 +695,9 @@ where
         | CliCommand::ApplicationAddUid
         | CliCommand::ApplicationRemoveUid => 1,
         CliCommand::ApplicationMode => 1,
+        CliCommand::WebUiPayloadCreate => 1,
+        CliCommand::WebUiPayloadAppend | CliCommand::WebUiPayloadCommit => 3,
+        CliCommand::WebUiPayloadRemove => 2,
         _ => 0,
     };
     if positional.len() != expected_positionals
@@ -543,6 +723,7 @@ where
         target,
         query,
         limit,
+        log_channel,
         before,
         positional,
         candidate_digest,
@@ -551,6 +732,8 @@ where
         import_format,
         source_id,
         human,
+        event_session_id,
+        event_max_runtime_seconds,
     })
 }
 
@@ -566,6 +749,7 @@ fn parse_event_kinds(value: &str) -> Result<Vec<EventKind>, CliError> {
             "subscription" => Ok(EventKind::Subscription),
             "generation" => Ok(EventKind::Generation),
             "network" => Ok(EventKind::Network),
+            "traffic" => Ok(EventKind::Traffic),
             _ => Err(CliError::Usage),
         })
         .collect()
@@ -749,19 +933,58 @@ pub fn build_request(
                 node_id: invocation.target.clone().ok_or(CliError::Usage)?,
             },
         ),
-        CliCommand::NodeList | CliCommand::ConnectionsGet | CliCommand::LogsGet => {
+        CliCommand::NodeList | CliCommand::ConnectionsGet => {
             ControlParams::list(invocation.query.clone(), invocation.limit)
         }
+        CliCommand::LogsGet => ControlParams::logs(invocation.log_channel, invocation.limit),
         CliCommand::Update => ControlParams::subscription_update(
             invocation.wait,
             invocation.if_needed,
             invocation.source_id.clone(),
+        ),
+        CliCommand::WebUiPayloadCreate => {
+            ControlParams::payload_create(parse_payload_namespace(&invocation.positional[0])?)
+        }
+        CliCommand::WebUiPayloadAppend => ControlParams::payload_append(
+            parse_payload_namespace(&invocation.positional[0])?,
+            invocation.positional[1].clone(),
+            invocation.positional[2].clone(),
+        ),
+        CliCommand::WebUiPayloadCommit => ControlParams::payload_commit(
+            parse_payload_namespace(&invocation.positional[0])?,
+            invocation.positional[1].clone(),
+            parse_payload_operation(&invocation.positional[2])?,
+        ),
+        CliCommand::WebUiPayloadRemove => ControlParams::payload_remove(
+            parse_payload_namespace(&invocation.positional[0])?,
+            invocation.positional[1].clone(),
         ),
         _ => ControlParams::new(invocation.wait, invocation.if_needed),
     };
     ControlRequest::new(request_id, invocation.command.method())
         .with_params(params)
         .map_err(|_| CliError::RequestFailed)
+}
+
+fn parse_payload_namespace(value: &str) -> Result<WebUiPayloadNamespace, CliError> {
+    match value {
+        "config" => Ok(WebUiPayloadNamespace::Config),
+        "subscription" => Ok(WebUiPayloadNamespace::Subscription),
+        "backup" => Ok(WebUiPayloadNamespace::Backup),
+        _ => Err(CliError::Usage),
+    }
+}
+
+fn parse_payload_operation(value: &str) -> Result<WebUiPayloadOperation, CliError> {
+    match value {
+        "config-validate" => Ok(WebUiPayloadOperation::ConfigValidate),
+        "config-apply" => Ok(WebUiPayloadOperation::ConfigApply),
+        "config-mutate" => Ok(WebUiPayloadOperation::ConfigMutate),
+        "subscription-import-preview" => Ok(WebUiPayloadOperation::SubscriptionImportPreview),
+        "subscription-import-apply" => Ok(WebUiPayloadOperation::SubscriptionImportApply),
+        "backup-restore" => Ok(WebUiPayloadOperation::BackupRestore),
+        _ => Err(CliError::Usage),
+    }
 }
 
 pub fn render_response(response: &ControlResponse) -> Result<String, CliError> {
@@ -840,7 +1063,7 @@ fn valid_display_version(value: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum CliError {
     #[error(
-        "usage: nethopctl <status|start|stop|probe|update|ruleset|config|node|connections|connection|logs|diagnose|topology>"
+        "usage: nethopctl <status|start|stop|probe|update|ruleset|config|node|connections|connection|logs|diagnose|topology|traffic|metrics>"
     )]
     Usage,
     #[error("control socket is unavailable")]
@@ -890,7 +1113,9 @@ mod unix {
             &self,
             request: &ControlRequest,
             output: &mut impl Write,
+            max_runtime: Option<Duration>,
         ) -> Result<(), CliError> {
+            let deadline = max_runtime.map(|duration| std::time::Instant::now() + duration);
             let mut stream =
                 UnixStream::connect(&self.socket_path).map_err(|_| CliError::ConnectionFailed)?;
             stream
@@ -899,6 +1124,16 @@ mod unix {
             FrameCodec::write_to(&mut stream, &WireFrame::Request(request.clone()))
                 .map_err(|_| CliError::RequestFailed)?;
             loop {
+                if let Some(deadline) = deadline {
+                    let Some(remaining) =
+                        deadline.checked_duration_since(std::time::Instant::now())
+                    else {
+                        return Ok(());
+                    };
+                    stream
+                        .set_read_timeout(Some(remaining))
+                        .map_err(|_| CliError::ConnectionFailed)?;
+                }
                 match FrameCodec::read_from(&mut stream) {
                     Ok(WireFrame::Stream(frame)) => {
                         serde_json::to_writer(&mut *output, &frame)
@@ -910,6 +1145,9 @@ mod unix {
                         if !matches!(frame.kind(), nethop_protocol::StreamKind::Item) {
                             return Ok(());
                         }
+                    }
+                    _ if deadline.is_some_and(|value| std::time::Instant::now() >= value) => {
+                        return Ok(());
                     }
                     _ => return Err(CliError::InvalidResponse),
                 }

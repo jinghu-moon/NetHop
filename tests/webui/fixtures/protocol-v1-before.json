@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "protocol_version": 1,
+  "frames": {
+    "hello_request": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "method": "protocol.hello",
+      "params": {
+        "manager_version": "webui-baseline",
+        "manager_protocol_min": 1,
+        "manager_protocol_max": 1
+      }
+    },
+    "request": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "method": "status.get",
+      "params": {}
+    },
+    "success_response": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "ok": true,
+      "generation": 7,
+      "result": { "state": "running" }
+    },
+    "failure_response": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "ok": false,
+      "generation": 7,
+      "error": {
+        "code": "NH-CORE-UNAVAILABLE",
+        "message": "core unavailable"
+      }
+    },
+    "stream_item": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "sequence": 1,
+      "kind": "item",
+      "payload": { "event_kind": "config", "revision": 1 }
+    },
+    "stream_end": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "sequence": 2,
+      "kind": "end"
+    },
+    "stream_error": {
+      "version": 1,
+      "request_id": "webui-protocol-001",
+      "sequence": 3,
+      "kind": "error",
+      "error": {
+        "code": "NH-CORE-UNAVAILABLE",
+        "message": "stream unavailable"
+      }
+    }
+  },
+  "event_subscription": {
+    "version": 1,
+    "request_id": "webui-protocol-001",
+    "method": "events.subscribe",
+    "params": {
+      "event_kinds": ["config", "runtime", "subscription", "generation", "network"]
+    }
+  },
+  "events": [
+    { "event_kind": "config", "payload": { "digest": "baseline-digest" } },
+    { "event_kind": "runtime", "payload": { "state": "running" } },
+    { "event_kind": "subscription", "payload": { "source_id": "baseline-source" } },
+    { "event_kind": "generation", "payload": { "generation": 7 } },
+    { "event_kind": "network", "payload": { "capture": "active" } }
+  ]
+}

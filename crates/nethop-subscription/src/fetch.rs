@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use flate2::read::MultiGzDecoder;
+use serde::Serialize;
 use thiserror::Error;
 use url::Url;
 
@@ -14,7 +15,83 @@ mod ureq_adapter;
 pub const MAX_MIRRORS: usize = 3;
 pub const MAX_REDIRECTS: usize = 3;
 pub const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
+pub const MAX_SUBSCRIPTION_USERINFO_BYTES: usize = 1024;
+pub const MAX_SUBSCRIPTION_COUNTER: u64 = 9_007_199_254_740_991;
 pub const UREQ_SECURITY_ADAPTER_VERSION: &str = "3.3.0";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct SubscriptionUserInfo {
+    upload_bytes: Option<u64>,
+    download_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+    expire_at: Option<i64>,
+}
+
+impl SubscriptionUserInfo {
+    pub const fn upload_bytes(self) -> Option<u64> {
+        self.upload_bytes
+    }
+
+    pub const fn download_bytes(self) -> Option<u64> {
+        self.download_bytes
+    }
+
+    pub const fn total_bytes(self) -> Option<u64> {
+        self.total_bytes
+    }
+
+    pub const fn expire_at(self) -> Option<i64> {
+        self.expire_at
+    }
+
+    pub fn used_bytes(self) -> Option<u64> {
+        match (self.upload_bytes, self.download_bytes) {
+            (Some(upload), Some(download)) => upload
+                .checked_add(download)
+                .filter(|value| *value <= MAX_SUBSCRIPTION_COUNTER),
+            _ => None,
+        }
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.upload_bytes.is_none()
+            && self.download_bytes.is_none()
+            && self.total_bytes.is_none()
+            && self.expire_at.is_none()
+    }
+}
+
+pub fn parse_subscription_userinfo(value: &str) -> Option<SubscriptionUserInfo> {
+    if value.is_empty() || value.len() > MAX_SUBSCRIPTION_USERINFO_BYTES {
+        return None;
+    }
+    let mut info = SubscriptionUserInfo::default();
+    for field in value.split(';') {
+        let Some((name, raw_value)) = field.split_once('=') else {
+            continue;
+        };
+        let Some(number) = parse_subscription_number(raw_value.trim()) else {
+            continue;
+        };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "upload" => info.upload_bytes = Some(number),
+            "download" => info.download_bytes = Some(number),
+            "total" => info.total_bytes = Some(number),
+            "expire" => info.expire_at = i64::try_from(number).ok().filter(|value| *value > 0),
+            _ => {}
+        }
+    }
+    (!info.is_empty()).then_some(info)
+}
+
+fn parse_subscription_number(value: &str) -> Option<u64> {
+    if let Ok(number) = value.parse::<u64>() {
+        return (number <= MAX_SUBSCRIPTION_COUNTER).then_some(number);
+    }
+    let number = value.parse::<f64>().ok()?;
+    (number.is_finite() && number >= 0.0 && number <= MAX_SUBSCRIPTION_COUNTER as f64)
+        .then_some(number.trunc() as u64)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FetchTimeouts {
@@ -315,6 +392,7 @@ pub struct FetchOutcome {
     content_type: Option<String>,
     etag: Option<String>,
     last_modified: Option<String>,
+    subscription_userinfo: Option<SubscriptionUserInfo>,
     not_modified: bool,
 }
 
@@ -333,6 +411,10 @@ impl FetchOutcome {
 
     pub fn content_type(&self) -> Option<&str> {
         self.content_type.as_deref()
+    }
+
+    pub const fn subscription_userinfo(&self) -> Option<SubscriptionUserInfo> {
+        self.subscription_userinfo
     }
 }
 
@@ -561,11 +643,16 @@ pub struct SourceCache {
     last_modified: Option<String>,
     validator_endpoint: Option<Digest>,
     last_known_good: Option<Vec<u8>>,
+    subscription_userinfo: Option<SubscriptionUserInfo>,
 }
 
 impl SourceCache {
     pub fn last_known_good(&self) -> Option<&[u8]> {
         self.last_known_good.as_deref()
+    }
+
+    pub const fn subscription_userinfo(&self) -> Option<SubscriptionUserInfo> {
+        self.subscription_userinfo
     }
 
     pub fn conditional_headers(&self) -> Vec<(&'static str, &str)> {
@@ -653,6 +740,7 @@ impl SourceCache {
         self.etag.clone_from(&outcome.etag);
         self.last_modified.clone_from(&outcome.last_modified);
         self.validator_endpoint = Some(outcome.endpoint_digest);
+        self.subscription_userinfo = outcome.subscription_userinfo;
         Ok(())
     }
 
@@ -683,8 +771,64 @@ mod tests {
             content_type: None,
             etag: None,
             last_modified: None,
+            subscription_userinfo: None,
             not_modified: false,
         }
+    }
+
+    #[test]
+    fn subscription_userinfo_parses_mihomo_fields_without_a_title() {
+        let info = parse_subscription_userinfo(
+            " upload = 128.9 ; download=256; total=1024; expire=2000000000; unknown=9 ",
+        )
+        .unwrap();
+
+        assert_eq!(info.upload_bytes(), Some(128));
+        assert_eq!(info.download_bytes(), Some(256));
+        assert_eq!(info.used_bytes(), Some(384));
+        assert_eq!(info.total_bytes(), Some(1024));
+        assert_eq!(info.expire_at(), Some(2_000_000_000));
+    }
+
+    #[test]
+    fn invalid_subscription_userinfo_is_ignored_and_bounded() {
+        assert_eq!(
+            parse_subscription_userinfo("title=Premium; expire=-1"),
+            None
+        );
+        assert_eq!(
+            parse_subscription_userinfo(&"x".repeat(MAX_SUBSCRIPTION_USERINFO_BYTES + 1)),
+            None
+        );
+        let info = parse_subscription_userinfo(
+            "upload=not-a-number; download=12; total=99999999999999999",
+        )
+        .unwrap();
+        assert_eq!(info.download_bytes(), Some(12));
+        assert_eq!(info.upload_bytes(), None);
+        assert_eq!(info.total_bytes(), None);
+    }
+
+    #[test]
+    fn cache_keeps_subscription_userinfo_for_not_modified_responses() {
+        let request = FetchRequest::new(
+            SourceId::new("source").unwrap(),
+            "https://primary.example/sub",
+            std::iter::empty::<&str>(),
+            RequestProfile::NetHopGeneric,
+            &FetchPolicy::default(),
+        )
+        .unwrap();
+        let mut fresh = outcome(&request.endpoints()[0], b"valid");
+        fresh.subscription_userinfo =
+            parse_subscription_userinfo("upload=10; download=20; total=100; expire=2000000000");
+        let mut cache = SourceCache::default();
+        cache.commit(&fresh, &ParserLimits::default()).unwrap();
+
+        assert_eq!(
+            cache.subscription_userinfo().unwrap().used_bytes(),
+            Some(30)
+        );
     }
 
     #[test]

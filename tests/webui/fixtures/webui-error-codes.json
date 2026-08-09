@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "codes": {
+    "incompatible": "NH-CORE-INCOMPATIBLE",
+    "timeout": "NH-CORE-TIMEOUT",
+    "conflict": "NH-CONFIG-CONFLICT",
+    "invalid_payload": "NH-CONFIG-INVALID-PAYLOAD",
+    "limit": "NH-CORE-LIMIT",
+    "unavailable": "NH-CORE-UNAVAILABLE"
+  }
+}

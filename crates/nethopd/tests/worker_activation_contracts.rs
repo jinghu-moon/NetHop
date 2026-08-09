@@ -22,11 +22,11 @@ use nethop_core::{
 use nethopd::{
     ActiveRuntime, CandidateActivator, CandidateChecker, CandidateProcess, CapabilitySource,
     CoreLauncher, CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe,
-    EventReconcileGate, HealthProbe, HealthProbeError, NetworkController,
-    NetworkDataPlaneHealthProbe, ProcessError, ProcessIdentity, RestartBudget, RestartDecision,
-    RunnerError, RuntimeFailureCode, RuntimeTick, SafetyAuditError, SafetyAuditor,
-    WorkerActivationDiagnosticCode, WorkerActivator, WorkerLoopDriver, WorkerLoopSignal,
-    WorkerRecoveryError, WorkerRunExit, WorkerRuntime, WorkerRuntimeLimits,
+    EventReconcileGate, HealthProbe, HealthProbeError, NetworkController, ProcessError,
+    ProcessIdentity, RestartBudget, RestartDecision, RunnerError, RuntimeAttachmentView,
+    RuntimeFailureCode, RuntimeHealthVerifier, RuntimeTick, SafetyAuditError, SafetyAuditor,
+    TproxyDataPlaneHealthProbe, WorkerActivationDiagnosticCode, WorkerActivator, WorkerLoopDriver,
+    WorkerLoopSignal, WorkerRecoveryError, WorkerRunExit, WorkerRuntime, WorkerRuntimeLimits,
 };
 use serde_json::json;
 
@@ -75,6 +75,10 @@ fn family(family: IpFamily, tproxy: CapabilityStatus) -> FamilyCapability {
 }
 
 fn report(ipv4_tproxy: CapabilityStatus) -> CapabilityReport {
+    report_with_tun(ipv4_tproxy, CapabilityStatus::Supported)
+}
+
+fn report_with_tun(ipv4_tproxy: CapabilityStatus, tun: CapabilityStatus) -> CapabilityReport {
     let allocation = ResourceCandidate::new(0x100, 0xff00, 100, 10_000).unwrap();
     CapabilityReport::new(
         CapabilityStatus::Supported,
@@ -84,7 +88,7 @@ fn report(ipv4_tproxy: CapabilityStatus) -> CapabilityReport {
         NetfilterBackend::Legacy,
         family(IpFamily::Ipv4, ipv4_tproxy),
         family(IpFamily::Ipv6, CapabilityStatus::Supported),
-        CapabilityStatus::Supported,
+        tun,
         CapabilityStatus::Supported,
         PORT,
         CapabilityStatus::Supported,
@@ -110,6 +114,10 @@ fn policy() -> CapturePolicy {
         vec![],
     )
     .unwrap()
+}
+
+fn tun_policy() -> CapturePolicy {
+    CapturePolicy::new(CaptureMode::Tun, true, None, None, vec![10_001], vec![]).unwrap()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,7 +261,7 @@ impl DataPlaneHealthProbe<FakeProcess> for FakeDataPlaneHealth<'_> {
     fn wait_healthy(
         &mut self,
         _process: &mut FakeProcess,
-        _plan: &NetworkPlan,
+        _attachment: RuntimeAttachmentView<'_>,
         _capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError> {
         assert_eq!(
@@ -299,24 +307,36 @@ fn full_network_plan() -> NetworkPlan {
 fn production_data_plane_adapter_requires_a_live_core_and_verified_network_plan() {
     let events = Rc::new(RefCell::new(Vec::new()));
     let mut process = FakeProcess { events };
-    let mut probe = NetworkDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: false });
+    let mut probe = TproxyDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: false });
     probe
-        .wait_healthy(&mut process, &full_network_plan(), &supported_report())
+        .wait_healthy(
+            &mut process,
+            RuntimeAttachmentView::Tproxy(&full_network_plan()),
+            &supported_report(),
+        )
         .unwrap();
 
-    let mut probe = NetworkDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: true });
+    let mut probe = TproxyDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: true });
     assert_eq!(
         probe
-            .wait_healthy(&mut process, &full_network_plan(), &supported_report())
+            .wait_healthy(
+                &mut process,
+                RuntimeAttachmentView::Tproxy(&full_network_plan()),
+                &supported_report(),
+            )
             .unwrap_err(),
         DataPlaneHealthError::NetworkUnhealthy
     );
 
     let mut process = ExitedProcess;
-    let mut probe = NetworkDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: false });
+    let mut probe = TproxyDataPlaneHealthProbe::new(FakeNetworkHealthVerifier { fail: false });
     assert_eq!(
         probe
-            .wait_healthy(&mut process, &full_network_plan(), &supported_report())
+            .wait_healthy(
+                &mut process,
+                RuntimeAttachmentView::Tproxy(&full_network_plan()),
+                &supported_report(),
+            )
             .unwrap_err(),
         DataPlaneHealthError::CoreExited
     );
@@ -412,7 +432,9 @@ fn recovery_activates_verified_current_without_creating_a_generation() {
         })
         .count();
     assert_eq!(generation_directories, 1);
-    active.stop(&mut network).unwrap();
+    active
+        .stop(&mut network, &mut FakeNetworkHealthVerifier { fail: false })
+        .unwrap();
 }
 
 #[test]
@@ -467,7 +489,9 @@ fn sealed_candidate_can_be_activated_and_checked_before_current_is_committed() {
         events.borrow().as_slice(),
         ["core_start", "network_apply", "data_health"]
     );
-    active.stop(&mut network).unwrap();
+    active
+        .stop(&mut network, &mut FakeNetworkHealthVerifier { fail: false })
+        .unwrap();
     store.discard_sealed(sealed).unwrap();
 }
 
@@ -579,7 +603,9 @@ fn worker_commits_only_after_network_and_data_plane_health() {
         ["core_start", "network_apply", "data_health"]
     );
 
-    active.stop(&mut network).unwrap();
+    active
+        .stop(&mut network, &mut FakeNetworkHealthVerifier { fail: false })
+        .unwrap();
     assert_eq!(
         events.borrow().as_slice(),
         [
@@ -588,6 +614,422 @@ fn worker_commits_only_after_network_and_data_plane_health() {
             "data_health",
             "network_rollback",
             "core_stop"
+        ]
+    );
+}
+
+#[derive(Debug)]
+struct FakeTunDataPlane<'a> {
+    store: &'a GenerationStore,
+    events: Rc<RefCell<Vec<&'static str>>>,
+    fail_health: bool,
+    fail_cleanup: bool,
+}
+
+impl DataPlaneHealthProbe<FakeProcess> for FakeTunDataPlane<'_> {
+    fn wait_healthy(
+        &mut self,
+        _process: &mut FakeProcess,
+        attachment: RuntimeAttachmentView<'_>,
+        _capabilities: &CapabilityReport,
+    ) -> Result<(), DataPlaneHealthError> {
+        assert!(matches!(
+            attachment,
+            RuntimeAttachmentView::Tun {
+                interface: "nethop0"
+            }
+        ));
+        assert_eq!(
+            self.store.current_generation().unwrap(),
+            Some(GenerationId::new(1).unwrap())
+        );
+        self.events.borrow_mut().push("tun_health");
+        if self.fail_health {
+            Err(DataPlaneHealthError::TunUnhealthy)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn wait_stopped(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        assert!(matches!(attachment, RuntimeAttachmentView::Tun { .. }));
+        self.events.borrow_mut().push("tun_absent");
+        if self.fail_cleanup {
+            Err(DataPlaneHealthError::TunCleanupFailed)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FakeTunRuntimeHealth {
+    events: Rc<RefCell<Vec<&'static str>>>,
+    healthy: bool,
+    fail_cleanup: bool,
+}
+
+impl RuntimeHealthVerifier for FakeTunRuntimeHealth {
+    fn verify(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        assert!(matches!(attachment, RuntimeAttachmentView::Tun { .. }));
+        self.events.borrow_mut().push("tun_reconcile");
+        if self.healthy {
+            Ok(())
+        } else {
+            Err(DataPlaneHealthError::TunUnhealthy)
+        }
+    }
+
+    fn wait_stopped(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        assert!(matches!(attachment, RuntimeAttachmentView::Tun { .. }));
+        self.events.borrow_mut().push("tun_absent");
+        if self.fail_cleanup {
+            Err(DataPlaneHealthError::TunCleanupFailed)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn tun_activation_waits_for_interface_health_without_touching_netfilter() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let checker = FakeChecker;
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let core = CandidateActivator::new(&store, &checker, &launcher, &FakeAuditor, &core_health);
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: false,
+        fail_cleanup: false,
+    };
+
+    let active = {
+        let mut worker =
+            WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
+        let active = worker
+            .activate(&candidate(2), &tun_policy(), PlanSlot::A)
+            .unwrap();
+        assert_eq!(worker.state(), RuntimeState::RunningTun);
+        active
+    };
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(GenerationId::new(2).unwrap())
+    );
+    assert_eq!(events.borrow().as_slice(), ["core_start", "tun_health"]);
+
+    let mut runtime_health = FakeTunRuntimeHealth {
+        events: Rc::clone(&events),
+        healthy: true,
+        fail_cleanup: false,
+    };
+    active.stop(&mut network, &mut runtime_health).unwrap();
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "tun_health", "core_stop", "tun_absent"]
+    );
+}
+
+#[test]
+fn tun_health_failure_stops_staged_core_and_preserves_previous_generation() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let checker = FakeChecker;
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let core = CandidateActivator::new(&store, &checker, &launcher, &FakeAuditor, &core_health);
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: true,
+        fail_cleanup: false,
+    };
+
+    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
+    let error = worker
+        .activate(&candidate(2), &tun_policy(), PlanSlot::A)
+        .unwrap_err();
+
+    assert_eq!(
+        error.code(),
+        WorkerActivationDiagnosticCode::DataPlaneHealthFailed
+    );
+    assert!(!error.cleanup_failed());
+    assert_candidate_removed(&store);
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "tun_health", "core_stop", "tun_absent"]
+    );
+}
+
+#[test]
+fn tun_health_failure_reports_a_residual_interface_as_cleanup_failure() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let checker = FakeChecker;
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let core = CandidateActivator::new(&store, &checker, &launcher, &FakeAuditor, &core_health);
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: true,
+        fail_cleanup: true,
+    };
+
+    let error = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health)
+        .activate(&candidate(2), &tun_policy(), PlanSlot::A)
+        .unwrap_err();
+
+    assert!(error.cleanup_failed());
+    assert_candidate_removed(&store);
+    assert_eq!(events.borrow().last(), Some(&"tun_absent"));
+}
+
+#[test]
+fn tun_commit_failure_stops_core_and_confirms_interface_cleanup() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let checker = FakeChecker;
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: true,
+    };
+    let core_health = FakeCoreHealth;
+    let core = CandidateActivator::new(&store, &checker, &launcher, &FakeAuditor, &core_health);
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: false,
+        fail_cleanup: false,
+    };
+
+    let error = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health)
+        .activate(&candidate(2), &tun_policy(), PlanSlot::A)
+        .unwrap_err();
+
+    assert_eq!(error.code(), WorkerActivationDiagnosticCode::CommitFailed);
+    assert!(!error.cleanup_failed());
+    assert_candidate_removed(&store);
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "tun_health", "core_stop", "tun_absent"]
+    );
+}
+
+#[test]
+fn recovery_restores_a_tun_generation_without_applying_netfilter() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: false,
+        fail_cleanup: false,
+    };
+
+    let active = CurrentGenerationActivator::new(
+        &store,
+        &FakeChecker,
+        &launcher,
+        &FakeCoreHealth,
+        &mut capabilities,
+        &mut network,
+        &mut data_health,
+    )
+    .recover(&tun_policy(), PlanSlot::A)
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(active.state(), RuntimeState::RunningTun);
+    assert_eq!(events.borrow().as_slice(), ["core_start", "tun_health"]);
+    active
+        .stop(
+            &mut network,
+            &mut FakeTunRuntimeHealth {
+                events: Rc::clone(&events),
+                healthy: true,
+                fail_cleanup: false,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn tun_capability_failure_does_not_start_core_or_touch_netfilter() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let checker = FakeChecker;
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let core = CandidateActivator::new(&store, &checker, &launcher, &FakeAuditor, &core_health);
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(report_with_tun(
+            CapabilityStatus::Supported,
+            CapabilityStatus::Unsupported,
+        )),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut data_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: false,
+        fail_cleanup: false,
+    };
+
+    let mut worker = WorkerActivator::new(core, &mut capabilities, &mut network, &mut data_health);
+    let error = worker
+        .activate(&candidate(2), &tun_policy(), PlanSlot::A)
+        .unwrap_err();
+
+    assert_eq!(
+        error.code(),
+        WorkerActivationDiagnosticCode::NetworkPlanRejected
+    );
+    assert!(events.borrow().is_empty());
+    assert_candidate_removed(&store);
+}
+
+#[test]
+fn tun_runtime_reconcile_never_attempts_a_netfilter_repair() {
+    let (_directory, store) = store_with_active_generation();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let checker = FakeChecker;
+    let launcher = FakeLauncher {
+        events: Rc::clone(&events),
+        invalidate_manifest: false,
+    };
+    let core_health = FakeCoreHealth;
+    let core = CandidateActivator::new(&store, &checker, &launcher, &FakeAuditor, &core_health);
+    let mut capabilities = FakeCapabilitySource {
+        report: Some(supported_report()),
+    };
+    let mut network = FakeNetworkExecutor {
+        events: Rc::clone(&events),
+        fail_apply: false,
+        fail_rollback: false,
+    };
+    let mut activation_health = FakeTunDataPlane {
+        store: &store,
+        events: Rc::clone(&events),
+        fail_health: false,
+        fail_cleanup: false,
+    };
+    let active = WorkerActivator::new(
+        core,
+        &mut capabilities,
+        &mut network,
+        &mut activation_health,
+    )
+    .activate(&candidate(2), &tun_policy(), PlanSlot::A)
+    .unwrap();
+    let mut runtime = WorkerRuntime::new(active, Duration::ZERO, runtime_limits());
+    assert_eq!(runtime.state(), RuntimeState::RunningTun);
+    let mut verifier = FakeTunRuntimeHealth {
+        events: Rc::clone(&events),
+        healthy: false,
+        fail_cleanup: false,
+    };
+    let mut budget = RestartBudget::default();
+
+    let tick = runtime
+        .tick(
+            Duration::from_secs(60),
+            &mut network,
+            &mut verifier,
+            &mut budget,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        tick,
+        RuntimeTick::RestartScheduled {
+            failure: RuntimeFailureCode::TunUnhealthy,
+            cleanup_failed: false,
+            ..
+        }
+    ));
+    assert_eq!(runtime.state(), RuntimeState::Backoff);
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            "core_start",
+            "tun_health",
+            "tun_reconcile",
+            "core_stop",
+            "tun_absent"
         ]
     );
 }
@@ -864,7 +1306,7 @@ impl DataPlaneHealthProbe<MonitorProcess> for AlwaysDataPlaneHealthy {
     fn wait_healthy(
         &mut self,
         _process: &mut MonitorProcess,
-        _plan: &NetworkPlan,
+        _attachment: RuntimeAttachmentView<'_>,
         _capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError> {
         Ok(())
@@ -1267,7 +1709,7 @@ fn worker_run_loop_honors_stop_after_a_healthy_tick() {
         ["network_rollback", "core_stop"]
     );
 
-    runtime.stop(&mut network).unwrap();
+    runtime.stop(&mut network, &mut verifier).unwrap();
     assert_eq!(
         events.borrow().as_slice(),
         ["network_rollback", "core_stop"]

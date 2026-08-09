@@ -208,6 +208,10 @@ fn command_parser_is_exact_and_maps_only_minimal_methods() {
         CliCommand::NodeTest
     );
     assert_eq!(
+        parse_command(["node", "test-all"]).unwrap(),
+        CliCommand::NodeTestAll
+    );
+    assert_eq!(
         parse_command(["node", "select"]).unwrap(),
         CliCommand::NodeSelect
     );
@@ -253,6 +257,7 @@ fn command_parser_is_exact_and_maps_only_minimal_methods() {
         CliCommand::TopologyGet
     );
     assert_eq!(parse_command(["traffic"]).unwrap(), CliCommand::TrafficGet);
+    assert_eq!(parse_command(["metrics"]).unwrap(), CliCommand::MetricsGet);
     assert_eq!(
         parse_command(["status", "extra"]).unwrap_err(),
         CliError::Usage
@@ -277,6 +282,15 @@ fn operational_commands_build_only_bounded_typed_params() {
         build_request(&connections, RequestId::new("connections").unwrap(), None).unwrap();
     assert_eq!(request.params().query_value(), None);
     assert_eq!(request.params().limit(), Some(8));
+
+    let test_all = parse_invocation(["node", "test-all"]).unwrap();
+    let request = build_request(&test_all, RequestId::new("node-test-all").unwrap(), None).unwrap();
+    assert_eq!(
+        request.method(),
+        nethop_protocol::ControlMethod::NodeTestAll
+    );
+    assert_eq!(request.params().target_value(), None);
+    assert!(parse_invocation(["node", "test-all", "node-a"]).is_err());
 
     for (arguments, method, target) in [
         (
@@ -318,10 +332,15 @@ fn operational_commands_build_only_bounded_typed_params() {
             .method(),
         nethop_protocol::ControlMethod::ConnectionsCloseAll
     );
-    let logs = parse_invocation(["logs", "get", "--limit", "12"]).unwrap();
+    let logs = parse_invocation(["logs", "get", "--channel", "core", "--limit", "12"]).unwrap();
     let request = build_request(&logs, RequestId::new("logs").unwrap(), None).unwrap();
     assert_eq!(request.method(), nethop_protocol::ControlMethod::LogsGet);
     assert_eq!(request.params().limit(), Some(12));
+    assert_eq!(
+        request.params().log_channel(),
+        Some(nethop_protocol::LogChannel::Core)
+    );
+    assert!(parse_invocation(["logs", "get", "--channel", "unknown"]).is_err());
     let tail = parse_invocation(["logs", "tail", "--kinds", "runtime,network"]).unwrap();
     assert_eq!(
         build_request(&tail, RequestId::new("tail").unwrap(), None)
@@ -484,7 +503,7 @@ fn client_sends_one_typed_request_and_preserves_daemon_response() {
     assert_eq!(transport.observed[0].method(), CliCommand::Status.method());
     assert_eq!(
         render_response(&actual).unwrap(),
-        r#"{"version":1,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
+        r#"{"version":2,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
     );
 }
 

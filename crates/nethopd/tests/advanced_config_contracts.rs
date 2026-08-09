@@ -1,5 +1,6 @@
 use std::fs;
 
+use nethop_core::{CaptureMode, TunStack};
 use nethop_subscription::RequestProfile;
 use nethopd::{
     ApplicationMode, ApplyImpact, CaptureIntent, ChangeKind, ConfigError, ConfigStore, DnsMode,
@@ -156,6 +157,79 @@ fn complete_v2_schema_builds_typed_effective_sections() {
     let debug = format!("{snapshot:?} {config:?}");
     assert!(!debug.contains("subscription.example"));
     assert!(!debug.contains("mirror.example"));
+}
+
+#[test]
+fn explicit_tun_mode_and_stack_are_admitted_into_the_runtime_policy() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let document = complete_config()
+        .replace("capture_mode = \"auto\"", "capture_mode = \"tun\"")
+        .replace("tun_stack = \"system\"", "tun_stack = \"gvisor\"")
+        .replace("include = [\"wlan*\"]", "include = []")
+        .replace("exclude = [\"wlan-test\"]", "exclude = []");
+    write_private(&path, &document);
+
+    let snapshot = ConfigStore::new(&path).unwrap().load().unwrap();
+    assert_eq!(snapshot.effective().capture().mode(), CaptureMode::Tun);
+    assert_eq!(snapshot.effective().managed_tun_stack(), TunStack::Gvisor);
+
+    let baseline_path = directory.path().join("baseline.toml");
+    write_private(&baseline_path, complete_config());
+    let baseline = ConfigStore::new(baseline_path).unwrap().load().unwrap();
+    assert_eq!(
+        baseline
+            .effective()
+            .change_plan(snapshot.effective())
+            .impact(),
+        ApplyImpact::GenerationActivation
+    );
+}
+
+#[test]
+fn omitted_tun_stack_defaults_to_the_android_verified_gvisor_stack() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let document = complete_config().replace("tun_stack = \"system\"\n", "");
+    write_private(&path, &document);
+
+    let snapshot = ConfigStore::new(path).unwrap().load().unwrap();
+    assert_eq!(
+        snapshot.effective().network().tun_stack(),
+        TunStackIntent::Gvisor
+    );
+    assert_eq!(snapshot.effective().managed_tun_stack(), TunStack::Gvisor);
+}
+
+#[test]
+fn inactive_gvisor_stack_is_valid_before_switching_capture_mode() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let document = complete_config().replace("tun_stack = \"system\"", "tun_stack = \"gvisor\"");
+    write_private(&path, &document);
+
+    let snapshot = ConfigStore::new(path).unwrap().load().unwrap();
+    assert_eq!(
+        snapshot.effective().network().capture_mode(),
+        CaptureIntent::Auto
+    );
+    assert_eq!(
+        snapshot.effective().network().tun_stack(),
+        TunStackIntent::Gvisor
+    );
+}
+
+#[test]
+fn tun_mode_rejects_capture_controls_that_the_native_inbound_cannot_honor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    let document = complete_config().replace("capture_mode = \"auto\"", "capture_mode = \"tun\"");
+    write_private(&path, &document);
+
+    assert_eq!(
+        ConfigStore::new(path).unwrap().load().unwrap_err(),
+        ConfigError::UnsupportedNetwork
+    );
 }
 
 #[test]

@@ -105,6 +105,12 @@ pub struct TunHealthVerifier<B> {
     interface: String,
 }
 
+pub trait TunHealthProbe {
+    fn verify(&mut self) -> Result<(), TunHealthError>;
+
+    fn verify_absent(&mut self) -> Result<(), TunHealthError>;
+}
+
 impl<B> TunHealthVerifier<B> {
     pub fn new(backend: B, interface: impl Into<String>) -> Result<Self, TunHealthError> {
         let interface = interface.into();
@@ -144,6 +150,17 @@ impl<B: ProbeBackend> TunHealthVerifier<B> {
         Ok(())
     }
 
+    pub fn verify_absent(&mut self) -> Result<(), TunHealthError> {
+        let links = self.run(ProbeCommand::Links)?;
+        if links
+            .lines()
+            .any(|line| interface_exists(line, &self.interface))
+        {
+            return Err(TunHealthError::InterfaceStillPresent);
+        }
+        Ok(())
+    }
+
     fn run(&mut self, command: ProbeCommand) -> Result<String, TunHealthError> {
         let output = self
             .backend
@@ -153,6 +170,16 @@ impl<B: ProbeBackend> TunHealthVerifier<B> {
             return Err(TunHealthError::ProbeFailed);
         }
         Ok(output.stdout().to_owned())
+    }
+}
+
+impl<B: ProbeBackend> TunHealthProbe for TunHealthVerifier<B> {
+    fn verify(&mut self) -> Result<(), TunHealthError> {
+        TunHealthVerifier::verify(self)
+    }
+
+    fn verify_absent(&mut self) -> Result<(), TunHealthError> {
+        TunHealthVerifier::verify_absent(self)
     }
 }
 
@@ -168,6 +195,8 @@ pub enum TunHealthError {
     Ipv4AddressMissing,
     #[error("owned TUN interface has no IPv6 address")]
     Ipv6AddressMissing,
+    #[error("owned TUN interface is still present after core shutdown")]
+    InterfaceStillPresent,
 }
 
 impl TunHealthError {
@@ -178,18 +207,28 @@ impl TunHealthError {
             Self::InterfaceMissing => "tun_health_interface_missing",
             Self::Ipv4AddressMissing => "tun_health_ipv4_address_missing",
             Self::Ipv6AddressMissing => "tun_health_ipv6_address_missing",
+            Self::InterfaceStillPresent => "tun_health_interface_still_present",
         }
     }
 }
 
-fn interface_is_up(line: &str, interface: &str) -> bool {
+fn interface_exists(line: &str, interface: &str) -> bool {
     let Some((_, remainder)) = line.split_once(':') else {
         return false;
     };
-    let Some((name, flags)) = remainder.split_once(':') else {
+    remainder
+        .split_once(':')
+        .is_some_and(|(name, _)| interface_name(name) == interface)
+}
+
+fn interface_is_up(line: &str, interface: &str) -> bool {
+    let Some((_, flags)) = line
+        .split_once(':')
+        .and_then(|(_, remainder)| remainder.split_once(':'))
+    else {
         return false;
     };
-    name.trim() == interface
+    interface_exists(line, interface)
         && flags
             .split_once('<')
             .and_then(|(_, flags)| flags.split_once('>'))
@@ -197,10 +236,35 @@ fn interface_is_up(line: &str, interface: &str) -> bool {
 }
 
 fn address_belongs_to(output: &str, interface: &str, family_token: &str) -> bool {
-    output.lines().any(|line| {
-        let tokens = line.split_ascii_whitespace().collect::<Vec<_>>();
-        tokens.contains(&family_token) && tokens.contains(&interface)
-    })
+    let mut owned_block = false;
+    for line in output.lines() {
+        let trimmed = line.trim_start();
+        if line.len() == trimmed.len() {
+            owned_block = interface_header_name(trimmed).is_some_and(|name| name == interface);
+        }
+        let tokens = trimmed.split_ascii_whitespace().collect::<Vec<_>>();
+        let inline_interface = tokens
+            .get(1)
+            .is_some_and(|name| interface_name(name) == interface);
+        if (owned_block || inline_interface) && tokens.contains(&family_token) {
+            return true;
+        }
+    }
+    false
+}
+
+fn interface_header_name(line: &str) -> Option<&str> {
+    let (_, remainder) = line.split_once(':')?;
+    let (name, _) = remainder.split_once(':')?;
+    Some(interface_name(name))
+}
+
+fn interface_name(value: &str) -> &str {
+    value
+        .trim()
+        .trim_end_matches(':')
+        .split_once('@')
+        .map_or(value.trim().trim_end_matches(':'), |(name, _)| name)
 }
 
 pub const fn default_tun_interface() -> &'static str {

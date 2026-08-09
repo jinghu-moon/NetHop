@@ -12,3 +12,6 @@ publish = false
 nethop-protocol = { version = "0.1.0", path = "../nethop-protocol" }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

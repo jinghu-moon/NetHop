@@ -8,11 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nethop_android::NetworkHealthVerifier;
 use nethop_core::{GenerationId, RuntimeState};
 use thiserror::Error;
 
-use crate::{ActiveRuntime, CandidateProcess, NetworkController, RuntimeStopError};
+use crate::{
+    ActiveRuntime, CandidateProcess, NetworkController, RuntimeHealthVerifier, RuntimeStopError,
+};
 
 const MAX_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MAX_FAILURE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
@@ -143,6 +144,7 @@ pub enum RuntimeFailureCode {
     CoreObserveFailed,
     DriftRepairFailed,
     DriftPersisted,
+    TunUnhealthy,
 }
 
 impl RuntimeFailureCode {
@@ -152,6 +154,7 @@ impl RuntimeFailureCode {
             Self::CoreObserveFailed => "worker_runtime_core_observe_failed",
             Self::DriftRepairFailed => "worker_runtime_drift_repair_failed",
             Self::DriftPersisted => "worker_runtime_drift_persisted",
+            Self::TunUnhealthy => "worker_runtime_tun_unhealthy",
         }
     }
 }
@@ -188,9 +191,10 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
         started_at: Duration,
         limits: WorkerRuntimeLimits,
     ) -> Self {
+        let state = active.state();
         Self {
             active: Some(active),
-            state: RuntimeState::RunningTproxy,
+            state,
             limits,
             last_tick: started_at,
             next_core_poll: started_at,
@@ -208,6 +212,10 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
 
     pub fn generation(&self) -> Option<GenerationId> {
         self.active.as_ref().map(ActiveRuntime::generation)
+    }
+
+    pub fn process_identity(&self) -> Option<crate::ProcessIdentity> {
+        self.active.as_ref().map(ActiveRuntime::process_identity)
     }
 
     pub fn next_wakeup_in(&self, now: Duration) -> Duration {
@@ -242,7 +250,7 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
     ) -> Result<RuntimeTick, WorkerRuntimeError>
     where
         N: NetworkController<Receipt = R>,
-        V: NetworkHealthVerifier,
+        V: RuntimeHealthVerifier,
     {
         if now < self.last_tick {
             return Err(WorkerRuntimeError::NonMonotonicTime);
@@ -270,6 +278,7 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
                         now,
                         RuntimeFailureCode::CoreExited,
                         network,
+                        verifier,
                         budget,
                     ));
                 }
@@ -278,6 +287,7 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
                         now,
                         RuntimeFailureCode::CoreObserveFailed,
                         network,
+                        verifier,
                         budget,
                     ));
                 }
@@ -288,16 +298,24 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
             return Ok(RuntimeTick::Healthy);
         }
         self.next_reconcile = now.saturating_add(self.limits.reconcile_interval);
-        let healthy = verifier
-            .verify(
-                self.active
-                    .as_ref()
-                    .ok_or(WorkerRuntimeError::NotRunning)?
-                    .plan(),
-            )
-            .is_ok();
+        let attachment = self
+            .active
+            .as_ref()
+            .ok_or(WorkerRuntimeError::NotRunning)?
+            .attachment();
+        let healthy = verifier.verify(attachment).is_ok();
         if healthy {
             return Ok(RuntimeTick::Reconciled);
+        }
+
+        if attachment.mode() == nethop_core::CaptureMode::Tun {
+            return Ok(self.fail_runtime(
+                now,
+                RuntimeFailureCode::TunUnhealthy,
+                network,
+                verifier,
+                budget,
+            ));
         }
 
         let repaired = self
@@ -311,6 +329,7 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
                 now,
                 RuntimeFailureCode::DriftRepairFailed,
                 network,
+                verifier,
                 budget,
             ));
         }
@@ -319,11 +338,17 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
                 self.active
                     .as_ref()
                     .ok_or(WorkerRuntimeError::NotRunning)?
-                    .plan(),
+                    .attachment(),
             )
             .is_ok();
         if !verified {
-            return Ok(self.fail_runtime(now, RuntimeFailureCode::DriftPersisted, network, budget));
+            return Ok(self.fail_runtime(
+                now,
+                RuntimeFailureCode::DriftPersisted,
+                network,
+                verifier,
+                budget,
+            ));
         }
         Ok(RuntimeTick::Repaired)
     }
@@ -338,7 +363,7 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
     where
         D: WorkerLoopDriver,
         N: NetworkController<Receipt = R>,
-        V: NetworkHealthVerifier,
+        V: RuntimeHealthVerifier,
     {
         loop {
             let now = driver.now();
@@ -365,7 +390,7 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    let cleanup_failed = self.stop(network).is_err();
+                    let cleanup_failed = self.stop(network, verifier).is_err();
                     return WorkerRunExit::Fatal {
                         error,
                         cleanup_failed,
@@ -373,38 +398,41 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
                 }
             }
             if driver.wait(self.next_wakeup_in(driver.now())) == WorkerLoopSignal::Stop {
-                let cleanup_failed = self.stop(network).is_err();
+                let cleanup_failed = self.stop(network, verifier).is_err();
                 return WorkerRunExit::Stopped { cleanup_failed };
             }
         }
     }
 
-    pub fn stop<N>(&mut self, network: &mut N) -> Result<(), RuntimeStopError>
+    pub fn stop<N, V>(&mut self, network: &mut N, verifier: &mut V) -> Result<(), RuntimeStopError>
     where
         N: NetworkController<Receipt = R>,
+        V: RuntimeHealthVerifier,
     {
         self.state = RuntimeState::Stopping;
         let Some(active) = self.active.take() else {
             return Ok(());
         };
-        active.stop(network)
+        active.stop(network, verifier)
     }
 
-    fn fail_runtime<N>(
+    fn fail_runtime<N, V>(
         &mut self,
         now: Duration,
         failure: RuntimeFailureCode,
         network: &mut N,
+        verifier: &mut V,
         budget: &mut RestartBudget,
     ) -> RuntimeTick
     where
         N: NetworkController<Receipt = R>,
+        V: RuntimeHealthVerifier,
     {
         self.state = RuntimeState::Degraded;
         let cleanup_failed = self
             .active
             .take()
-            .is_some_and(|active| active.stop(network).is_err());
+            .is_some_and(|active| active.stop(network, verifier).is_err());
         self.state = RuntimeState::FailOpenDirect;
         match budget.register_failure(now) {
             RestartDecision::RetryAfter(after) => {

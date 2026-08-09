@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "change_id": "webui-breaking-001",
+  "breaking": true,
+  "before": {
+    "test_id": "A001",
+    "path": "tests/webui/fixtures/cli-v1-before.json"
+  },
+  "new_red": {
+    "test_id": "B001",
+    "path": "tests/webui/fixtures/protocol-v1-before.json"
+  },
+  "after": {
+    "test_id": "B014",
+    "path": "tests/webui/fixtures/protocol-v1-before.json"
+  },
+  "regression": {
+    "test_id": "A004",
+    "path": "tests/webui/fixtures/module-no-webui-before.json"
+  }
+}

@@ -1,0 +1,64 @@
+name: webui-foundation
+
+on:
+  push:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/nethop-protocol/**
+      - crates/nethopctl/**
+      - crates/nethopd/**
+      - crates/nethop-android/**
+      - tests/webui/**
+      - scripts/webui-*.ps1
+      - scripts/test-webui.ps1
+      - scripts/scan-webui-secrets.ps1
+      - scripts/validate-webui-change-evidence.ps1
+      - docs/adr/**
+      - webui/**
+      - module/customize.sh
+      - scripts/build-android-module.ps1
+      - scripts/module-contracts.ps1
+      - .github/workflows/webui-foundation.yml
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/nethop-protocol/**
+      - crates/nethopctl/**
+      - crates/nethopd/**
+      - crates/nethop-android/**
+      - tests/webui/**
+      - scripts/webui-*.ps1
+      - scripts/test-webui.ps1
+      - scripts/scan-webui-secrets.ps1
+      - scripts/validate-webui-change-evidence.ps1
+      - docs/adr/**
+      - webui/**
+      - module/customize.sh
+      - scripts/build-android-module.ps1
+      - scripts/module-contracts.ps1
+      - .github/workflows/webui-foundation.yml
+
+jobs:
+  phases-a-c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Run phase A gate
+        shell: pwsh
+        run: ./scripts/webui-phase-a-gate.ps1
+      - name: Run phase B gate
+        shell: pwsh
+        run: ./scripts/webui-phase-b-gate.ps1
+      - name: Run phase C gate
+        shell: pwsh
+        run: ./scripts/webui-phase-c-gate.ps1

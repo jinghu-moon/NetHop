@@ -22,7 +22,8 @@ $required = @(
     "rulesets/cn-domain.srs",
     "rulesets/cn-ip.srs",
     "bin/.gitkeep",
-    "licenses/.gitkeep"
+    "licenses/.gitkeep",
+    "webroot/index.html"
 )
 foreach ($relative in $required) {
     Assert-True (Test-Path -LiteralPath (Join-Path $module $relative) -PathType Leaf) "missing module file: $relative"
@@ -46,6 +47,7 @@ Assert-True ($default -match '(?m)^url = ""$') "default primary source URL must 
 Assert-True (-not $default.Contains('update.glados-config.com')) "default TOML leaks a development subscription"
 Assert-True ($default -notmatch '(?m)^id\s*=') "user TOML must not expose source IDs"
 Assert-True ($default -match '(?m)^bypass_cn = true$') "default rule mode must bypass audited CN rule sets"
+Assert-True ($default -match '(?m)^tun_stack = "gvisor"$') "Android TUN must default to the device-verified gvisor stack"
 
 $service = Get-Content -LiteralPath (Join-Path $module "service.sh") -Raw
 Assert-True ($service -match 'MODDIR=\$\{0%/\*\}') "service must derive MODDIR from its own path"
@@ -57,7 +59,12 @@ $customize = Get-Content -LiteralPath (Join-Path $module "customize.sh") -Raw
 Assert-True ($customize -notmatch '(?m)^\s*set\s+-[^\r\n#]*u') "installer must not enable nounset in sourced customize.sh"
 Assert-True ($customize -notmatch '(?m)^\s*set\s+-o\s+nounset(?:\s|$)') "installer must not enable nounset in sourced customize.sh"
 foreach ($asset in @("bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs", "build-manifest.json")) {
-    Assert-True ($customize.Contains("verify_asset `"$asset`"")) "installer does not verify $asset"
+    Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits $asset"
+}
+Assert-True ($customize.Contains('verify_asset "$relative"')) "installer does not verify each allowed checksum target"
+Assert-True ($customize.Contains('webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*')) "installer does not constrain WebUI checksum targets"
+foreach ($asset in @("licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
+    Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits $asset"
 }
 foreach ($asset in @("cn-domain.srs", "cn-ip.srs")) {
     Assert-True ($customize.Contains("publish_persistent_asset `"rulesets/$asset`" `"`$DATA_ROOT/rulesets/$asset`"")) "installer does not publish persistent $asset"
@@ -76,6 +83,11 @@ Assert-True ($customize.Contains('chmod 0600 "$DATA_ROOT/config/nethop.toml"')) 
 Assert-True ($customize.Contains('ln -s "$DATA_ROOT/config/nethop.toml" "$MODPATH/config/nethop.toml"')) "installer does not publish the controlled config link"
 Assert-True (-not $customize.Contains('nethop.json')) "installer retains the removed JSON worker config"
 Assert-True (-not $customize.Contains('sources.json')) "installer retains the removed JSON source config"
+
+$buildScript = Get-Content -LiteralPath (Join-Path $workspace "scripts/build-android-module.ps1") -Raw
+Assert-True ($buildScript.Contains('[IO.File]::WriteAllText($checksumPath, (($checksumEntries -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))')) "build does not force an LF-only checksum manifest"
+Assert-True ($buildScript.Contains('$checksumBytes.Contains([byte]0x0D)')) "build does not reject CR bytes in the checksum manifest"
+Assert-True ($buildScript.Contains('$checksumBytes[0] -eq 0xEF')) "build does not reject a UTF-8 BOM in the checksum manifest"
 
 $action = Get-Content -LiteralPath (Join-Path $module "action.sh") -Raw
 Assert-True ($action.Contains('"$CTL" config reload')) "action does not force a config reload"

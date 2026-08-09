@@ -564,9 +564,10 @@ fn apply_mutation(
             set_value(document, "/service/enabled", serde_json::json!(enabled))?;
         }
         ConfigMutation::AddSource { name, url } => {
+            let enabled = !sources.sources().iter().any(|source| source.enabled());
             let list = array_mut(document, "/subscriptions/sources")?;
             *added_index = Some(list.len());
-            list.push(serde_json::json!({"name": name, "url": url}));
+            list.push(serde_json::json!({"name": name, "url": url, "enabled": enabled}));
             preferred_ids.push(None);
         }
         ConfigMutation::UpdateSource {
@@ -588,6 +589,18 @@ fn apply_mutation(
             }
             if let Some(value) = enabled {
                 source.insert("enabled".into(), serde_json::json!(value));
+            }
+        }
+        ConfigMutation::SelectSource { source_id } => {
+            let selected = source_index(sources, source_id)?;
+            for (index, source) in array_mut(document, "/subscriptions/sources")?
+                .iter_mut()
+                .enumerate()
+            {
+                source
+                    .as_object_mut()
+                    .ok_or(ConfigError::InvalidToml)?
+                    .insert("enabled".into(), serde_json::json!(index == selected));
             }
         }
         ConfigMutation::RemoveSource { source_id } => {
@@ -627,6 +640,18 @@ fn apply_mutation(
             )?;
         }
         ConfigMutation::ReplaceApplicationTargets { targets } => {
+            set_value(
+                document,
+                "/applications/targets",
+                serde_json::to_value(targets).map_err(|_| ConfigError::InvalidToml)?,
+            )?;
+        }
+        ConfigMutation::SetApplicationPolicy { mode, targets } => {
+            set_value(
+                document,
+                "/applications/mode",
+                serde_json::to_value(mode).map_err(|_| ConfigError::InvalidToml)?,
+            )?;
             set_value(
                 document,
                 "/applications/targets",

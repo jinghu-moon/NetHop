@@ -86,9 +86,9 @@ fn client_is_loopback_only_and_redacts_its_secret() {
 fn node_listing_uses_secret_and_returns_only_bounded_selector_members() {
     let body = serde_json::json!({
         "proxies": {
-            "nethop-select": {"type":"Selector","now":"nh1s-b","all":["direct","nh1s-a","nh1s-b"]},
-            "nh1s-a": {"type":"VLESS","alive":true,"history":[{"delay":42}]},
-            "nh1s-b": {"type":"Trojan","alive":false,"history":[]},
+            "nethop-select": {"type":"Selector","now":"nh1s-fedcba9876543210","all":["direct","nh1s-0123456789abcdef","nh1s-fedcba9876543210"]},
+            "nh1s-0123456789abcdef": {"type":"VLESS","alive":true,"history":[{"delay":42}]},
+            "nh1s-fedcba9876543210": {"type":"Trojan","alive":false,"history":[]},
             "credential-shaped-field": {"password":"must-not-escape"}
         }
     })
@@ -96,9 +96,17 @@ fn node_listing_uses_secret_and_returns_only_bounded_selector_members() {
     let (address, server) = serve(vec![(200, body)]);
     let nodes = client(address).nodes(Some("nh1s"), Some(2)).unwrap();
     assert_eq!(nodes.len(), 2);
-    assert_eq!(nodes[0].tag, "nh1s-a");
+    assert_eq!(nodes[0].tag, "nh1s-0123456789abcdef");
     assert_eq!(nodes[0].delay_ms, Some(42));
     assert!(nodes[1].selected);
+    let payload = serde_json::to_value(&nodes).unwrap();
+    assert_eq!(payload[0]["id"], "nh1s-0123456789abcdef");
+    assert_eq!(payload[0]["name"], "nh1s-0123456789abcdef");
+    assert_eq!(payload[0]["protocol"], "vless");
+    assert_eq!(payload[0]["source_ids"], serde_json::json!([]));
+    assert!(payload[0].get("tag").is_none());
+    assert!(payload[0].get("kind").is_none());
+    assert!(payload[0].get("alive").is_none());
     let requests = server.join().unwrap();
     assert!(requests[0].starts_with("GET /proxies HTTP/1.1\r\n"));
     assert!(
@@ -125,20 +133,41 @@ fn node_test_percent_encodes_the_path_and_parses_delay() {
 }
 
 #[test]
+fn group_delay_tests_all_selector_members_in_one_bounded_request() {
+    let (address, server) = serve(vec![(
+        200,
+        r#"{"nh1s-fedcba9876543210":87,"direct":1,"nh1s-0123456789abcdef":42,"invalid":"slow"}"#
+            .to_owned(),
+    )]);
+    let delays = client(address).test_all_nodes().unwrap();
+    assert_eq!(delays.len(), 2);
+    assert_eq!(delays[0].tag, "nh1s-0123456789abcdef");
+    assert_eq!(delays[0].delay_ms, 42);
+    assert_eq!(delays[1].tag, "nh1s-fedcba9876543210");
+    assert_eq!(delays[1].delay_ms, 87);
+    let requests = server.join().unwrap();
+    assert!(requests[0].starts_with(
+        "GET /group/nethop-select/delay?timeout=10000&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204 HTTP/1.1\r\n"
+    ));
+}
+
+#[test]
 fn node_selection_validates_membership_before_putting_selector() {
     let list = serde_json::json!({
         "proxies": {
-            "nethop-select": {"now":"nh1s-a","all":["nh1s-a","nh1s-b"]},
-            "nh1s-a": {"type":"VLESS"},
-            "nh1s-b": {"type":"Trojan"}
+            "nethop-select": {"now":"nh1s-0123456789abcdef","all":["nh1s-0123456789abcdef","nh1s-fedcba9876543210"]},
+            "nh1s-0123456789abcdef": {"type":"VLESS"},
+            "nh1s-fedcba9876543210": {"type":"Trojan"}
         }
     })
     .to_string();
     let (address, server) = serve(vec![(200, list), (204, String::new())]);
-    client(address).select_node("nh1s-b").unwrap();
+    client(address)
+        .select_node("nh1s-fedcba9876543210")
+        .unwrap();
     let requests = server.join().unwrap();
     assert!(requests[1].starts_with("PUT /proxies/nethop-select HTTP/1.1\r\n"));
-    assert!(requests[1].ends_with(r#"{"name":"nh1s-b"}"#));
+    assert!(requests[1].ends_with(r#"{"name":"nh1s-fedcba9876543210"}"#));
 }
 
 #[test]

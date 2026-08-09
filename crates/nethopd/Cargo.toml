@@ -13,6 +13,8 @@ default = ["subscription-update"]
 subscription-update = ["nethop-subscription/fetch", "nethop-subscription/format-surfboard"]
 
 [dependencies]
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+getrandom = { version = "0.3", default-features = false }
 libc = "0.2"
 nethop-android = { version = "0.1.0", path = "../nethop-android" }
 nethop-core = { version = "0.1.0", path = "../nethop-core" }

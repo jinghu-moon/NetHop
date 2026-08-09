@@ -15,7 +15,7 @@ use ureq::{Agent, Error as UreqError};
 use super::{
     ContentEncoding, FetchEndpoint, FetchError, FetchOutcome, FetchPolicy, FetchPolicyError,
     ParserLimits, RequestProfile, SourceCache, decode_response_body, is_denied_ssrf_address,
-    next_redirect, read_bounded,
+    next_redirect, parse_subscription_userinfo, read_bounded,
 };
 
 #[derive(Debug)]
@@ -437,6 +437,7 @@ fn fetch_with_agent(
                 content_type: None,
                 etag: None,
                 last_modified: None,
+                subscription_userinfo: cache.subscription_userinfo(),
                 not_modified: true,
             });
         }
@@ -477,6 +478,11 @@ fn fetch_with_agent(
         let etag = bounded_header(&response, "etag")?;
         let last_modified = bounded_header(&response, "last-modified")?;
         let content_type = bounded_header(&response, "content-type")?;
+        let subscription_userinfo = response
+            .headers()
+            .get("subscription-userinfo")
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_subscription_userinfo);
         let body = decode_response_body(
             response.into_body().into_reader(),
             encoding,
@@ -491,6 +497,7 @@ fn fetch_with_agent(
             content_type,
             etag,
             last_modified,
+            subscription_userinfo,
             not_modified: false,
         });
     }
@@ -729,6 +736,10 @@ mod tests {
         assert_eq!(first.body(), b"trojan://secret@example.com:443");
         assert!(!first.was_not_modified());
         assert_eq!(first.content_type(), Some("application/octet-stream"));
+        let first_info = first.subscription_userinfo().unwrap();
+        assert_eq!(first_info.used_bytes(), Some(384));
+        assert_eq!(first_info.total_bytes(), Some(1024));
+        assert_eq!(first_info.expire_at(), Some(2_000_000_000));
         cache.commit(&first, &limits).unwrap();
 
         let second = fetch_with_agent(
@@ -743,6 +754,10 @@ mod tests {
         assert!(second.was_not_modified());
         assert_eq!(second.content_type(), None);
         assert_eq!(second.body(), first.body());
+        assert_eq!(
+            second.subscription_userinfo(),
+            first.subscription_userinfo()
+        );
         server.join().unwrap();
     }
 
@@ -844,7 +859,7 @@ mod tests {
                     .unwrap();
                 let body = encoder.finish().unwrap();
                 let header = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nETag: \"fixture-v1\"\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nETag: \"fixture-v1\"\r\nSubscription-Userinfo: upload=128; download=256; total=1024; expire=2000000000\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
                 stream.write_all(header.as_bytes()).unwrap();

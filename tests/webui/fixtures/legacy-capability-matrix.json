@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "domains": [
+    {
+      "id": "service",
+      "positive": {
+        "package": "nethopd",
+        "test_target": "worker_application_contracts",
+        "test_name": "typed_start_stop_and_probe_commands_are_consumed_on_the_worker_loop"
+      },
+      "failure": {
+        "package": "nethopd",
+        "test_target": "worker_service_contracts",
+        "test_name": "task_failure_still_runs_shutdown_cleanup"
+      }
+    },
+    {
+      "id": "config",
+      "positive": {
+        "package": "nethopd",
+        "test_target": "worker_config_contracts",
+        "test_name": "service_enabled_is_persisted_as_canonical_toml_with_cas"
+      },
+      "failure": {
+        "package": "nethopd",
+        "test_target": "worker_config_contracts",
+        "test_name": "unknown_id_duplicate_names_and_duplicate_urls_fail_closed"
+      }
+    },
+    {
+      "id": "subscription",
+      "positive": {
+        "package": "nethopd",
+        "test_target": "source_update_contracts",
+        "test_name": "successful_multi_source_update_deduplicates_checks_and_commits_once"
+      },
+      "failure": {
+        "package": "nethopd",
+        "test_target": "source_update_contracts",
+        "test_name": "fetch_or_check_failure_keeps_the_previous_generation"
+      }
+    },
+    {
+      "id": "node",
+      "positive": {
+        "package": "nethopd",
+        "test_target": "operational_control_contracts",
+        "test_name": "replay_restores_existing_selection"
+      },
+      "failure": {
+        "package": "nethopd",
+        "test_target": "operational_control_contracts",
+        "test_name": "replay_falls_back_to_auto_when_a_node_disappears"
+      }
+    },
+    {
+      "id": "application",
+      "positive": {
+        "package": "nethopd",
+        "test_target": "advanced_config_contracts",
+        "test_name": "complete_v2_schema_builds_typed_effective_sections"
+      },
+      "failure": {
+        "package": "nethopd",
+        "test_target": "advanced_config_contracts",
+        "test_name": "advanced_ranges_and_collections_fail_closed"
+      }
+    },
+    {
+      "id": "network",
+      "positive": {
+        "package": "nethop-android",
+        "test_target": "android_network_contracts",
+        "test_name": "pure_plan_is_deterministic_owned_and_never_flushes_system_tables"
+      },
+      "failure": {
+        "package": "nethop-android",
+        "test_target": "android_network_contracts",
+        "test_name": "planner_rejects_tproxy_when_reply_direction_cannot_be_classified"
+      }
+    },
+    {
+      "id": "logs",
+      "positive": {
+        "package": "nethopd",
+        "test_target": "operational_control_contracts",
+        "test_name": "manager_operational_status_is_compact_and_secret_free"
+      },
+      "failure": {
+        "package": "nethopd",
+        "test_target": "log_retention_contracts",
+        "test_name": "invalid_policy_and_relative_directory_fail_closed"
+      }
+    }
+  ]
+}

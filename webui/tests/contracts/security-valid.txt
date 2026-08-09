@@ -1,0 +1,1 @@
+default-src 'none'; connect-src 'none'; script-src 'self'

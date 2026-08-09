@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "change_id": "",
+  "breaking": true,
+  "before": {
+    "test_id": "",
+    "path": "../escape.json"
+  },
+  "new_red": {
+    "test_id": "B001",
+    "path": "tests/webui/fixtures/protocol-v1-before.json"
+  }
+}

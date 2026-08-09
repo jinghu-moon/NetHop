@@ -1,0 +1,3 @@
+import TDesign from "tdesign-mobile-vue";
+
+app.use(TDesign);

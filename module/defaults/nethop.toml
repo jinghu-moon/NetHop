@@ -54,7 +54,7 @@ proxy_tcp = true
 proxy_udp = true
 ipv6_mode = "auto"
 dns_mode = "auto"
-tun_stack = "system"
+tun_stack = "gvisor"
 
 [network.interfaces]
 mobile = true

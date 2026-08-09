@@ -10,7 +10,11 @@ use thiserror::Error;
 use ureq::Agent;
 
 const SELECTOR_TAG: &str = "nethop-select";
+const AUTO_SELECTOR_TAG: &str = "nethop-auto";
 const DEFAULT_LIMIT: u8 = 64;
+const GROUP_DELAY_TIMEOUT_MILLIS: u64 = 10_000;
+const GROUP_DELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
+const MAX_GROUP_DELAY_RESULTS: usize = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClashApiLimits {
@@ -122,6 +126,7 @@ impl ClashApiClient {
         let mut nodes = Vec::with_capacity(members.len().min(limit));
         for tag in members.iter().filter_map(Value::as_str) {
             if tag == "direct"
+                || !valid_stable_node_tag(tag)
                 || query
                     .as_ref()
                     .is_some_and(|query| !tag.to_lowercase().contains(query))
@@ -129,6 +134,13 @@ impl ClashApiClient {
                 continue;
             }
             let details = proxies.get(tag).and_then(Value::as_object);
+            let Some(kind) = details
+                .and_then(|details| details.get("type"))
+                .and_then(Value::as_str)
+                .and_then(normalize_protocol)
+            else {
+                continue;
+            };
             let delay_ms = details
                 .and_then(|details| details.get("history"))
                 .and_then(Value::as_array)
@@ -137,16 +149,14 @@ impl ClashApiClient {
                 .and_then(Value::as_u64);
             nodes.push(NodeSummary {
                 tag: tag.to_owned(),
-                kind: details
-                    .and_then(|details| details.get("type"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_owned(),
+                name: tag.to_owned(),
+                kind: kind.to_owned(),
                 selected: selected == Some(tag),
                 alive: details
                     .and_then(|details| details.get("alive"))
                     .and_then(Value::as_bool),
                 delay_ms,
+                source_ids: Vec::new(),
             });
             if nodes.len() == limit {
                 break;
@@ -171,12 +181,46 @@ impl ClashApiClient {
         })
     }
 
-    pub fn select_node(&self, tag: &str) -> Result<(), ClashApiError> {
-        if !self
-            .nodes(None, Some(128))?
+    pub fn test_all_nodes(&self) -> Result<Vec<DelayResult>, ClashApiError> {
+        let path = format!(
+            "/group/nethop-select/delay?timeout={GROUP_DELAY_TIMEOUT_MILLIS}&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
+        );
+        let response =
+            self.request_with_timeout(ApiMethod::Get, &path, None, GROUP_DELAY_REQUEST_TIMEOUT)?;
+        let entries = response
+            .as_object()
+            .filter(|entries| entries.len() <= MAX_GROUP_DELAY_RESULTS)
+            .ok_or(ClashApiError::InvalidResponse)?;
+        let mut results = entries
             .iter()
-            .any(|node| node.tag == tag)
-        {
+            .filter_map(|(tag, delay)| {
+                let delay_ms = delay.as_u64()?;
+                (valid_stable_node_tag(tag) && delay_ms <= u64::from(u16::MAX)).then(|| {
+                    DelayResult {
+                        tag: tag.clone(),
+                        delay_ms,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        results.sort_unstable_by(|left, right| left.tag.cmp(&right.tag));
+        Ok(results)
+    }
+
+    pub fn select_node(&self, tag: &str) -> Result<(), ClashApiError> {
+        if tag != AUTO_SELECTOR_TAG && !valid_stable_node_tag(tag) {
+            return Err(ClashApiError::UnknownTarget);
+        }
+        let document = self.request(ApiMethod::Get, "/proxies", None)?;
+        let is_member = document
+            .get("proxies")
+            .and_then(Value::as_object)
+            .and_then(|proxies| proxies.get(SELECTOR_TAG))
+            .and_then(Value::as_object)
+            .and_then(|selector| selector.get("all"))
+            .and_then(Value::as_array)
+            .is_some_and(|members| members.iter().any(|member| member.as_str() == Some(tag)));
+        if !is_member {
             return Err(ClashApiError::UnknownTarget);
         }
         self.request(
@@ -351,11 +395,35 @@ impl ClashApiClient {
         serde_json::from_slice(&bytes).map_err(ClashApiError::from)
     }
 
+    pub fn traffic_totals(&self) -> Result<TrafficTotals, ClashApiError> {
+        let document = self.request(ApiMethod::Get, "/connections", None)?;
+        Ok(TrafficTotals {
+            upload: document
+                .get("uploadTotal")
+                .and_then(Value::as_u64)
+                .ok_or(ClashApiError::InvalidResponse)?,
+            download: document
+                .get("downloadTotal")
+                .and_then(Value::as_u64)
+                .ok_or(ClashApiError::InvalidResponse)?,
+        })
+    }
+
     fn request(
         &self,
         method: ApiMethod,
         path: &str,
         body: Option<&Value>,
+    ) -> Result<Value, ClashApiError> {
+        self.request_with_timeout(method, path, body, self.limits.timeout)
+    }
+
+    fn request_with_timeout(
+        &self,
+        method: ApiMethod,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Duration,
     ) -> Result<Value, ClashApiError> {
         if !path.starts_with('/') || path.chars().any(|character| character.is_control()) {
             return Err(ClashApiError::InvalidRequest);
@@ -367,6 +435,9 @@ impl ClashApiClient {
                 .get(&url)
                 .header("Authorization", &self.authorization)
                 .header("Accept", "application/json")
+                .config()
+                .timeout_global(Some(timeout))
+                .build()
                 .call(),
             ApiMethod::Put => self
                 .agent
@@ -414,6 +485,29 @@ impl ClashApiClient {
     }
 }
 
+fn valid_stable_node_tag(tag: &str) -> bool {
+    tag.len() == 21
+        && tag.starts_with("nh1s-")
+        && tag[5..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn normalize_protocol(kind: &str) -> Option<&'static str> {
+    match kind {
+        "VLESS" => Some("vless"),
+        "VMess" => Some("vmess"),
+        "Shadowsocks" => Some("shadowsocks"),
+        "Trojan" => Some("trojan"),
+        "Hysteria2" => Some("hysteria2"),
+        "TUIC" => Some("tuic"),
+        "AnyTLS" => Some("anytls"),
+        "HTTP" => Some("http"),
+        "SOCKS" | "Socks" | "Socks5" => Some("socks"),
+        _ => None,
+    }
+}
+
 fn read_bounded_line(reader: &mut impl BufRead, maximum: usize) -> Result<String, ClashApiError> {
     let mut line = String::new();
     let count = reader
@@ -456,15 +550,26 @@ pub struct TrafficSample {
     pub down: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrafficTotals {
+    pub upload: u64,
+    pub download: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NodeSummary {
+    #[serde(rename = "id")]
     pub tag: String,
+    pub name: String,
+    #[serde(rename = "protocol")]
     pub kind: String,
     pub selected: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub alive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delay_ms: Option<u64>,
+    pub source_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

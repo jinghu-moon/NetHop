@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "protocol_version": 2,
+  "hello": {
+    "manager_protocol_min": 2,
+    "manager_protocol_max": 2,
+    "daemon_protocol_min": 2,
+    "daemon_protocol_max": 2
+  },
+  "event_kinds": ["config", "runtime", "subscription", "generation", "network", "traffic"],
+  "payload_methods": [
+    "webui.payload.create",
+    "webui.payload.append",
+    "webui.payload.commit",
+    "webui.payload.remove"
+  ],
+  "payload_namespaces": ["config", "subscription", "backup"],
+  "payload_operations": [
+    "config_validate",
+    "config_apply",
+    "subscription_import_preview",
+    "subscription_import_apply",
+    "backup_restore"
+  ]
+}

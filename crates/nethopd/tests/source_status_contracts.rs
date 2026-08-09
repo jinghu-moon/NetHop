@@ -1,7 +1,7 @@
 #![cfg(feature = "subscription-update")]
 
 use nethop_core::GenerationId;
-use nethop_subscription::SourceId;
+use nethop_subscription::{SourceId, parse_subscription_userinfo};
 use nethopd::{
     InMemoryScheduleStore, ScheduleKey, SchedulePolicy, ScheduleStore, SchedulerEngine,
     SourceBodyOrigin, SourceHealth, SourceStatusStore, SourceUpdateDetail, SourceUpdateReport,
@@ -17,6 +17,9 @@ fn detail(source_id: &SourceId, origin: SourceBodyOrigin) -> SourceUpdateDetail 
         duplicate: 1,
         rejected: 3,
         warnings: 4,
+        subscription_userinfo: parse_subscription_userinfo(
+            "upload=128; download=256; total=1024; expire=2000000000",
+        ),
         diagnostic_code: None,
     }
 }
@@ -58,6 +61,10 @@ fn source_status_persists_counts_and_joins_the_next_schedule() {
     assert_eq!(status.next_update_wall_seconds, Some(expected_next_update));
     assert_eq!((status.accepted, status.duplicate), (2, 1));
     assert_eq!(status.generation, Some(7));
+    assert_eq!(status.subscription_upload_bytes, Some(128));
+    assert_eq!(status.subscription_download_bytes, Some(256));
+    assert_eq!(status.subscription_total_bytes, Some(1024));
+    assert_eq!(status.subscription_expire_at, Some(2_000_000_000));
 }
 
 #[test]
@@ -84,6 +91,27 @@ fn last_known_good_and_failures_do_not_advance_last_success() {
     assert_eq!(failed.health, SourceHealth::Failed);
     assert_eq!(failed.last_success_wall_seconds, Some(100));
     assert_eq!(failed.diagnostic_code.as_deref(), Some("fetch_failed"));
+    assert_eq!(failed.subscription_total_bytes, Some(1024));
+}
+
+#[test]
+fn fresh_response_without_userinfo_clears_stale_subscription_metadata() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.db");
+    let source_id = SourceId::new("src_04040404040404040404040404040404").unwrap();
+    let mut store = SourceStatusStore::open(&path).unwrap();
+    store
+        .record_report(100, &report(&source_id, SourceBodyOrigin::Fresh))
+        .unwrap();
+    let mut without_metadata = report(&source_id, SourceBodyOrigin::Fresh);
+    without_metadata.sources[0].subscription_userinfo = None;
+    store.record_report(200, &without_metadata).unwrap();
+
+    let status = store.statuses([source_id.as_str()]).unwrap().remove(0);
+    assert_eq!(status.subscription_upload_bytes, None);
+    assert_eq!(status.subscription_download_bytes, None);
+    assert_eq!(status.subscription_total_bytes, None);
+    assert_eq!(status.subscription_expire_at, None);
 }
 
 #[test]

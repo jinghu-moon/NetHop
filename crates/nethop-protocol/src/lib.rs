@@ -6,8 +6,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_WEBUI_STDOUT_BYTES: usize = MAX_FRAME_BYTES;
+pub const MAX_WEBUI_STDERR_BYTES: usize = 64 * 1024;
+pub const MAX_WEBUI_ARRAY_ITEMS: usize = 10_000;
+pub const MAX_WEBUI_STRING_BYTES: usize = 64 * 1024;
+pub const MAX_WEBUI_DIAGNOSTIC_BYTES: usize = 256 * 1024;
 const MAX_REQUEST_ID_BYTES: usize = 64;
 const MAX_ERROR_DETAIL_BYTES: usize = 48;
 const MAX_MESSAGE_BYTES: usize = 512;
@@ -99,6 +104,8 @@ pub enum ControlMethod {
     NodeList,
     #[serde(rename = "node.test")]
     NodeTest,
+    #[serde(rename = "node.test_all")]
+    NodeTestAll,
     #[serde(rename = "node.select")]
     NodeSelect,
     #[serde(rename = "node.export")]
@@ -119,6 +126,16 @@ pub enum ControlMethod {
     TopologyGet,
     #[serde(rename = "traffic.get")]
     TrafficGet,
+    #[serde(rename = "metrics.get")]
+    MetricsGet,
+    #[serde(rename = "webui.payload.create")]
+    WebUiPayloadCreate,
+    #[serde(rename = "webui.payload.append")]
+    WebUiPayloadAppend,
+    #[serde(rename = "webui.payload.commit")]
+    WebUiPayloadCommit,
+    #[serde(rename = "webui.payload.remove")]
+    WebUiPayloadRemove,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +157,9 @@ pub enum ConfigMutation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
     },
+    SelectSource {
+        source_id: String,
+    },
     RemoveSource {
         source_id: String,
     },
@@ -155,6 +175,10 @@ pub enum ConfigMutation {
         target: ApplicationTarget,
     },
     ReplaceApplicationTargets {
+        targets: Vec<ApplicationTarget>,
+    },
+    SetApplicationPolicy {
+        mode: ApplicationPolicyMode,
         targets: Vec<ApplicationTarget>,
     },
     AddRoutingCidr {
@@ -188,6 +212,14 @@ pub enum ApplicationTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ApplicationPolicyMode {
+    All,
+    Blacklist,
+    Whitelist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RoutingCidrList {
     ForceProxy,
     Bypass,
@@ -201,6 +233,46 @@ pub enum EventKind {
     Subscription,
     Generation,
     Network,
+    Traffic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogChannel {
+    Service,
+    Subscription,
+    Core,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebUiPayloadNamespace {
+    Config,
+    Subscription,
+    Backup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebUiPayloadOperation {
+    ConfigValidate,
+    ConfigApply,
+    ConfigMutate,
+    SubscriptionImportPreview,
+    SubscriptionImportApply,
+    BackupRestore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebUiPayloadParams {
+    namespace: WebUiPayloadNamespace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chunk: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation: Option<WebUiPayloadOperation>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +305,11 @@ pub struct ControlParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    log_channel: Option<LogChannel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payload: Option<Box<WebUiPayloadParams>>,
 }
 
 impl ControlParams {
@@ -252,7 +328,9 @@ impl ControlParams {
             target: None,
             query: None,
             limit: None,
+            log_channel: None,
             source_id: None,
+            payload: None,
         }
     }
 
@@ -328,11 +406,71 @@ impl ControlParams {
         }
     }
 
+    pub fn logs(channel: Option<LogChannel>, limit: Option<u8>) -> Self {
+        Self {
+            limit,
+            log_channel: channel,
+            ..Self::default()
+        }
+    }
+
     pub fn subscription_update(wait: bool, if_needed: bool, source_id: Option<String>) -> Self {
         Self {
             wait,
             if_needed,
             source_id,
+            ..Self::default()
+        }
+    }
+
+    pub fn payload_create(namespace: WebUiPayloadNamespace) -> Self {
+        Self {
+            payload: Some(Box::new(WebUiPayloadParams {
+                namespace,
+                handle: None,
+                chunk: None,
+                operation: None,
+            })),
+            ..Self::default()
+        }
+    }
+
+    pub fn payload_append(namespace: WebUiPayloadNamespace, handle: String, chunk: String) -> Self {
+        Self {
+            payload: Some(Box::new(WebUiPayloadParams {
+                namespace,
+                handle: Some(handle),
+                chunk: Some(chunk),
+                operation: None,
+            })),
+            ..Self::default()
+        }
+    }
+
+    pub fn payload_commit(
+        namespace: WebUiPayloadNamespace,
+        handle: String,
+        operation: WebUiPayloadOperation,
+    ) -> Self {
+        Self {
+            payload: Some(Box::new(WebUiPayloadParams {
+                namespace,
+                handle: Some(handle),
+                chunk: None,
+                operation: Some(operation),
+            })),
+            ..Self::default()
+        }
+    }
+
+    pub fn payload_remove(namespace: WebUiPayloadNamespace, handle: String) -> Self {
+        Self {
+            payload: Some(Box::new(WebUiPayloadParams {
+                namespace,
+                handle: Some(handle),
+                chunk: None,
+                operation: None,
+            })),
             ..Self::default()
         }
     }
@@ -380,8 +518,34 @@ impl ControlParams {
         self.limit
     }
 
+    pub const fn log_channel(&self) -> Option<LogChannel> {
+        self.log_channel
+    }
+
     pub fn source_id(&self) -> Option<&str> {
         self.source_id.as_deref()
+    }
+
+    pub fn payload_namespace(&self) -> Option<WebUiPayloadNamespace> {
+        self.payload.as_deref().map(|payload| payload.namespace)
+    }
+
+    pub fn payload_handle(&self) -> Option<&str> {
+        self.payload
+            .as_deref()
+            .and_then(|payload| payload.handle.as_deref())
+    }
+
+    pub fn payload_chunk(&self) -> Option<&str> {
+        self.payload
+            .as_deref()
+            .and_then(|payload| payload.chunk.as_deref())
+    }
+
+    pub fn payload_operation(&self) -> Option<WebUiPayloadOperation> {
+        self.payload
+            .as_deref()
+            .and_then(|payload| payload.operation)
     }
 }
 
@@ -499,7 +663,7 @@ impl ControlRequest {
         let events_method = self.method == ControlMethod::EventsSubscribe;
         if self.params.event_kinds.is_some() != events_method
             || self.params.event_kinds.as_ref().is_some_and(|kinds| {
-                kinds.len() > 5 || {
+                kinds.len() > 6 || {
                     let mut unique = kinds.clone();
                     unique.sort_by_key(|kind| *kind as u8);
                     unique.dedup();
@@ -542,6 +706,9 @@ impl ControlRequest {
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
+        if self.method != ControlMethod::LogsGet && self.params.log_channel.is_some() {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
         let hello = self.method == ControlMethod::ProtocolHello;
         if self.params.manager_version.is_some() != hello
             || self.params.manager_protocol_min.is_some() != hello
@@ -562,8 +729,66 @@ impl ControlRequest {
                 return Err(ProtocolError::InvalidEnvelope);
             }
         }
+        let payload_method = matches!(
+            self.method,
+            ControlMethod::WebUiPayloadCreate
+                | ControlMethod::WebUiPayloadAppend
+                | ControlMethod::WebUiPayloadCommit
+                | ControlMethod::WebUiPayloadRemove
+        );
+        if self.params.payload.is_some() != payload_method {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let valid_payload_shape = match self.method {
+            ControlMethod::WebUiPayloadCreate => {
+                self.params.payload_handle().is_none()
+                    && self.params.payload_chunk().is_none()
+                    && self.params.payload_operation().is_none()
+            }
+            ControlMethod::WebUiPayloadAppend => {
+                self.params
+                    .payload_handle()
+                    .is_some_and(valid_payload_handle)
+                    && self.params.payload_chunk().is_some_and(valid_payload_chunk)
+                    && self.params.payload_operation().is_none()
+            }
+            ControlMethod::WebUiPayloadCommit => {
+                self.params
+                    .payload_handle()
+                    .is_some_and(valid_payload_handle)
+                    && self.params.payload_chunk().is_none()
+                    && self.params.payload_operation().is_some()
+            }
+            ControlMethod::WebUiPayloadRemove => {
+                self.params
+                    .payload_handle()
+                    .is_some_and(valid_payload_handle)
+                    && self.params.payload_chunk().is_none()
+                    && self.params.payload_operation().is_none()
+            }
+            _ => self.params.payload.is_none(),
+        };
+        if !valid_payload_shape {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
         Ok(())
     }
+}
+
+fn valid_payload_handle(value: &str) -> bool {
+    value.len() == 34
+        && value.starts_with("p_")
+        && value[2..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_payload_chunk(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 16 * 1024
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=' | b'-' | b'_')
+        })
 }
 
 fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
@@ -588,6 +813,7 @@ fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
                 && name.as_ref().is_none_or(|value| bounded(value, 128))
                 && url.as_ref().is_none_or(|value| value.len() <= 16 * 1024)
         }
+        ConfigMutation::SelectSource { source_id: id } => source_id(id),
         ConfigMutation::RemoveSource { source_id: id } => source_id(id),
         ConfigMutation::MoveSource {
             source_id: id,
@@ -602,6 +828,11 @@ fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
         | ConfigMutation::RemoveApplicationTarget { target } => application_target(target),
         ConfigMutation::ReplaceApplicationTargets { targets } => {
             targets.len() <= 2_000 && targets.iter().all(application_target)
+        }
+        ConfigMutation::SetApplicationPolicy { mode, targets } => {
+            targets.len() <= 2_000
+                && targets.iter().all(application_target)
+                && (matches!(mode, ApplicationPolicyMode::All) == targets.is_empty())
         }
         ConfigMutation::AddRoutingCidr { cidr, .. }
         | ConfigMutation::RemoveRoutingCidr { cidr, .. } => bounded(cidr, 64),
@@ -850,9 +1081,9 @@ impl ControlResponse {
         if self.generation == Some(0) {
             return Err(ProtocolError::InvalidEnvelope);
         }
-        match (self.ok, self.result.is_some(), self.error.as_ref()) {
-            (true, true, None) => Ok(()),
-            (false, false, Some(error)) => error.validate(),
+        match (self.ok, self.result.as_ref(), self.error.as_ref()) {
+            (true, Some(result), None) => validate_webui_value(result, 0),
+            (false, None, Some(error)) => error.validate(),
             _ => Err(ProtocolError::InvalidEnvelope),
         }
     }
@@ -930,10 +1161,62 @@ impl StreamFrame {
             return Err(ProtocolError::InvalidEnvelope);
         }
         match (self.kind, self.payload.is_some(), self.error.as_ref()) {
-            (StreamKind::Item, true, None) | (StreamKind::End, false, None) => Ok(()),
+            (StreamKind::Item, true, None) => {
+                validate_webui_value(self.payload.as_ref().expect("checked payload"), 0)
+            }
+            (StreamKind::End, false, None) => Ok(()),
             (StreamKind::Error, false, Some(error)) => error.validate(),
             _ => Err(ProtocolError::InvalidEnvelope),
         }
+    }
+}
+
+fn validate_webui_value(value: &Value, depth: usize) -> Result<(), ProtocolError> {
+    if depth > 32 {
+        return Err(ProtocolError::InvalidEnvelope);
+    }
+    match value {
+        Value::String(value) if value.len() > MAX_WEBUI_STRING_BYTES => {
+            Err(ProtocolError::InvalidEnvelope)
+        }
+        Value::Array(values) if values.len() > MAX_WEBUI_ARRAY_ITEMS => {
+            Err(ProtocolError::InvalidEnvelope)
+        }
+        Value::Array(values) => values
+            .iter()
+            .try_for_each(|value| validate_webui_value(value, depth + 1)),
+        Value::Object(values) if values.len() > 2_048 => Err(ProtocolError::InvalidEnvelope),
+        Value::Object(values) => values
+            .values()
+            .try_for_each(|value| validate_webui_value(value, depth + 1)),
+        _ => Ok(()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebUiErrorKind {
+    Incompatible,
+    Timeout,
+    Conflict,
+    InvalidPayload,
+    LimitExceeded,
+    Unavailable,
+}
+
+impl WebUiErrorKind {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Incompatible => "NH-CORE-INCOMPATIBLE",
+            Self::Timeout => "NH-CORE-TIMEOUT",
+            Self::Conflict => "NH-CONFIG-CONFLICT",
+            Self::InvalidPayload => "NH-CONFIG-INVALID-PAYLOAD",
+            Self::LimitExceeded => "NH-CORE-LIMIT",
+            Self::Unavailable => "NH-CORE-UNAVAILABLE",
+        }
+    }
+
+    pub fn error_code(self) -> ErrorCode {
+        ErrorCode::parse(self.code().to_owned()).expect("WebUI error codes are frozen and valid")
     }
 }
 
@@ -1035,8 +1318,17 @@ impl FrameCodec {
 
     fn decode_payload(payload: &[u8]) -> Result<WireFrame, ProtocolError> {
         std::str::from_utf8(payload).map_err(|_| ProtocolError::InvalidUtf8)?;
-        let frame: WireFrame =
+        let envelope: Value =
             serde_json::from_slice(payload).map_err(|_| ProtocolError::InvalidEnvelope)?;
+        let version = envelope
+            .get("version")
+            .and_then(Value::as_u64)
+            .ok_or(ProtocolError::InvalidEnvelope)?;
+        if version != u64::from(PROTOCOL_VERSION) {
+            return Err(ProtocolError::UnsupportedVersion);
+        }
+        let frame: WireFrame =
+            serde_json::from_value(envelope).map_err(|_| ProtocolError::InvalidEnvelope)?;
         frame.validate()?;
         Ok(frame)
     }

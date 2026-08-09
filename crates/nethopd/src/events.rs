@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use nethop_protocol::{EventKind, RequestId, StreamFrame};
+use nethop_protocol::{EventKind, LogChannel, RequestId, StreamFrame};
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -38,8 +38,10 @@ struct Shared {
 struct State {
     next_sequence: u64,
     subscribers: usize,
+    traffic_subscribers: usize,
     snapshot: Value,
     events: VecDeque<EventRecord>,
+    latest_traffic: Option<EventRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,8 +61,10 @@ impl EventHub {
                 state: Mutex::new(State {
                     next_sequence: 1,
                     subscribers: 0,
+                    traffic_subscribers: 0,
                     snapshot,
                     events: VecDeque::with_capacity(capacity),
+                    latest_traffic: None,
                 }),
                 changed: Condvar::new(),
                 capacity,
@@ -80,7 +84,11 @@ impl EventHub {
         Ok(())
     }
 
-    pub fn structured_log_history(&self, limit: u8) -> Result<Vec<Value>, EventError> {
+    pub fn structured_log_history(
+        &self,
+        channel: Option<LogChannel>,
+        limit: u8,
+    ) -> Result<Vec<Value>, EventError> {
         if limit == 0 || usize::from(limit) > MAX_LOG_HISTORY_ITEMS {
             return Err(EventError::InvalidPolicy);
         }
@@ -92,7 +100,7 @@ impl EventHub {
         installed
             .as_mut()
             .ok_or(EventError::Unavailable)?
-            .history(usize::from(limit))
+            .history(channel, usize::from(limit))
     }
 
     pub fn clear_structured_logs(&self) -> Result<usize, EventError> {
@@ -115,6 +123,15 @@ impl EventHub {
             .unwrap_or_else(|error| error.into_inner());
         let sequence = state.next_sequence;
         state.next_sequence = state.next_sequence.saturating_add(1).max(1);
+        if kind == EventKind::Traffic {
+            state.latest_traffic = Some(EventRecord {
+                sequence,
+                kind,
+                payload,
+            });
+            self.shared.changed.notify_all();
+            return;
+        }
         if state.events.len() == self.shared.capacity {
             state.events.pop_front();
         }
@@ -130,6 +147,14 @@ impl EventHub {
         {
             let _ = log.write(sequence, kind, &payload);
         }
+    }
+
+    pub fn traffic_subscribers(&self) -> usize {
+        self.shared
+            .state
+            .lock()
+            .map(|state| state.traffic_subscribers)
+            .unwrap_or_default()
     }
 
     pub fn replace_snapshot(&self, snapshot: Value) {
@@ -158,8 +183,10 @@ impl EventHub {
             return Err(EventError::Busy);
         }
         state.subscribers += 1;
-        let snapshot_sequence = state.next_sequence;
-        state.next_sequence = state.next_sequence.saturating_add(1).max(1);
+        let traffic_enabled = kinds.is_empty() || kinds.contains(&EventKind::Traffic);
+        if traffic_enabled {
+            state.traffic_subscribers += 1;
+        }
         let cursor = state.next_sequence;
         let snapshot = state.snapshot.clone();
         Ok(EventSubscription {
@@ -167,7 +194,10 @@ impl EventHub {
             request_id,
             kinds: kinds.iter().copied().collect(),
             cursor,
-            initial_snapshot: Some((snapshot_sequence, snapshot)),
+            traffic_cursor: 0,
+            traffic_enabled,
+            output_sequence: 1,
+            initial_snapshot: Some(snapshot),
         })
     }
 }
@@ -232,7 +262,11 @@ impl FileEventLog {
         Ok(())
     }
 
-    fn history(&mut self, limit: usize) -> Result<Vec<Value>, EventError> {
+    fn history(
+        &mut self,
+        channel: Option<LogChannel>,
+        limit: usize,
+    ) -> Result<Vec<Value>, EventError> {
         if let Some(file) = self.file.as_mut() {
             file.flush().map_err(|_| EventError::Unavailable)?;
         }
@@ -266,7 +300,22 @@ impl FileEventLog {
                 if !value.is_object() {
                     continue;
                 }
+                let Some(entry_channel) = value
+                    .get("kind")
+                    .and_then(|kind| serde_json::from_value::<EventKind>(kind.clone()).ok())
+                    .and_then(log_channel_for_event)
+                else {
+                    continue;
+                };
+                if channel.is_some_and(|requested| requested != entry_channel) {
+                    continue;
+                }
                 redact_sensitive(&mut value);
+                let raw = serde_json::to_string(&value).unwrap_or_default();
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("channel".into(), json!(entry_channel));
+                    object.insert("raw".into(), Value::String(raw));
+                }
                 retained_bytes += line.len();
                 history.push(value);
                 if history.len() == limit {
@@ -288,6 +337,15 @@ impl FileEventLog {
             removed += 1;
         }
         Ok(removed)
+    }
+}
+
+const fn log_channel_for_event(kind: EventKind) -> Option<LogChannel> {
+    match kind {
+        EventKind::Subscription => Some(LogChannel::Subscription),
+        EventKind::Runtime | EventKind::Generation => Some(LogChannel::Core),
+        EventKind::Config | EventKind::Network => Some(LogChannel::Service),
+        EventKind::Traffic => None,
     }
 }
 
@@ -384,17 +442,16 @@ pub struct EventSubscription {
     request_id: RequestId,
     kinds: BTreeSet<EventKind>,
     cursor: u64,
-    initial_snapshot: Option<(u64, Value)>,
+    traffic_cursor: u64,
+    traffic_enabled: bool,
+    output_sequence: u64,
+    initial_snapshot: Option<Value>,
 }
 
 impl EventSubscription {
     pub fn next_frame(&mut self) -> Result<StreamFrame, EventError> {
-        if let Some((sequence, snapshot)) = self.initial_snapshot.take() {
-            return Ok(StreamFrame::item(
-                self.request_id.clone(),
-                sequence,
-                snapshot,
-            ));
+        if let Some(snapshot) = self.initial_snapshot.take() {
+            return Ok(self.item(snapshot));
         }
         let mut state = self
             .shared
@@ -405,30 +462,36 @@ impl EventSubscription {
             if let Some(oldest) = state.events.front().map(|event| event.sequence)
                 && self.cursor < oldest
             {
-                let resync_sequence = state.next_sequence;
-                state.next_sequence = state.next_sequence.saturating_add(1).max(1);
-                let snapshot_sequence = state.next_sequence;
-                state.next_sequence = state.next_sequence.saturating_add(1).max(1);
                 self.cursor = state.next_sequence;
-                self.initial_snapshot = Some((snapshot_sequence, state.snapshot.clone()));
-                return Ok(StreamFrame::item(
-                    self.request_id.clone(),
-                    resync_sequence,
-                    json!({"kind":"resync_required"}),
-                ));
+                self.initial_snapshot = Some(state.snapshot.clone());
+                drop(state);
+                return Ok(self.item(json!({"kind":"resync_required"})));
             }
-            if let Some(event) = state
+            let normal = state
                 .events
                 .iter()
                 .find(|event| event.sequence >= self.cursor && self.accepts(event.kind))
-                .cloned()
-            {
+                .cloned();
+            let traffic = self
+                .traffic_enabled
+                .then(|| state.latest_traffic.as_ref())
+                .flatten()
+                .filter(|event| event.sequence > self.traffic_cursor)
+                .cloned();
+            if normal.as_ref().is_some_and(|normal| {
+                traffic
+                    .as_ref()
+                    .is_none_or(|traffic| normal.sequence < traffic.sequence)
+            }) {
+                let event = normal.expect("normal event was checked");
                 self.cursor = event.sequence.saturating_add(1);
-                return Ok(StreamFrame::item(
-                    self.request_id.clone(),
-                    event.sequence,
-                    event.payload,
-                ));
+                drop(state);
+                return Ok(self.item(event.payload));
+            }
+            if let Some(event) = traffic {
+                self.traffic_cursor = event.sequence;
+                drop(state);
+                return Ok(self.item(event.payload));
             }
             self.cursor = self.cursor.max(state.next_sequence);
             state = self
@@ -442,6 +505,12 @@ impl EventSubscription {
     fn accepts(&self, kind: EventKind) -> bool {
         self.kinds.is_empty() || self.kinds.contains(&kind)
     }
+
+    fn item(&mut self, payload: Value) -> StreamFrame {
+        let sequence = self.output_sequence;
+        self.output_sequence = self.output_sequence.saturating_add(1).max(1);
+        StreamFrame::item(self.request_id.clone(), sequence, payload)
+    }
 }
 
 impl Drop for EventSubscription {
@@ -452,6 +521,9 @@ impl Drop for EventSubscription {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         state.subscribers = state.subscribers.saturating_sub(1);
+        if self.traffic_enabled {
+            state.traffic_subscribers = state.traffic_subscribers.saturating_sub(1);
+        }
     }
 }
 

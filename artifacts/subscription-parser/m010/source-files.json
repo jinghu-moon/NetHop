@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "Cargo.lock",
-      "sha256": "6420408eb233ed35c7e6411f426185a507d954686297a870c671a5ee3152b254"
+      "sha256": "190c984316cc3fa4062d53ce4e97936e7d9c406c2570b5ee4be1556300a993dc"
     },
     {
       "path": "Cargo.toml",
@@ -19,7 +19,7 @@
     },
     {
       "path": "crates/nethop-core/src/composer.rs",
-      "sha256": "8ef0afef600b97c88597e77bfc4c2e20498a047a0212725419322ee575984c2d"
+      "sha256": "bbc47f08583825fce63b8109771a4a00957e5a8b1224213653be2877880c68d3"
     },
     {
       "path": "crates/nethop-core/src/diagnostics.rs",
@@ -75,11 +75,11 @@
     },
     {
       "path": "crates/nethop-subscription/src/fetch.rs",
-      "sha256": "485b394665abf4030ce7c9e2b72079ab8926779ae52f51a06fdb4fd6141e3063"
+      "sha256": "14673fb180378de372753e9664af377f1da8cbe8cb750da0d9d724c85587a311"
     },
     {
       "path": "crates/nethop-subscription/src/fetch/ureq_adapter.rs",
-      "sha256": "55f35312828c30829accf65fa942e8c90cb167459e1bb1fe4a1daa599bbcb0e2"
+      "sha256": "ec7d28e6f8da2706db386b799cb2c5501dec5a2be39ac1a8caeab87770a3a31f"
     },
     {
       "path": "crates/nethop-subscription/src/ipc.rs",
@@ -87,7 +87,7 @@
     },
     {
       "path": "crates/nethop-subscription/src/lib.rs",
-      "sha256": "28e61f062a474c71021a02aceb24628164194ec1992851bb020ce023ca55d986"
+      "sha256": "a99c7a1bcc6f83869dee814dbbb851d2d71d223908888ba21c4008eb00c3f9eb"
     },
     {
       "path": "crates/nethop-subscription/src/limits.rs",

@@ -108,14 +108,20 @@ fn manager_operational_status_is_compact_and_secret_free() {
         "connections": [{
             "id":"id-1",
             "metadata":{"network":"tcp","host":"example.com","destinationPort":443,"password":"never"},
-            "chains":["nethop-select","nh1s-a"],
+            "chains":["nethop-select","nh1s-0123456789abcdef"],
             "upload":1,
             "download":2
         }]
     })
     .to_string();
     let (address, server) = serve(vec![
-        (200, selector_document("nh1s-a", &["nethop-auto", "nh1s-a"])),
+        (
+            200,
+            selector_document(
+                "nh1s-0123456789abcdef",
+                &["nethop-auto", "nh1s-0123456789abcdef"],
+            ),
+        ),
         (200, connections),
     ]);
     let mut control = OperationalControl::new(
@@ -126,11 +132,40 @@ fn manager_operational_status_is_compact_and_secret_free() {
     .unwrap();
     let status = control.status_document();
     assert_eq!(status["core_api"], "available");
-    assert_eq!(status["selector"]["selected"], "nh1s-a");
-    assert_eq!(status["selector"]["candidate_count"], 2);
+    assert_eq!(status["selector"]["selected"], "nh1s-0123456789abcdef");
+    assert_eq!(status["selector"]["candidate_count"], 1);
     assert_eq!(status["active_connection_count"], 1);
     assert!(!serde_json::to_string(&status).unwrap().contains("never"));
     assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
+fn runtime_metrics_use_core_totals_without_external_public_ip_requests() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (address, server) = serve(vec![(
+        200,
+        serde_json::json!({"connections":[],"uploadTotal":1234,"downloadTotal":5678}).to_string(),
+    )]);
+    let control = OperationalControl::new(
+        api(address),
+        SelectorStore::new(root.join("selector.v1.json")).unwrap(),
+        root.join("diagnostics-latest.json"),
+    )
+    .unwrap();
+    let metrics = control.metrics_document(
+        None,
+        Duration::from_secs(90),
+        RuntimeState::RunningTproxy,
+        None,
+    );
+    assert_eq!(metrics["uptime_seconds"], 90);
+    assert_eq!(metrics["traffic"]["upload_bytes"], 1234);
+    assert_eq!(metrics["traffic"]["download_bytes"], 5678);
+    assert!(metrics["outbound"]["public_ip"].is_null());
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /connections "));
 }
 
 #[test]
@@ -138,11 +173,11 @@ fn replay_restores_existing_selection() {
     let directory = tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let store = SelectorStore::new(root.join("selector.v1.json")).unwrap();
-    store.save("nh1s-a").unwrap();
+    store.save("nh1s-0123456789abcdef").unwrap();
     let (address, server) = serve(vec![
         (
             200,
-            selector_document("nethop-auto", &["nethop-auto", "nh1s-a"]),
+            selector_document("nethop-auto", &["nethop-auto", "nh1s-0123456789abcdef"]),
         ),
         (204, String::new()),
     ]);
@@ -150,7 +185,7 @@ fn replay_restores_existing_selection() {
         OperationalControl::new(api(address), store, root.join("diagnostics-latest.json")).unwrap();
     assert_eq!(control.replay_selection().unwrap(), ReplayResult::Restored);
     let requests = server.join().unwrap();
-    assert!(requests[1].ends_with(r#"{"name":"nh1s-a"}"#));
+    assert!(requests[1].ends_with(r#"{"name":"nh1s-0123456789abcdef"}"#));
 }
 
 #[test]
@@ -160,12 +195,11 @@ fn replay_falls_back_to_auto_when_a_node_disappears() {
     let state_path = root.join("selector.v1.json");
     let store = SelectorStore::new(&state_path).unwrap();
     store.save("nh1s-gone").unwrap();
-    let selector = selector_document("nh1s-a", &["nethop-auto", "nh1s-a"]);
-    let (address, server) = serve(vec![
-        (200, selector.clone()),
-        (200, selector),
-        (204, String::new()),
-    ]);
+    let selector = selector_document(
+        "nh1s-0123456789abcdef",
+        &["nethop-auto", "nh1s-0123456789abcdef"],
+    );
+    let (address, server) = serve(vec![(200, selector), (204, String::new())]);
     let mut control =
         OperationalControl::new(api(address), store, root.join("diagnostics-latest.json")).unwrap();
     assert_eq!(
@@ -181,7 +215,7 @@ fn replay_falls_back_to_auto_when_a_node_disappears() {
         Some("nethop-auto")
     );
     let requests = server.join().unwrap();
-    assert!(requests[2].ends_with(r#"{"name":"nethop-auto"}"#));
+    assert!(requests[1].ends_with(r#"{"name":"nethop-auto"}"#));
 }
 
 #[test]
@@ -190,7 +224,10 @@ fn diagnostics_bundle_is_compact_persisted_and_secret_free() {
     let root = directory.path().canonicalize().unwrap();
     let path = root.join("diagnostics-latest.json");
     let (address, server) = serve(vec![
-        (200, selector_document("nh1s-a", &["nh1s-a"])),
+        (
+            200,
+            selector_document("nh1s-0123456789abcdef", &["nh1s-0123456789abcdef"]),
+        ),
         (200, r#"{"connections":[]}"#.to_owned()),
     ]);
     let mut control = OperationalControl::new(

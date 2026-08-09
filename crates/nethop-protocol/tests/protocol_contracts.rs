@@ -1,9 +1,10 @@
 use std::io::Cursor;
 
 use nethop_protocol::{
-    ApplicationTarget, ConfigMutation, ControlError, ControlMethod, ControlParams, ControlRequest,
-    ControlResponse, ErrorCode, ErrorDomain, EventKind, FrameCodec, MAX_FRAME_BYTES,
-    PROTOCOL_VERSION, ProtocolError, RequestId, StreamFrame, StreamKind, WireFrame,
+    ApplicationPolicyMode, ApplicationTarget, ConfigMutation, ControlError, ControlMethod,
+    ControlParams, ControlRequest, ControlResponse, ErrorCode, ErrorDomain, EventKind, FrameCodec,
+    LogChannel, MAX_FRAME_BYTES, PROTOCOL_VERSION, ProtocolError, RequestId, StreamFrame,
+    StreamKind, WireFrame,
 };
 use serde_json::json;
 
@@ -12,14 +13,14 @@ fn request_id() -> RequestId {
 }
 
 #[test]
-fn request_golden_uses_big_endian_length_and_v1_json() {
+fn request_golden_uses_big_endian_length_and_v2_json() {
     let frame = WireFrame::Request(ControlRequest::new(request_id(), ControlMethod::StatusGet));
     let encoded = FrameCodec::encode(&frame).unwrap();
     let length = u32::from_be_bytes(encoded[..4].try_into().unwrap()) as usize;
     assert_eq!(length, encoded.len() - 4);
     assert_eq!(
         &encoded[4..],
-        br#"{"version":1,"request_id":"req-001","method":"status.get","params":{}}"#
+        br#"{"version":2,"request_id":"req-001","method":"status.get","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -27,7 +28,7 @@ fn request_golden_uses_big_endian_length_and_v1_json() {
 #[test]
 fn request_rejects_unknown_fields_versions_and_unbounded_ids() {
     let unknown =
-        br#"{"version":1,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
+        br#"{"version":2,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
     let mut framed = (unknown.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(unknown);
     assert_eq!(
@@ -35,7 +36,7 @@ fn request_rejects_unknown_fields_versions_and_unbounded_ids() {
         Err(ProtocolError::InvalidEnvelope)
     );
 
-    let version = br#"{"version":2,"request_id":"r","method":"status.get","params":{}}"#;
+    let version = br#"{"version":1,"request_id":"r","method":"status.get","params":{}}"#;
     let mut framed = (version.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(version);
     assert_eq!(
@@ -71,7 +72,7 @@ fn response_requires_exactly_one_result_or_error_branch() {
         failure
     );
 
-    let invalid = br#"{"version":1,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
+    let invalid = br#"{"version":2,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
     let mut framed = (invalid.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(invalid);
     assert_eq!(
@@ -158,7 +159,7 @@ fn codec_rejects_trailing_bytes_invalid_utf8_and_truncated_io() {
 
 #[test]
 fn protocol_version_is_frozen() {
-    assert_eq!(PROTOCOL_VERSION, 1);
+    assert_eq!(PROTOCOL_VERSION, 2);
 }
 
 #[test]
@@ -189,7 +190,7 @@ fn control_error_details_are_optional_and_bounded_by_the_outer_frame() {
 }
 
 #[test]
-fn subscription_update_is_a_bounded_v1_empty_params_command() {
+fn subscription_update_is_a_bounded_v2_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::SubscriptionUpdate,
@@ -197,7 +198,7 @@ fn subscription_update_is_a_bounded_v1_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":1,"request_id":"req-001","method":"subscription.update","params":{}}"#
+        br#"{"version":2,"request_id":"req-001","method":"subscription.update","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -237,7 +238,7 @@ fn local_import_preview_and_apply_are_digest_bound_documents() {
 }
 
 #[test]
-fn config_reload_is_a_bounded_v1_empty_params_command() {
+fn config_reload_is_a_bounded_v2_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::ConfigReload,
@@ -245,7 +246,7 @@ fn config_reload_is_a_bounded_v1_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":1,"request_id":"req-001","method":"config.reload","params":{}}"#
+        br#"{"version":2,"request_id":"req-001","method":"config.reload","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -310,6 +311,7 @@ fn operational_methods_use_stable_wire_names_and_scoped_params() {
     let cases = [
         (ControlMethod::NodeList, "node.list"),
         (ControlMethod::NodeTest, "node.test"),
+        (ControlMethod::NodeTestAll, "node.test_all"),
         (ControlMethod::NodeSelect, "node.select"),
         (ControlMethod::NodeExport, "node.export"),
         (ControlMethod::ConnectionsGet, "connections.get"),
@@ -320,6 +322,7 @@ fn operational_methods_use_stable_wire_names_and_scoped_params() {
         (ControlMethod::DiagnosticsBundle, "diagnostics.bundle"),
         (ControlMethod::TopologyGet, "topology.get"),
         (ControlMethod::TrafficGet, "traffic.get"),
+        (ControlMethod::MetricsGet, "metrics.get"),
     ];
     for (method, wire_name) in cases {
         let params = match method {
@@ -330,7 +333,7 @@ fn operational_methods_use_stable_wire_names_and_scoped_params() {
             ControlMethod::NodeList | ControlMethod::ConnectionsGet => {
                 ControlParams::list(Some("edge".to_owned()), Some(32))
             }
-            ControlMethod::LogsGet => ControlParams::list(None, Some(32)),
+            ControlMethod::LogsGet => ControlParams::logs(Some(LogChannel::Core), Some(32)),
             _ => ControlParams::default(),
         };
         let request = WireFrame::Request(
@@ -372,6 +375,11 @@ fn operational_targets_are_required_bounded_and_method_scoped() {
             .unwrap_err(),
         ProtocolError::InvalidEnvelope
     );
+
+    let request = ControlRequest::new(request_id(), ControlMethod::NodeTestAll)
+        .with_params(ControlParams::default())
+        .unwrap();
+    assert_eq!(request.method(), ControlMethod::NodeTestAll);
 }
 
 #[test]
@@ -397,11 +405,11 @@ fn operational_list_filters_are_optional_bounded_and_method_scoped() {
         );
     }
     ControlRequest::new(request_id(), ControlMethod::LogsGet)
-        .with_params(ControlParams::list(None, Some(128)))
+        .with_params(ControlParams::logs(Some(LogChannel::Service), Some(128)))
         .unwrap();
     assert!(
         ControlRequest::new(request_id(), ControlMethod::LogsGet)
-            .with_params(ControlParams::list(None, Some(0)))
+            .with_params(ControlParams::logs(Some(LogChannel::Subscription), Some(0)))
             .is_err()
     );
     assert_eq!(
@@ -413,6 +421,11 @@ fn operational_list_filters_are_optional_bounded_and_method_scoped() {
     assert!(
         ControlRequest::new(request_id(), ControlMethod::LogsGet)
             .with_params(ControlParams::list(Some("events".into()), Some(10)))
+            .is_err()
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::StatusGet)
+            .with_params(ControlParams::logs(Some(LogChannel::Core), None))
             .is_err()
     );
 }
@@ -434,7 +447,7 @@ fn close_all_and_log_clear_accept_only_empty_params() {
 #[test]
 fn operational_params_reject_unknown_fields() {
     let payload =
-        br#"{"version":1,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
+        br#"{"version":2,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
     let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(payload);
     assert_eq!(
@@ -521,6 +534,32 @@ fn manager_config_methods_require_bounded_cas_documents() {
 }
 
 #[test]
+fn source_selection_mutation_is_typed_and_round_trips() {
+    let mutation = ConfigMutation::SelectSource {
+        source_id: "src_0123456789abcdef0123456789abcdef".into(),
+    };
+    let request = ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+        .with_params(ControlParams::mutation("a".repeat(64), mutation))
+        .unwrap();
+    let frame = WireFrame::Request(request);
+    assert_eq!(
+        FrameCodec::decode(&FrameCodec::encode(&frame).unwrap()).unwrap(),
+        frame
+    );
+    assert_eq!(
+        ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+            .with_params(ControlParams::mutation(
+                "a".repeat(64),
+                ConfigMutation::SelectSource {
+                    source_id: "source".into(),
+                },
+            ))
+            .unwrap_err(),
+        ProtocolError::InvalidEnvelope
+    );
+}
+
+#[test]
 fn application_target_mutations_are_typed_bounded_and_round_trip() {
     let targets = vec![
         ApplicationTarget::Package {
@@ -560,6 +599,46 @@ fn application_target_mutations_are_typed_bounded_and_round_trip() {
                     "a".repeat(64),
                     ConfigMutation::AddApplicationTarget { target: invalid },
                 ))
+                .unwrap_err(),
+            ProtocolError::InvalidEnvelope
+        );
+    }
+}
+
+#[test]
+fn application_policy_mutation_is_atomic_and_rejects_invalid_mode_target_pairs() {
+    let targets = vec![ApplicationTarget::Package {
+        android_user_id: 0,
+        package: "com.example.video".into(),
+    }];
+    let request = ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+        .with_params(ControlParams::mutation(
+            "a".repeat(64),
+            ConfigMutation::SetApplicationPolicy {
+                mode: ApplicationPolicyMode::Whitelist,
+                targets: targets.clone(),
+            },
+        ))
+        .unwrap();
+    let frame = WireFrame::Request(request);
+    assert_eq!(
+        FrameCodec::decode(&FrameCodec::encode(&frame).unwrap()).unwrap(),
+        frame
+    );
+
+    for mutation in [
+        ConfigMutation::SetApplicationPolicy {
+            mode: ApplicationPolicyMode::All,
+            targets,
+        },
+        ConfigMutation::SetApplicationPolicy {
+            mode: ApplicationPolicyMode::Blacklist,
+            targets: Vec::new(),
+        },
+    ] {
+        assert_eq!(
+            ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+                .with_params(ControlParams::mutation("a".repeat(64), mutation))
                 .unwrap_err(),
             ProtocolError::InvalidEnvelope
         );

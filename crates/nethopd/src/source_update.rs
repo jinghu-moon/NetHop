@@ -15,7 +15,7 @@ use nethop_subscription::{
 };
 use nethop_subscription::{
     CapabilityMatrix, Digest, FilteredSourceInput, FormatHint, NodeFilter, ParserLimits, SourceId,
-    SourceInput, convert_filtered_sources,
+    SourceInput, SubscriptionUserInfo, convert_filtered_sources,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -77,11 +77,24 @@ pub enum SourceBodyOrigin {
 pub struct SourceBody {
     bytes: Vec<u8>,
     origin: SourceBodyOrigin,
+    subscription_userinfo: Option<SubscriptionUserInfo>,
 }
 
 impl SourceBody {
     pub fn new(bytes: Vec<u8>, origin: SourceBodyOrigin) -> Self {
-        Self { bytes, origin }
+        Self {
+            bytes,
+            origin,
+            subscription_userinfo: None,
+        }
+    }
+
+    pub fn with_subscription_userinfo(
+        mut self,
+        subscription_userinfo: Option<SubscriptionUserInfo>,
+    ) -> Self {
+        self.subscription_userinfo = subscription_userinfo;
+        self
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -90,6 +103,10 @@ impl SourceBody {
 
     pub const fn origin(&self) -> SourceBodyOrigin {
         self.origin
+    }
+
+    pub const fn subscription_userinfo(&self) -> Option<SubscriptionUserInfo> {
+        self.subscription_userinfo
     }
 }
 
@@ -212,7 +229,10 @@ impl SourceBodyFetcher for HttpSourceBodyFetcher {
             Err(_) => {
                 return cache
                     .last_known_good()
-                    .map(|body| SourceBody::new(body.to_vec(), SourceBodyOrigin::LastKnownGood))
+                    .map(|body| {
+                        SourceBody::new(body.to_vec(), SourceBodyOrigin::LastKnownGood)
+                            .with_subscription_userinfo(cache.subscription_userinfo())
+                    })
                     .ok_or(SourceUpdateError::Fetch);
             }
         };
@@ -227,7 +247,8 @@ impl SourceBodyFetcher for HttpSourceBodyFetcher {
         if let Some(path) = cache_path {
             atomic_write(&path, outcome.body()).map_err(|_| SourceUpdateError::Cache)?;
         }
-        Ok(SourceBody::new(outcome.body().to_vec(), origin))
+        Ok(SourceBody::new(outcome.body().to_vec(), origin)
+            .with_subscription_userinfo(outcome.subscription_userinfo()))
     }
 
     fn cached(&mut self, source: &SourceDefinition) -> Result<SourceBody, SourceUpdateError> {
@@ -244,8 +265,12 @@ impl SourceBodyFetcher for HttpSourceBodyFetcher {
         }
         self.caches
             .get(&cache_key)
-            .and_then(SourceCache::last_known_good)
-            .map(|body| SourceBody::new(body.to_vec(), SourceBodyOrigin::LastKnownGood))
+            .and_then(|cache| {
+                cache.last_known_good().map(|body| {
+                    SourceBody::new(body.to_vec(), SourceBodyOrigin::LastKnownGood)
+                        .with_subscription_userinfo(cache.subscription_userinfo())
+                })
+            })
             .ok_or(SourceUpdateError::Cache)
     }
 }
@@ -456,6 +481,7 @@ where
                         duplicate: outcome.duplicate,
                         rejected: outcome.rejected,
                         warnings: outcome.warnings,
+                        subscription_userinfo: None,
                         diagnostic_code: None,
                     })
                     .collect(),
@@ -524,9 +550,14 @@ where
             };
             match body {
                 Ok(body) => {
+                    let subscription_userinfo = body.subscription_userinfo();
                     details.insert(
                         source.id().clone(),
-                        SourceUpdateDetail::pending(source.id().clone(), body.origin()),
+                        SourceUpdateDetail::pending(
+                            source.id().clone(),
+                            body.origin(),
+                            subscription_userinfo,
+                        ),
                     );
                     inputs.push(FilteredSourceInput {
                         source: SourceInput {
@@ -557,7 +588,7 @@ where
             let source_id = ManualSource::source_id();
             details.insert(
                 source_id.clone(),
-                SourceUpdateDetail::pending(source_id.clone(), SourceBodyOrigin::Local),
+                SourceUpdateDetail::pending(source_id.clone(), SourceBodyOrigin::Local, None),
             );
             inputs.push(FilteredSourceInput {
                 source: SourceInput {
@@ -912,11 +943,16 @@ pub struct SourceUpdateDetail {
     pub duplicate: usize,
     pub rejected: usize,
     pub warnings: usize,
+    pub subscription_userinfo: Option<SubscriptionUserInfo>,
     pub diagnostic_code: Option<String>,
 }
 
 impl SourceUpdateDetail {
-    fn pending(source_id: SourceId, origin: SourceBodyOrigin) -> Self {
+    fn pending(
+        source_id: SourceId,
+        origin: SourceBodyOrigin,
+        subscription_userinfo: Option<SubscriptionUserInfo>,
+    ) -> Self {
         Self {
             source_id,
             origin: Some(origin),
@@ -924,6 +960,7 @@ impl SourceUpdateDetail {
             duplicate: 0,
             rejected: 0,
             warnings: 0,
+            subscription_userinfo,
             diagnostic_code: None,
         }
     }
@@ -936,6 +973,7 @@ impl SourceUpdateDetail {
             duplicate: 0,
             rejected: 0,
             warnings: 0,
+            subscription_userinfo: None,
             diagnostic_code: Some(diagnostic_code.to_owned()),
         }
     }

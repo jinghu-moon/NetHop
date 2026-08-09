@@ -320,8 +320,8 @@ pub enum DnsMode {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TunStackIntent {
-    #[default]
     System,
+    #[default]
     Gvisor,
 }
 
@@ -715,11 +715,23 @@ impl EffectiveConfig {
         }
         if self.applications != candidate.applications {
             changes.push(ChangeKind::Applications);
-            impact = impact.max(ApplyImpact::NetworkPlan);
+            let tun_topology = self.network.capture_mode == CaptureIntent::Tun
+                || candidate.network.capture_mode == CaptureIntent::Tun;
+            impact = impact.max(if tun_topology {
+                ApplyImpact::GenerationActivation
+            } else {
+                ApplyImpact::NetworkPlan
+            });
         }
         if self.network != candidate.network {
             changes.push(ChangeKind::Network);
-            impact = impact.max(ApplyImpact::NetworkPlan);
+            let core_topology_changed = self.network.capture_mode != candidate.network.capture_mode
+                || self.network.tun_stack != candidate.network.tun_stack;
+            impact = impact.max(if core_topology_changed {
+                ApplyImpact::GenerationActivation
+            } else {
+                ApplyImpact::NetworkPlan
+            });
         }
         if self.routing != candidate.routing {
             changes.push(ChangeKind::Routing);
@@ -1372,10 +1384,18 @@ fn validate_network(wire: NetworkWire) -> Result<NetworkSettings, ConfigError> {
     if !wire.proxy_tcp && !wire.proxy_udp {
         return Err(ConfigError::InvalidNetwork);
     }
+    if wire.ipv6_mode != Ipv6Mode::Auto || wire.dns_mode != DnsMode::Auto {
+        return Err(ConfigError::UnsupportedNetwork);
+    }
     if wire.capture_mode == CaptureIntent::Tun
-        || wire.ipv6_mode != Ipv6Mode::Auto
-        || wire.dns_mode != DnsMode::Auto
-        || wire.tun_stack != TunStackIntent::System
+        && (!wire.proxy_tcp
+            || !wire.proxy_udp
+            || !wire.interfaces.mobile
+            || !wire.interfaces.wifi
+            || wire.interfaces.hotspot
+            || wire.interfaces.usb
+            || !wire.interfaces.include.is_empty()
+            || !wire.interfaces.exclude.is_empty())
     {
         return Err(ConfigError::UnsupportedNetwork);
     }

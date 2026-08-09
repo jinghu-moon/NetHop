@@ -28,7 +28,17 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<bool, CliError> {
-    let invocation = parse_invocation(std::env::args().skip(1))?;
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(unix)]
+    if let Some(session_id) = nethopctl::parse_event_termination(&arguments)? {
+        let terminated = nethopctl::terminate_event_session(&session_id)?;
+        println!(
+            "{}",
+            serde_json::json!({ "version": 2, "ok": true, "result": { "terminated": terminated } })
+        );
+        return Ok(true);
+    }
+    let invocation = parse_invocation(&arguments)?;
     let request_id = RequestId::new(format!("ctl-{}", std::process::id()))
         .map_err(|_| CliError::RequestFailed)?;
     #[cfg(unix)]
@@ -59,7 +69,10 @@ fn run() -> Result<bool, CliError> {
             CliCommand::Events | CliCommand::LogsTail
         ) {
             let request = build_request(&invocation, request_id, None)?;
-            transport.stream_jsonl(&request, &mut std::io::stdout().lock())?;
+            let max_runtime = invocation
+                .event_max_runtime_seconds()
+                .map(Duration::from_secs);
+            transport.stream_jsonl(&request, &mut std::io::stdout().lock(), max_runtime)?;
             return Ok(true);
         }
         let response = execute_with_input(&mut transport, &invocation, request_id, input)?;

@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU32, Ordering},
+    time::Duration,
 };
 
 use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
@@ -11,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::{ClashApiClient, ClashApiError};
+use crate::{
+    ClashApiClient, ClashApiError, ProcessIdentity, collect_outbound_route, collect_process_metrics,
+};
 
 const SELECTOR_SCHEMA_VERSION: u8 = 1;
 const AUTO_SELECTOR_TAG: &str = "nethop-auto";
@@ -74,6 +77,9 @@ impl OperationalControl {
                         .expect("protocol validated node target"),
                 )?
             )),
+            ControlMethod::NodeTestAll => Ok(json!({
+                "results": self.api.test_all_nodes()?,
+            })),
             ControlMethod::NodeSelect => {
                 let target = params
                     .target_value()
@@ -213,6 +219,28 @@ impl OperationalControl {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    pub fn metrics_document(
+        &self,
+        process: Option<ProcessIdentity>,
+        daemon_uptime: Duration,
+        state: RuntimeState,
+        generation: Option<GenerationId>,
+    ) -> Value {
+        let totals = self.api.traffic_totals().ok();
+        json!({
+            "schema_version": 1,
+            "runtime_state": runtime_state_wire(state),
+            "generation": generation.map(GenerationId::get),
+            "uptime_seconds": daemon_uptime.as_secs(),
+            "core": process.map(collect_process_metrics),
+            "traffic": {
+                "upload_bytes": totals.map(|value| value.upload),
+                "download_bytes": totals.map(|value| value.download),
+            },
+            "outbound": collect_outbound_route(),
+        })
     }
 }
 

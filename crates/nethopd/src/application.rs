@@ -18,6 +18,13 @@ use crate::{
     WorkerSupervisor,
 };
 
+#[cfg(unix)]
+use crate::{
+    AndroidDataPlaneHealthProbe, ControlServerLimits, CoreProcessLimits, CoreProcessRunner,
+    MonotonicClock, RunnerLimits, SingBoxCheckRunner, StartupLivenessProbe, TunRunner,
+    TunRunnerLimits, UnixControlServer, WorkerApplication, WorkerRecoveryCoordinator,
+    WorkerRuntimeLimits, WorkerServiceDriver, WorkerServiceSignal, run_worker_service,
+};
 #[cfg(all(unix, feature = "subscription-update"))]
 use crate::{
     ApiSecretStore, ClashApiClient, ClashApiLimits, ConfigRuntime, ConfigStore, ConfigWatcher,
@@ -26,20 +33,14 @@ use crate::{
     OptionalRuntimeUpdateSource, PersistentCoreVersionSchedule, PersistentRuleSetSchedule,
     PersistentUpdateSchedule, RuleSetLimits, RuleSetProviderManifest, RuleSetStore,
     RuleSetUpdateService, SelectorStore, SourceRegistry, SourceStatusStore, SourceUpdateService,
-    StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy,
-};
-#[cfg(unix)]
-use crate::{
-    ControlServerLimits, CoreProcessLimits, CoreProcessRunner, MonotonicClock,
-    NetworkDataPlaneHealthProbe, RunnerLimits, SingBoxCheckRunner, StartupLivenessProbe,
-    UnixControlServer, WorkerApplication, WorkerRecoveryCoordinator, WorkerRuntimeLimits,
-    WorkerServiceDriver, WorkerServiceSignal, run_worker_service,
+    StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy, WebUiPayloadStore,
 };
 #[cfg(unix)]
 use nethop_android::{
     AndroidToolPaths, AppCatalog, CapabilityProbe, CommandPrivateDnsFactsSource,
     CommandProbeBackend, CommandUpdateNotifier, CommandWifiFactsSource, NetworkExecutor,
     NetworkPlanVerifier, PlanSlot, ProbeLimits, SystemCommandBackend, SystemCommandLimits,
+    TunHealthVerifier, default_tun_interface,
 };
 #[cfg(all(unix, feature = "subscription-update"))]
 use nethop_core::ClashApi;
@@ -333,6 +334,12 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         Duration::from_millis(20),
     )
     .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let tun_runner_limits = TunRunnerLimits::new(
+        Duration::from_secs(u64::from(config.advanced().health_timeout_seconds())),
+        Duration::from_secs(u64::from(config.advanced().health_timeout_seconds())),
+        Duration::from_millis(50),
+    )
+    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     let capability_source = CapabilityProbe::new(
         CommandProbeBackend::new(
             AndroidToolPaths::from_system()
@@ -347,7 +354,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         SystemCommandBackend::from_system(SystemCommandLimits::default())
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
     );
-    let data_plane_health = NetworkDataPlaneHealthProbe::new(
+    let data_plane_health = AndroidDataPlaneHealthProbe::new(
         NetworkPlanVerifier::new(
             CommandProbeBackend::new(
                 AndroidToolPaths::from_system()
@@ -357,16 +364,42 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
             inbound_port,
         )
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
-    );
-    let verifier = NetworkPlanVerifier::new(
-        CommandProbeBackend::new(
-            AndroidToolPaths::from_system()
-                .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
-            ProbeLimits::default(),
+        TunRunner::new(
+            TunHealthVerifier::new(
+                CommandProbeBackend::new(
+                    AndroidToolPaths::from_system()
+                        .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+                    ProbeLimits::default(),
+                ),
+                default_tun_interface(),
+            )
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+            tun_runner_limits,
         ),
-        inbound_port,
-    )
-    .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    );
+    let verifier = AndroidDataPlaneHealthProbe::new(
+        NetworkPlanVerifier::new(
+            CommandProbeBackend::new(
+                AndroidToolPaths::from_system()
+                    .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+                ProbeLimits::default(),
+            ),
+            inbound_port,
+        )
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+        TunRunner::new(
+            TunHealthVerifier::new(
+                CommandProbeBackend::new(
+                    AndroidToolPaths::from_system()
+                        .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+                    ProbeLimits::default(),
+                ),
+                default_tun_interface(),
+            )
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+            tun_runner_limits,
+        ),
+    );
     let private_dns_source = CommandPrivateDnsFactsSource::new(CommandProbeBackend::new(
         AndroidToolPaths::from_system()
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
@@ -507,6 +540,9 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         report_worker_stage("ruleset_runtime_ready");
         let source_status = SourceStatusStore::open(&database_path)
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+        let webui_payload_store =
+            WebUiPayloadStore::open(runtime.root().join("state/webui-payloads"))
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
         WorkerApplication::new(
             recovery,
             network,
@@ -522,6 +558,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
         )
         .with_updater(OptionalRuntimeUpdateSource::new(Some(updater)))
+        .with_webui_payload_store(webui_payload_store)
         .with_source_status_store(source_status)
         .with_operational_control(operational_control)
         .with_private_dns_source(private_dns_source)

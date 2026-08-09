@@ -1,0 +1,1 @@
+export const start = () => setInterval(() => undefined, 1000);

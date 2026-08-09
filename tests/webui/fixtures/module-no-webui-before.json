@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "webroot_present": false,
+  "required_files": [
+    "action.sh",
+    "bin/.gitkeep",
+    "customize.sh",
+    "defaults/nethop.toml",
+    "licenses/.gitkeep",
+    "module.prop",
+    "rulesets/cn-domain.srs",
+    "rulesets/cn-ip.srs",
+    "service.sh",
+    "uninstall.sh"
+  ]
+}

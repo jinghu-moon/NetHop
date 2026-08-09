@@ -285,13 +285,18 @@ impl ControlRequestHandler for WorkerControlHandler {
             | ControlMethod::ConfigMutate
             | ControlMethod::SubscriptionImportPreview
             | ControlMethod::SubscriptionImportApply
-            | ControlMethod::EventsSubscribe => ControlResponse::failure(
+            | ControlMethod::EventsSubscribe
+            | ControlMethod::WebUiPayloadCreate
+            | ControlMethod::WebUiPayloadAppend
+            | ControlMethod::WebUiPayloadCommit
+            | ControlMethod::WebUiPayloadRemove => ControlResponse::failure(
                 request_id,
                 generation,
                 unavailable_control_error(ErrorDomain::Config, "MANAGER-UNAVAILABLE"),
             ),
             ControlMethod::NodeList
             | ControlMethod::NodeTest
+            | ControlMethod::NodeTestAll
             | ControlMethod::NodeSelect
             | ControlMethod::NodeExport
             | ControlMethod::ConnectionsGet
@@ -301,7 +306,8 @@ impl ControlRequestHandler for WorkerControlHandler {
             | ControlMethod::LogsClear
             | ControlMethod::DiagnosticsBundle
             | ControlMethod::TopologyGet
-            | ControlMethod::TrafficGet => ControlResponse::failure(
+            | ControlMethod::TrafficGet
+            | ControlMethod::MetricsGet => ControlResponse::failure(
                 request_id,
                 generation,
                 unavailable_control_error(ErrorDomain::Core, "CONTROL-UNAVAILABLE"),

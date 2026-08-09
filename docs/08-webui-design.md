@@ -280,7 +280,7 @@ import * as TablerIcons from '@tabler/icons-vue';
 - TabBar、Popup 和 BackTop 已处理 `safe-area-inset-bottom`；
 - 未发现远程字体、`@font-face` 或运行时远程样式资源；
 - 默认字体偏向 iOS/Windows，且 Cell 存在 `PingFangSC-Regular` 硬编码，NetHop 必须增加 Android 系统字体覆盖；
-- 部分 Tabs、Popup、Toast 等组件使用约 300-350ms 的过渡，NetHop 必须提供 reduced-motion 覆盖并限制自有普通过渡时长。
+- 部分 Tabs、Popup、Toast 等组件使用约 300-350ms 的过渡；NetHop 只约束自有普通过渡时长，不把 reduced-motion 或 WCAG 作为发布门槛。
 
 这些差异通过 NetHop token、窄 CSS override 和截图契约处理，不 fork TDesign Common，也不直接修改 `node_modules`。Phase W0 仍需把最终 npm 锁定版本与本地参考 commit 对齐，防止审计源码与实际产物漂移。`refer/` 只作源码审计，不参与发布构建。
 
@@ -303,7 +303,7 @@ Phase W0 默认把 `@vueuse/core@10.7.0` 声明为 WebUI 的直接依赖，使�
 | composable | 用途 | 边界 |
 |---|---|---|
 | `useDocumentVisibility` | 页面隐藏时暂停 traffic、日志跟随和非必要查询 | 恢复后先取 daemon snapshot，不把可见性当运行状态 |
-| `usePreferredColorScheme` / `useMediaQuery` | 系统明暗主题、reduced motion 和宽屏布局 | 结果映射到根元素 `theme-mode` |
+| `usePreferredColorScheme` / `useMediaQuery` | 系统明暗主题和宽屏布局 | 结果映射到根元素 `theme-mode` |
 | `useEventListener` | Android 返回、visibility、resize 等监听 | 只在组件或 effect scope 内注册 |
 | `useResizeObserver` | Canvas、虚拟列表和稳定容器尺寸 | callback 必须轻量，高频处理另行 throttle |
 | `useDebounceFn` | 节点、应用和日志搜索 | 默认 100-150ms，提交命令不 debounce |
@@ -504,14 +504,6 @@ NetHop 复用 TDesign 已有 light/dark、背景、文本、边框、状态色�
   font-family: var(--td-font-family);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 1ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 1ms !important;
-  }
-}
 ```
 
 `useTheme` 使用 `usePreferredColorScheme` 解析 system/light/dark，并显式设置：
@@ -525,7 +517,7 @@ document.documentElement.setAttribute('theme-mode', resolvedTheme);
 ### 8.3 稳定尺寸
 
 - 底部导航高度固定，并包含 safe-area inset；
-- 图标按钮最小触控区域 44x44 CSS px；
+- 按钮采用 TDesign 原生 `small = 32px`、`medium = 40px` 尺寸；紧凑工具按钮固定为 32x32 CSS px；
 - 开关、状态点、测速结果和流量数字使用稳定列宽；
 - 节点卡或列表行使用固定最小高度；
 - 长名称单行省略，详情页显示完整名称；
@@ -760,7 +752,7 @@ nethopctl events --jsonl --event-kinds config,runtime,subscription,generation,ne
 - 60 秒曲线使用固定长度 typed array/ring buffer；
 - 页面隐藏立即暂停 traffic 请求；
 - 回到前台先取一份 `traffic.get` snapshot，再恢复流；
-- reduced motion 不影响数据更新，只禁用非必要过渡。
+- 动画不参与数据更新和状态判断。
 
 如果宿主无法动态调整 event kinds，首版允许关闭并重建事件子进程，不允许每秒启动一次 root shell。
 
@@ -993,7 +985,7 @@ VERIFY: production build + screenshot/device check
 - 页面隐藏、`display:none`、路由卸载后无零尺寸污染或残留 observer；
 - TDesign theme token 覆盖；
 - system/light/dark 到根元素 `theme-mode` 映射；
-- Android 系统字体覆盖与 reduced-motion；
+- Android 系统字体覆盖；
 - Tabler 禁止 namespace import 的 lint contract。
 
 ### 17.3 组件测试
@@ -1008,7 +1000,7 @@ VERIFY: production build + screenshot/device check
 - 长文本、空状态、loading、partial success、offline；
 - 返回键、焦点恢复、Dialog 和 toast。
 
-### 17.4 视觉与可访问性
+### 17.4 视觉质量
 
 Playwright 截图至少覆盖：
 
@@ -1022,13 +1014,12 @@ Playwright 截图至少覆盖：
 每个尺寸覆盖 light/dark、正常/降级/错误、中文长文本。检查：
 
 - 无重叠和横向滚动；
-- 触控目标至少 44px；
-- 焦点可见；
-- 对比度满足 WCAG AA；
-- 文本放大 200% 后核心命令仍可用；
-- reduced motion；
+- TDesign 下拉、按钮与自有紧凑控件尺寸一致；
+- 图标与文字中心线对齐；
 - Android safe area；
 - Canvas 非空且不遮挡文本。
+
+无障碍、TalkBack、WCAG、键盘导航和 200% 文本缩放不属于 NetHop WebUI 的设计与验收范围，不得以这些指标为理由放大全部按钮或降低信息密度。NetHop 自有组件不增加 `aria-*`、显式 `role`、无障碍专用 props、reduced-motion 分支或对应测试；TDesign 内部自动生成的属性与行为不修改。可见表单标签、按钮文字和正常触控交互仍按产品功能保留。
 
 ### 17.5 真机测试
 
@@ -1048,7 +1039,7 @@ Playwright 截图至少覆盖：
 2. 引入精确锁定的 TDesign Mobile Vue、Tabler Icons Vue、VueUse、TanStack Virtual 和 kernelsu bridge。
 3. 对比 VueUse 10.7.0 去重、14.4.0 双版本和 14.4.0 override 三种 production bundle；默认冻结无重复依赖且通过 TDesign 回归的方案。
 4. 建立 TanStack Virtual 与 VueUse `useVirtualList` 的 10,000 固定高度对照基准，以及 TanStack 动态高度、深度跳转和锚点稳定性真机基准；达标后删除 VueUse 虚拟列表候选路径。
-5. 建立显式按需 import、TDesign token 映射、Android 字体/reduced-motion override 和 bundle analyzer。
+5. 建立显式按需 import、TDesign token 映射、Android 字体覆盖和 bundle analyzer。
 6. 建立 MockHost、protocol fixtures、Playwright 和截图门禁。
 7. 接入模块 `webroot` 构建、manifest、checksums、许可证和 ZIP contract。
 

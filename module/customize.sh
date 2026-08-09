@@ -72,13 +72,17 @@ if [ -z "${MAGISK_VER_CODE:-}" ] && [ -z "${KSU_VER_CODE:-}" ] && [ "${KSU:-fals
 fi
 
 require_regular_file "$CHECKSUMS"
-[ "$(wc -l < "$CHECKSUMS" | tr -d ' ')" -eq 6 ] || fail "checksum manifest must contain six entries"
-verify_asset "bin/nethopd"
-verify_asset "bin/nethopctl"
-verify_asset "bin/sing-box"
-verify_asset "rulesets/cn-domain.srs"
-verify_asset "rulesets/cn-ip.srs"
-verify_asset "build-manifest.json"
+checksum_count=$(wc -l < "$CHECKSUMS" | tr -d ' ')
+[ "$checksum_count" -ge 7 ] || fail "checksum manifest is incomplete"
+while read -r digest relative extra; do
+  [ -n "$digest" ] && [ -n "$relative" ] && [ -z "$extra" ] || fail "invalid checksum entry"
+  case "$relative" in
+    bin/nethopd|bin/nethopctl|bin/sing-box|rulesets/cn-domain.srs|rulesets/cn-ip.srs|build-manifest.json|licenses/webui-sbom.cdx.json|licenses/webui-licenses.json|licenses/webui-production-bundle.json|licenses/webui-bundle-metafile.json|webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*)
+      verify_asset "$relative"
+      ;;
+    *) fail "unexpected checksum target: $relative" ;;
+  esac
+done < "$CHECKSUMS"
 
 for directory in \
   "$DATA_ROOT" \

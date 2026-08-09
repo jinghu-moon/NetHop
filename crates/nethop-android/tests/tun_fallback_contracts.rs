@@ -117,8 +117,8 @@ fn tun_health_requires_owned_up_interface_and_both_families() {
     let mut verifier = TunHealthVerifier::new(
         TunProbe {
             links: "8: nethop0: <POINTOPOINT,UP,LOWER_UP> mtu 9000",
-            ipv4: "8: nethop0 inet 172.19.0.1/30 scope global nethop0",
-            ipv6: "8: nethop0 inet6 fdfe:dcba:9876::1/126 scope global",
+            ipv4: "8: nethop0: <POINTOPOINT,UP> mtu 9000\n    inet 172.19.0.1/30 scope global nethop0",
+            ipv6: "8: nethop0: <POINTOPOINT,UP> mtu 9000\n    inet6 fdfe:dcba:9876::1/126 scope global",
         },
         "nethop0",
     )
@@ -128,7 +128,7 @@ fn tun_health_requires_owned_up_interface_and_both_families() {
     let mut missing_ipv6 = TunHealthVerifier::new(
         TunProbe {
             links: "8: nethop0: <POINTOPOINT,UP> mtu 1500",
-            ipv4: "8: nethop0 inet 172.19.0.1/30 scope global nethop0",
+            ipv4: "8: nethop0: <POINTOPOINT,UP> mtu 1500\n    inet 172.19.0.1/30 scope global nethop0",
             ipv6: "",
         },
         "nethop0",
@@ -137,5 +137,33 @@ fn tun_health_requires_owned_up_interface_and_both_families() {
     assert_eq!(
         missing_ipv6.verify().unwrap_err(),
         TunHealthError::Ipv6AddressMissing
+    );
+}
+
+#[test]
+fn tun_shutdown_health_requires_the_owned_interface_to_disappear() {
+    let mut absent = TunHealthVerifier::new(
+        TunProbe {
+            links: "1: lo: <LOOPBACK,UP> mtu 65536",
+            ipv4: "",
+            ipv6: "",
+        },
+        "nethop0",
+    )
+    .unwrap();
+    absent.verify_absent().unwrap();
+
+    let mut leaked = TunHealthVerifier::new(
+        TunProbe {
+            links: "8: nethop0: <POINTOPOINT,UP> mtu 1500",
+            ipv4: "",
+            ipv6: "",
+        },
+        "nethop0",
+    )
+    .unwrap();
+    assert_eq!(
+        leaked.verify_absent().unwrap_err(),
+        TunHealthError::InterfaceStillPresent
     );
 }

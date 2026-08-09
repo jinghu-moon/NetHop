@@ -1,16 +1,17 @@
 use nethop_android::{
     ApplyReceipt, CapabilityError, CapabilityProbe, CapabilityReport, ExecutionError,
     NetworkCommandBackend, NetworkExecutor, NetworkHealthVerifier, NetworkPlan, NetworkPlanError,
-    NetworkPlanner, PlanSlot, ProbeBackend,
+    NetworkPlanner, PlanSlot, ProbeBackend, TunFallbackPlanner, default_tun_interface,
 };
 use nethop_core::{
-    Candidate, CapturePolicy, GenerationId, GenerationStore, RuntimeState, SealedGeneration,
+    Candidate, CaptureMode, CapturePolicy, GenerationId, GenerationStore, RuntimeState,
+    SealedGeneration,
 };
 use thiserror::Error;
 
 use crate::{
     ActivationDiagnosticCode, ActiveGeneration, CandidateActivator, CandidateChecker,
-    CandidateProcess, CoreLauncher, HealthProbe, SafetyAuditor,
+    CandidateProcess, CoreLauncher, HealthProbe, ProcessIdentity, SafetyAuditor, TunRuntime,
 };
 
 pub trait CapabilitySource {
@@ -75,6 +76,10 @@ pub enum DataPlaneHealthError {
     CoreObserveFailed,
     #[error("candidate network plan is unhealthy")]
     NetworkUnhealthy,
+    #[error("candidate TUN interface is unhealthy")]
+    TunUnhealthy,
+    #[error("candidate TUN interface remained after core shutdown")]
+    TunCleanupFailed,
 }
 
 impl DataPlaneHealthError {
@@ -83,6 +88,23 @@ impl DataPlaneHealthError {
             Self::CoreExited => "data_plane_core_exited",
             Self::CoreObserveFailed => "data_plane_core_observe_failed",
             Self::NetworkUnhealthy => "data_plane_network_unhealthy",
+            Self::TunUnhealthy => "data_plane_tun_unhealthy",
+            Self::TunCleanupFailed => "data_plane_tun_cleanup_failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RuntimeAttachmentView<'a> {
+    Tproxy(&'a NetworkPlan),
+    Tun { interface: &'a str },
+}
+
+impl RuntimeAttachmentView<'_> {
+    pub const fn mode(self) -> CaptureMode {
+        match self {
+            Self::Tproxy(_) => CaptureMode::Tproxy,
+            Self::Tun { .. } => CaptureMode::Tun,
         }
     }
 }
@@ -91,31 +113,162 @@ pub trait DataPlaneHealthProbe<P: CandidateProcess> {
     fn wait_healthy(
         &mut self,
         process: &mut P,
-        plan: &NetworkPlan,
+        attachment: RuntimeAttachmentView<'_>,
         capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError>;
 
+    fn wait_stopped(
+        &mut self,
+        _attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
+
     fn replace_inbound_port(&mut self, _inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
+
+    fn replace_health_timeout(
+        &mut self,
+        _health_timeout: std::time::Duration,
+    ) -> Result<(), DataPlaneHealthError> {
         Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct NetworkDataPlaneHealthProbe<V> {
+pub struct AndroidDataPlaneHealthProbe<N, T> {
+    network: N,
+    tun: T,
+}
+
+impl<N, T> AndroidDataPlaneHealthProbe<N, T> {
+    pub const fn new(network: N, tun: T) -> Self {
+        Self { network, tun }
+    }
+
+    pub fn into_parts(self) -> (N, T) {
+        (self.network, self.tun)
+    }
+}
+
+impl<P, N, T> DataPlaneHealthProbe<P> for AndroidDataPlaneHealthProbe<N, T>
+where
+    P: CandidateProcess,
+    N: NetworkHealthVerifier,
+    T: TunRuntime,
+{
+    fn wait_healthy(
+        &mut self,
+        process: &mut P,
+        attachment: RuntimeAttachmentView<'_>,
+        _capabilities: &CapabilityReport,
+    ) -> Result<(), DataPlaneHealthError> {
+        match attachment {
+            RuntimeAttachmentView::Tproxy(plan) => {
+                match process.is_running() {
+                    Ok(true) => {}
+                    Ok(false) => return Err(DataPlaneHealthError::CoreExited),
+                    Err(_) => return Err(DataPlaneHealthError::CoreObserveFailed),
+                }
+                self.network
+                    .verify(plan)
+                    .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+            }
+            RuntimeAttachmentView::Tun { .. } => self
+                .tun
+                .wait_healthy(process)
+                .map_err(|_| DataPlaneHealthError::TunUnhealthy),
+        }
+    }
+
+    fn wait_stopped(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        match attachment {
+            RuntimeAttachmentView::Tproxy(_) => Ok(()),
+            RuntimeAttachmentView::Tun { .. } => self
+                .tun
+                .wait_stopped()
+                .map_err(|_| DataPlaneHealthError::TunCleanupFailed),
+        }
+    }
+
+    fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        self.network
+            .replace_inbound_port(inbound_port)
+            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+    }
+
+    fn replace_health_timeout(
+        &mut self,
+        health_timeout: std::time::Duration,
+    ) -> Result<(), DataPlaneHealthError> {
+        self.tun
+            .replace_timeout(health_timeout)
+            .map_err(|_| DataPlaneHealthError::TunUnhealthy)
+    }
+}
+
+pub trait RuntimeHealthVerifier {
+    fn verify(&mut self, attachment: RuntimeAttachmentView<'_>)
+    -> Result<(), DataPlaneHealthError>;
+
+    fn wait_stopped(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError>;
+
+    fn replace_inbound_port(&mut self, _inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
+
+    fn replace_health_timeout(
+        &mut self,
+        _health_timeout: std::time::Duration,
+    ) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
+}
+
+impl<V: NetworkHealthVerifier> RuntimeHealthVerifier for V {
+    fn verify(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        match attachment {
+            RuntimeAttachmentView::Tproxy(plan) => NetworkHealthVerifier::verify(self, plan)
+                .map_err(|_| DataPlaneHealthError::NetworkUnhealthy),
+            RuntimeAttachmentView::Tun { .. } => Err(DataPlaneHealthError::TunUnhealthy),
+        }
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        Ok(())
+    }
+
+    fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        NetworkHealthVerifier::replace_inbound_port(self, inbound_port)
+            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+    }
+}
+
+#[derive(Debug)]
+pub struct TproxyDataPlaneHealthProbe<V> {
     verifier: V,
 }
 
-impl<V> NetworkDataPlaneHealthProbe<V> {
+impl<V> TproxyDataPlaneHealthProbe<V> {
     pub const fn new(verifier: V) -> Self {
         Self { verifier }
     }
-
-    pub fn into_verifier(self) -> V {
-        self.verifier
-    }
 }
 
-impl<P, V> DataPlaneHealthProbe<P> for NetworkDataPlaneHealthProbe<V>
+impl<P, V> DataPlaneHealthProbe<P> for TproxyDataPlaneHealthProbe<V>
 where
     P: CandidateProcess,
     V: NetworkHealthVerifier,
@@ -123,7 +276,7 @@ where
     fn wait_healthy(
         &mut self,
         process: &mut P,
-        plan: &NetworkPlan,
+        attachment: RuntimeAttachmentView<'_>,
         _capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError> {
         match process.is_running() {
@@ -131,6 +284,9 @@ where
             Ok(false) => return Err(DataPlaneHealthError::CoreExited),
             Err(_) => return Err(DataPlaneHealthError::CoreObserveFailed),
         }
+        let RuntimeAttachmentView::Tproxy(plan) = attachment else {
+            return Err(DataPlaneHealthError::TunUnhealthy);
+        };
         self.verifier
             .verify(plan)
             .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
@@ -140,6 +296,56 @@ where
         self.verifier
             .replace_inbound_port(inbound_port)
             .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+    }
+}
+
+impl<N, T> RuntimeHealthVerifier for AndroidDataPlaneHealthProbe<N, T>
+where
+    N: NetworkHealthVerifier,
+    T: TunRuntime,
+{
+    fn verify(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        match attachment {
+            RuntimeAttachmentView::Tproxy(plan) => self
+                .network
+                .verify(plan)
+                .map_err(|_| DataPlaneHealthError::NetworkUnhealthy),
+            RuntimeAttachmentView::Tun { .. } => self
+                .tun
+                .verify_active()
+                .map_err(|_| DataPlaneHealthError::TunUnhealthy),
+        }
+    }
+
+    fn wait_stopped(
+        &mut self,
+        attachment: RuntimeAttachmentView<'_>,
+    ) -> Result<(), DataPlaneHealthError> {
+        match attachment {
+            RuntimeAttachmentView::Tproxy(_) => Ok(()),
+            RuntimeAttachmentView::Tun { .. } => self
+                .tun
+                .wait_stopped()
+                .map_err(|_| DataPlaneHealthError::TunCleanupFailed),
+        }
+    }
+
+    fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
+        self.network
+            .replace_inbound_port(inbound_port)
+            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+    }
+
+    fn replace_health_timeout(
+        &mut self,
+        health_timeout: std::time::Duration,
+    ) -> Result<(), DataPlaneHealthError> {
+        self.tun
+            .replace_timeout(health_timeout)
+            .map_err(|_| DataPlaneHealthError::TunUnhealthy)
     }
 }
 
@@ -207,9 +413,56 @@ impl WorkerActivationError {
 #[derive(Debug)]
 pub struct ActiveRuntime<P: CandidateProcess, R> {
     active: ActiveGeneration<P>,
-    plan: NetworkPlan,
-    receipt: R,
+    attachment: RuntimeAttachment<R>,
     capabilities: CapabilityReport,
+}
+
+#[derive(Debug)]
+pub enum RuntimeAttachment<R> {
+    Tproxy { plan: NetworkPlan, receipt: R },
+    Tun,
+}
+
+enum PreparedAttachment {
+    Tproxy(NetworkPlan),
+    Tun,
+}
+
+fn prepare_attachment(
+    generation: GenerationId,
+    policy: &CapturePolicy,
+    slot: PlanSlot,
+    capabilities: &CapabilityReport,
+) -> Result<PreparedAttachment, &'static str> {
+    match policy.mode() {
+        CaptureMode::Tproxy => NetworkPlanner
+            .build_tproxy(generation, slot, policy, capabilities)
+            .map(PreparedAttachment::Tproxy)
+            .map_err(|error| error.code().as_str()),
+        CaptureMode::Tun => TunFallbackPlanner
+            .build(capabilities)
+            .map(|_| PreparedAttachment::Tun)
+            .map_err(|error| error.as_str()),
+        CaptureMode::Direct => Err(NetworkPlanError::UnsupportedCaptureMode.code().as_str()),
+    }
+}
+
+impl<R> RuntimeAttachment<R> {
+    pub const fn view(&self) -> RuntimeAttachmentView<'_> {
+        match self {
+            Self::Tproxy { plan, .. } => RuntimeAttachmentView::Tproxy(plan),
+            Self::Tun => RuntimeAttachmentView::Tun {
+                interface: default_tun_interface(),
+            },
+        }
+    }
+
+    pub const fn state(&self) -> RuntimeState {
+        match self {
+            Self::Tproxy { .. } => RuntimeState::RunningTproxy,
+            Self::Tun => RuntimeState::RunningTun,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -218,6 +471,8 @@ pub(crate) enum RuntimeReconcileError {
     WithdrawFailed,
     #[error("active network plan could not be reapplied for reconcile")]
     ReapplyFailed,
+    #[error("TUN attachment cannot be rebuilt with netfilter operations")]
+    UnsupportedAttachment,
 }
 
 impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
@@ -225,12 +480,20 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
         self.active.generation()
     }
 
-    pub const fn plan(&self) -> &NetworkPlan {
-        &self.plan
+    pub const fn attachment(&self) -> RuntimeAttachmentView<'_> {
+        self.attachment.view()
+    }
+
+    pub const fn state(&self) -> RuntimeState {
+        self.attachment.state()
     }
 
     pub const fn capabilities(&self) -> &CapabilityReport {
         &self.capabilities
+    }
+
+    pub fn process_identity(&self) -> ProcessIdentity {
+        self.active.identity()
     }
 
     pub fn process_mut(&mut self) -> &mut P {
@@ -244,26 +507,36 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
     where
         N: NetworkController<Receipt = R>,
     {
-        network
-            .rollback(&self.plan, &mut self.receipt)
-            .map_err(|_| RuntimeReconcileError::WithdrawFailed)?;
-        let receipt = network
-            .apply(&self.plan)
-            .map_err(|_| RuntimeReconcileError::ReapplyFailed)?;
-        self.receipt = receipt;
-        Ok(())
+        match &mut self.attachment {
+            RuntimeAttachment::Tproxy { plan, receipt } => {
+                network
+                    .rollback(plan, receipt)
+                    .map_err(|_| RuntimeReconcileError::WithdrawFailed)?;
+                *receipt = network
+                    .apply(plan)
+                    .map_err(|_| RuntimeReconcileError::ReapplyFailed)?;
+                Ok(())
+            }
+            RuntimeAttachment::Tun => Err(RuntimeReconcileError::UnsupportedAttachment),
+        }
     }
 
-    pub fn stop<N>(mut self, network: &mut N) -> Result<(), RuntimeStopError>
+    pub fn stop<N, V>(mut self, network: &mut N, verifier: &mut V) -> Result<(), RuntimeStopError>
     where
         N: NetworkController<Receipt = R>,
+        V: RuntimeHealthVerifier,
     {
-        let network_failed = network.rollback(&self.plan, &mut self.receipt).is_err();
+        let network_failed = match &mut self.attachment {
+            RuntimeAttachment::Tproxy { plan, receipt } => network.rollback(plan, receipt).is_err(),
+            RuntimeAttachment::Tun => false,
+        };
         let core_failed = self.active.stop().is_err();
-        if network_failed || core_failed {
+        let data_plane_failed = verifier.wait_stopped(self.attachment.view()).is_err();
+        if network_failed || core_failed || data_plane_failed {
             Err(RuntimeStopError {
                 network_failed,
                 core_failed,
+                data_plane_failed,
             })
         } else {
             Ok(())
@@ -276,6 +549,7 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
 pub struct RuntimeStopError {
     network_failed: bool,
     core_failed: bool,
+    data_plane_failed: bool,
 }
 
 impl RuntimeStopError {
@@ -285,6 +559,10 @@ impl RuntimeStopError {
 
     pub const fn core_failed(&self) -> bool {
         self.core_failed
+    }
+
+    pub const fn data_plane_failed(&self) -> bool {
+        self.data_plane_failed
     }
 }
 
@@ -380,8 +658,7 @@ where
             .capability_source
             .probe()
             .map_err(|_| WorkerRecoveryError::CapabilityProbeFailed)?;
-        let plan = NetworkPlanner
-            .build_tproxy(generation.generation(), slot, policy, &capabilities)
+        let prepared = prepare_attachment(generation.generation(), policy, slot, &capabilities)
             .map_err(|_| WorkerRecoveryError::NetworkPlanRejected)?;
         let mut process = self
             .launcher
@@ -391,27 +668,39 @@ where
             let cleanup_failed = process.stop().is_err();
             return Err(WorkerRecoveryError::CoreHealthFailed { cleanup_failed });
         }
-        let mut receipt = match self.network.apply(&plan) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                let cleanup_failed = process.stop().is_err()
-                    || matches!(error, ExecutionError::ApplyRollbackFailed { .. });
-                return Err(WorkerRecoveryError::NetworkApplyFailed { cleanup_failed });
-            }
+        let mut attachment = match prepared {
+            PreparedAttachment::Tproxy(plan) => match self.network.apply(&plan) {
+                Ok(receipt) => RuntimeAttachment::Tproxy { plan, receipt },
+                Err(error) => {
+                    let cleanup_failed = process.stop().is_err()
+                        || matches!(error, ExecutionError::ApplyRollbackFailed { .. });
+                    return Err(WorkerRecoveryError::NetworkApplyFailed { cleanup_failed });
+                }
+            },
+            PreparedAttachment::Tun => RuntimeAttachment::Tun,
         };
         if self
             .data_plane_health
-            .wait_healthy(&mut process, &plan, &capabilities)
+            .wait_healthy(&mut process, attachment.view(), &capabilities)
             .is_err()
         {
-            let cleanup_failed =
-                self.network.rollback(&plan, &mut receipt).is_err() || process.stop().is_err();
+            let network_failed = match &mut attachment {
+                RuntimeAttachment::Tproxy { plan, receipt } => {
+                    self.network.rollback(plan, receipt).is_err()
+                }
+                RuntimeAttachment::Tun => false,
+            };
+            let core_failed = process.stop().is_err();
+            let data_plane_failed = self
+                .data_plane_health
+                .wait_stopped(attachment.view())
+                .is_err();
+            let cleanup_failed = network_failed || core_failed || data_plane_failed;
             return Err(WorkerRecoveryError::DataPlaneHealthFailed { cleanup_failed });
         }
         Ok(ActiveRuntime {
             active: ActiveGeneration::recovered(generation, process),
-            plan,
-            receipt,
+            attachment,
             capabilities,
         })
     }
@@ -496,18 +785,21 @@ where
                 ));
             }
         };
-        let plan = match NetworkPlanner.build_tproxy(
-            candidate.generation(),
-            slot,
-            policy,
-            &capabilities,
-        ) {
-            Ok(plan) => plan,
-            Err(error) => {
-                return Err(self.plan_failure(error));
+        let prepared = match prepare_attachment(candidate.generation(), policy, slot, &capabilities)
+        {
+            Ok(prepared) => prepared,
+            Err(cause_code) => {
+                return Err(self.fail_open(
+                    WorkerActivationDiagnosticCode::NetworkPlanRejected,
+                    Some(cause_code),
+                    false,
+                ));
             }
         };
-        self.transition_to(RuntimeState::StartingCore)?;
+        self.transition_to(match policy.mode() {
+            CaptureMode::Tun => RuntimeState::StartingTun,
+            _ => RuntimeState::StartingCore,
+        })?;
         let mut staged = match self.core.stage(candidate) {
             Ok(staged) => staged,
             Err(error) => {
@@ -518,58 +810,73 @@ where
                 ));
             }
         };
-        debug_assert_eq!(staged.generation(), plan.generation());
-        let mut receipt = match self.network.apply(&plan) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                let core_cleanup_failed = self.core.abort_staged(staged);
-                return Err(self.fail_open(
-                    WorkerActivationDiagnosticCode::NetworkApplyFailed,
-                    Some(error.code().as_str()),
-                    core_cleanup_failed
-                        || matches!(error, ExecutionError::ApplyRollbackFailed { .. }),
-                ));
+        let mut attachment = match prepared {
+            PreparedAttachment::Tproxy(plan) => {
+                debug_assert_eq!(staged.generation(), plan.generation());
+                match self.network.apply(&plan) {
+                    Ok(receipt) => RuntimeAttachment::Tproxy { plan, receipt },
+                    Err(error) => {
+                        let core_cleanup_failed = self.core.abort_staged(staged);
+                        return Err(self.fail_open(
+                            WorkerActivationDiagnosticCode::NetworkApplyFailed,
+                            Some(error.code().as_str()),
+                            core_cleanup_failed
+                                || matches!(error, ExecutionError::ApplyRollbackFailed { .. }),
+                        ));
+                    }
+                }
             }
+            PreparedAttachment::Tun => RuntimeAttachment::Tun,
         };
-        if let Err(error) =
-            self.data_plane_health
-                .wait_healthy(staged.process_mut(), &plan, &capabilities)
-        {
-            let network_cleanup_failed = self.network.rollback(&plan, &mut receipt).is_err();
+        if let Err(error) = self.data_plane_health.wait_healthy(
+            staged.process_mut(),
+            attachment.view(),
+            &capabilities,
+        ) {
+            let network_cleanup_failed = match &mut attachment {
+                RuntimeAttachment::Tproxy { plan, receipt } => {
+                    self.network.rollback(plan, receipt).is_err()
+                }
+                RuntimeAttachment::Tun => false,
+            };
             let core_cleanup_failed = self.core.abort_staged(staged);
+            let data_plane_cleanup_failed = self
+                .data_plane_health
+                .wait_stopped(attachment.view())
+                .is_err();
             return Err(self.fail_open(
                 WorkerActivationDiagnosticCode::DataPlaneHealthFailed,
                 Some(error.as_str()),
-                network_cleanup_failed || core_cleanup_failed,
+                network_cleanup_failed || core_cleanup_failed || data_plane_cleanup_failed,
             ));
         }
         let active = match self.core.commit_staged(staged) {
             Ok(active) => active,
             Err(staged) => {
-                let network_cleanup_failed = self.network.rollback(&plan, &mut receipt).is_err();
+                let network_cleanup_failed = match &mut attachment {
+                    RuntimeAttachment::Tproxy { plan, receipt } => {
+                        self.network.rollback(plan, receipt).is_err()
+                    }
+                    RuntimeAttachment::Tun => false,
+                };
                 let core_cleanup_failed = self.core.abort_staged(staged);
+                let data_plane_cleanup_failed = self
+                    .data_plane_health
+                    .wait_stopped(attachment.view())
+                    .is_err();
                 return Err(self.fail_open(
                     WorkerActivationDiagnosticCode::CommitFailed,
                     Some(ActivationDiagnosticCode::CommitFailed.as_str()),
-                    network_cleanup_failed || core_cleanup_failed,
+                    network_cleanup_failed || core_cleanup_failed || data_plane_cleanup_failed,
                 ));
             }
         };
-        self.state = RuntimeState::RunningTproxy;
+        self.state = attachment.state();
         Ok(ActiveRuntime {
             active,
-            plan,
-            receipt,
+            attachment,
             capabilities,
         })
-    }
-
-    fn plan_failure(&mut self, error: NetworkPlanError) -> WorkerActivationError {
-        self.fail_open(
-            WorkerActivationDiagnosticCode::NetworkPlanRejected,
-            Some(error.code().as_str()),
-            false,
-        )
     }
 
     fn transition_to(&mut self, next: RuntimeState) -> Result<(), WorkerActivationError> {

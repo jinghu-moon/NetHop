@@ -55,14 +55,14 @@ Manager 操作 typed config；daemon 校验后同时更新持久 TOML 和内存�
 - `service.enabled` 持久启停、Stop 对旧 Start/Update 命令的抢占、应用包名到 UID admission、接口 glob 到 probe 已知精确接口名的受控解析、CIDR 和资源候选校验；
 - `protocol.hello`、`config.get/validate/apply/reload/schema/mutate`、`capability.get`、`events.subscribe`，以及 root CLI JSON/JSONL 管道；
 - capability report schema `3`，包含有界接口证据；有界事件 ring、脱敏持久 JSONL 日志、4 MiB 单文件上限和 `1..30` 天日志清理。
+- 显式 TUN activation：独立 `TunRunner` 有界等待 `nethop0` 的 UP/IPv4/IPv6 状态，运行期低频校验，停止或失败后确认接口消失；该路径不创建或回滚 TPROXY `NetworkPlan`。
 
 以下配置值在对应数据面完成前稳定拒绝，不能解释为已经接线：
 
 | 配置能力 | 当前 admission |
 |---|---|
-| 显式 `capture_mode = "tun"` | 拒绝；TUN probe/规划组件存在，但尚未接入配置 activation |
 | 非 `auto` 的 DNS/IPv6 模式 | 拒绝 |
-| `tun_stack != "system"` | 拒绝 |
+| TUN 下关闭 TCP/UDP、选择热点/USB 或自定义物理接口 | 拒绝；原生 TUN inbound 当前不能准确兑现这些接管范围 |
 | hotspot/USB 接口接管 | 实验性受控启用；仅验证软件 netfilter 路径 |
 | `routing.block_quic=true` | 拒绝；Android 首版不阻断 QUIC |
 
@@ -281,7 +281,7 @@ proxy_tcp = true
 proxy_udp = true
 ipv6_mode = "auto"
 dns_mode = "auto"
-tun_stack = "system"
+tun_stack = "gvisor"
 
 [network.interfaces]
 mobile = true
@@ -434,14 +434,18 @@ registry 和 `EffectiveConfig`/generation 的提交仍受 `MutationCoordinator` 
 
 | 字段 | 可选值/范围 | 默认值 | 说明 |
 |---|---|---:|---|
-| `network.capture_mode` | `auto/tproxy/tun` | `auto` | auto 优先 TPROXY，失败回退 TUN |
+| `network.capture_mode` | `auto/tproxy/tun` | `auto` | `auto` 当前解析为 TPROXY；`tun` 显式进入独立 TUN activation，自动跨模式回退留给后续候选配置仲裁 |
 | `network.proxy_tcp` | bool | `true` | 关闭后不接管 TCP |
 | `network.proxy_udp` | bool | `true` | 关闭后不接管 UDP；状态明确 degraded |
 | `network.ipv6_mode` | `auto/proxy/block` | `auto` | 无完整 IPv6 接管能力时 guard 阻断 |
 | `network.dns_mode` | `auto/proxy/system` | `auto` | strict Private DNS 下按能力降级 |
-| `network.tun_stack` | `system/gvisor` | `system` | gVisor 仅兼容回退 |
+| `network.tun_stack` | `system/gvisor` | `gvisor` | 显式选择写入受控 sing-box TUN inbound；Android 真机验证表明 `system` 可能出现接口健康但数据面超时，因此默认使用已验证可用的 `gvisor`，`system` 仅作为高级显式选择 |
 
 接口选项表达用户意图，不要求用户知道 Android 实际接口名。`include/exclude` 是高级 glob 列表，必须限制字符集和数量；默认依靠 netlink/capability probe 识别移动数据与 Wi-Fi。
+
+TUN 与 TPROXY 使用不同 attachment 生命周期。TUN 启动顺序固定为 `capability admission -> stage sing-box -> 核心存活 -> nethop0 健康 -> commit generation`；健康或 commit 失败固定为 `停止 staged core -> 有界等待 nethop0 消失 -> 保留旧 generation -> fail-open`。运行期发现 TUN 漂移时不伪造 netfilter 修复，而是停止核心、确认接口消失并进入统一的 `1/2/4s` 重启预算。`capture_mode`、`tun_stack` 或 TUN 下应用 UID 的变化属于 `GenerationActivation`，必须重新 compose 和执行 `sing-box check`，不能只重启旧 generation。
+
+2026-08-09 的 Android `alioth` 真机对照中，`system` 栈虽然通过进程、接口、IPv4/IPv6 地址检查，但 Google、YouTube 与哔哩哔哩均在连接阶段超时；只改变栈为 `gvisor` 后三者恢复。该证据说明接口级健康不能证明数据面可用，也不足以支撑 `system` 作为默认值。首版默认冻结为 `gvisor`；后续若要恢复 `system` 优先，必须先增加有界数据面探针，并在失败时于提交 generation 前回退，而不能依靠表面健康状态。
 
 热点和 USB 已接入单一 generation 的复合 `NetworkPlan`：IPv4 使用独立 `NH_FWD_A/B` 链执行 TPROXY，IPv6 使用同源 `NH_FWD6_A/B` 链 fail closed，所有步骤由同一回执逆序回滚，健康检查同时验证两套链。接口只从 capability probe 的实时链路集合中按 Android 安全命名选择（如 `ap*`、`swlan*`、`wlan1+`、`rndis*`、`usb*`）；请求转发但没有安全匹配时拒绝激活。当前实现尚未识别 Android tethering 硬件/eBPF offload，因此该能力保持 experimental，不作为稳定发布能力；稳定化前必须增加 offload capability admission 和真机流量证据。
 

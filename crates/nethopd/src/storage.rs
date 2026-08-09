@@ -73,6 +73,10 @@ pub struct SourceStatus {
     pub duplicate: u64,
     pub rejected: u64,
     pub warnings: u64,
+    pub subscription_upload_bytes: Option<u64>,
+    pub subscription_download_bytes: Option<u64>,
+    pub subscription_total_bytes: Option<u64>,
+    pub subscription_expire_at: Option<i64>,
     pub using_last_known_good: bool,
     pub diagnostic_code: Option<String>,
 }
@@ -249,11 +253,45 @@ fn initialize(connection: &Connection) -> Result<(), StatsStoreError> {
                duplicate_count INTEGER NOT NULL,
                rejected INTEGER NOT NULL,
                warnings INTEGER NOT NULL,
+               subscription_upload_bytes INTEGER,
+               subscription_download_bytes INTEGER,
+               subscription_total_bytes INTEGER,
+               subscription_expire_at INTEGER,
                using_last_known_good INTEGER NOT NULL,
                diagnostic_code TEXT
              );",
         )
-        .map_err(StatsStoreError::Database)
+        .map_err(StatsStoreError::Database)?;
+    ensure_source_status_metadata_columns(connection)
+}
+
+fn ensure_source_status_metadata_columns(connection: &Connection) -> Result<(), StatsStoreError> {
+    for column in [
+        "subscription_upload_bytes",
+        "subscription_download_bytes",
+        "subscription_total_bytes",
+        "subscription_expire_at",
+    ] {
+        let mut statement = connection
+            .prepare("PRAGMA table_info(source_status)")
+            .map_err(StatsStoreError::Database)?;
+        let exists = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(StatsStoreError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StatsStoreError::Database)?
+            .iter()
+            .any(|name| name == column);
+        if !exists {
+            connection
+                .execute(
+                    &format!("ALTER TABLE source_status ADD COLUMN {column} INTEGER"),
+                    [],
+                )
+                .map_err(StatsStoreError::Database)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "subscription-update")]
@@ -289,6 +327,28 @@ impl SourceStatusStore {
             let duplicate = count_i64(detail.duplicate)?;
             let rejected = count_i64(detail.rejected)?;
             let warnings = count_i64(detail.warnings)?;
+            let subscription_upload = optional_count_i64(
+                detail
+                    .subscription_userinfo
+                    .and_then(|info| info.upload_bytes()),
+            )?;
+            let subscription_download = optional_count_i64(
+                detail
+                    .subscription_userinfo
+                    .and_then(|info| info.download_bytes()),
+            )?;
+            let subscription_total = optional_count_i64(
+                detail
+                    .subscription_userinfo
+                    .and_then(|info| info.total_bytes()),
+            )?;
+            let subscription_expire = detail
+                .subscription_userinfo
+                .and_then(|info| info.expire_at());
+            let replace_subscription_info = matches!(
+                detail.origin,
+                Some(SourceBodyOrigin::Fresh | SourceBodyOrigin::NotModified)
+            );
             let success =
                 detail.diagnostic_code.is_none() && detail.accepted + detail.duplicate > 0;
             let using_last_known_good = detail.origin == Some(SourceBodyOrigin::LastKnownGood);
@@ -306,9 +366,11 @@ impl SourceStatusStore {
                        (source_id, health, last_attempt_wall_seconds,
                         last_success_wall_seconds, generation, accepted,
                         duplicate_count, rejected, warnings,
+                        subscription_upload_bytes, subscription_download_bytes,
+                        subscription_total_bytes, subscription_expire_at,
                         using_last_known_good, diagnostic_code)
                      VALUES (?1, ?2, ?3, CASE WHEN ?4 THEN ?3 ELSE NULL END,
-                             ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                             ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                      ON CONFLICT(source_id) DO UPDATE SET
                        health = excluded.health,
                        last_attempt_wall_seconds = excluded.last_attempt_wall_seconds,
@@ -320,6 +382,18 @@ impl SourceStatusStore {
                        duplicate_count = excluded.duplicate_count,
                        rejected = excluded.rejected,
                        warnings = excluded.warnings,
+                       subscription_upload_bytes = CASE WHEN ?16
+                         THEN excluded.subscription_upload_bytes
+                         ELSE source_status.subscription_upload_bytes END,
+                       subscription_download_bytes = CASE WHEN ?16
+                         THEN excluded.subscription_download_bytes
+                         ELSE source_status.subscription_download_bytes END,
+                       subscription_total_bytes = CASE WHEN ?16
+                         THEN excluded.subscription_total_bytes
+                         ELSE source_status.subscription_total_bytes END,
+                       subscription_expire_at = CASE WHEN ?16
+                         THEN excluded.subscription_expire_at
+                         ELSE source_status.subscription_expire_at END,
                        using_last_known_good = excluded.using_last_known_good,
                        diagnostic_code = excluded.diagnostic_code",
                     params![
@@ -332,8 +406,13 @@ impl SourceStatusStore {
                         duplicate,
                         rejected,
                         warnings,
+                        subscription_upload,
+                        subscription_download,
+                        subscription_total,
+                        subscription_expire,
                         using_last_known_good,
                         detail.diagnostic_code.as_deref(),
+                        replace_subscription_info,
                     ],
                 )
                 .map_err(StatsStoreError::Database)?;
@@ -416,6 +495,8 @@ impl SourceStatusStore {
                     "SELECT health, last_attempt_wall_seconds,
                             last_success_wall_seconds, generation, accepted,
                             duplicate_count, rejected, warnings,
+                            subscription_upload_bytes, subscription_download_bytes,
+                            subscription_total_bytes, subscription_expire_at,
                             using_last_known_good, diagnostic_code
                      FROM source_status WHERE source_id = ?1",
                     [source_id.as_str()],
@@ -432,8 +513,12 @@ impl SourceStatusStore {
                             duplicate: row.get::<_, i64>(5)?.max(0) as u64,
                             rejected: row.get::<_, i64>(6)?.max(0) as u64,
                             warnings: row.get::<_, i64>(7)?.max(0) as u64,
-                            using_last_known_good: row.get(8)?,
-                            diagnostic_code: row.get(9)?,
+                            subscription_upload_bytes: optional_non_negative(row.get(8)?),
+                            subscription_download_bytes: optional_non_negative(row.get(9)?),
+                            subscription_total_bytes: optional_non_negative(row.get(10)?),
+                            subscription_expire_at: row.get(11)?,
+                            using_last_known_good: row.get(12)?,
+                            diagnostic_code: row.get(13)?,
                         })
                     },
                 )
@@ -450,6 +535,10 @@ impl SourceStatusStore {
                     duplicate: 0,
                     rejected: 0,
                     warnings: 0,
+                    subscription_upload_bytes: None,
+                    subscription_download_bytes: None,
+                    subscription_total_bytes: None,
+                    subscription_expire_at: None,
                     using_last_known_good: false,
                     diagnostic_code: None,
                 });
@@ -462,6 +551,18 @@ impl SourceStatusStore {
 #[cfg(feature = "subscription-update")]
 fn count_i64(value: usize) -> Result<i64, StatsStoreError> {
     i64::try_from(value).map_err(|_| StatsStoreError::BytesOutOfRange)
+}
+
+#[cfg(feature = "subscription-update")]
+fn optional_count_i64(value: Option<u64>) -> Result<Option<i64>, StatsStoreError> {
+    value
+        .map(|value| i64::try_from(value).map_err(|_| StatsStoreError::BytesOutOfRange))
+        .transpose()
+}
+
+#[cfg(feature = "subscription-update")]
+fn optional_non_negative(value: Option<i64>) -> Option<u64> {
+    value.map(|value| value.max(0) as u64)
 }
 
 #[cfg(feature = "subscription-update")]

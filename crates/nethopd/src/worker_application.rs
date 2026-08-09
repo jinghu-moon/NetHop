@@ -1,7 +1,7 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(feature = "subscription-update")]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 #[cfg(feature = "subscription-update")]
 use std::sync::{
@@ -10,15 +10,18 @@ use std::sync::{
 };
 
 use nethop_android::{
-    CapabilityError, CapabilityReport, NetworkHealthVerifier, PlanSlot, PrivateDnsFactsSource,
-    UpdateNotificationOutcome, UpdateNotificationSink,
+    CapabilityError, CapabilityReport, PlanSlot, PrivateDnsFactsSource, UpdateNotificationOutcome,
+    UpdateNotificationSink,
 };
 #[cfg(feature = "subscription-update")]
 use nethop_android::{CapabilityStatus, ResourceCandidate, WifiFactsSource};
 use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
 #[cfg(feature = "subscription-update")]
 use nethop_core::{ManagedOptions, TunStack};
-use nethop_protocol::{ControlMethod, ControlRequest, ControlResponse, ErrorDomain, EventKind};
+use nethop_protocol::{
+    ControlError, ControlMethod, ControlParams, ControlRequest, ControlResponse, ErrorDomain,
+    EventKind, PROTOCOL_VERSION, WebUiErrorKind, WebUiPayloadOperation,
+};
 use serde_json::json;
 
 #[cfg(feature = "subscription-update")]
@@ -26,11 +29,11 @@ use crate::worker_services::{unavailable_control_error, unavailable_control_erro
 use crate::{
     ActiveRuntime, CandidateProcess, CapabilitySource, ControlCommand, ControlRequestHandler,
     ControlSnapshot, CurrentGenerationActivator, DataPlaneHealthProbe, HealthProbe,
-    NetworkController, RestartBudget, RestartDecision, RuntimeTick, UpdateStatus,
-    WorkerControlHandler, WorkerRecoveryError, WorkerRuntime, WorkerRuntimeLimits,
+    NetworkController, RestartBudget, RestartDecision, RuntimeHealthVerifier, RuntimeTick,
+    UpdateStatus, WorkerControlHandler, WorkerRecoveryError, WorkerRuntime, WorkerRuntimeLimits,
     WorkerServiceError, WorkerServiceTasks,
 };
-use crate::{CandidateChecker, CoreLauncher, OperationalControl};
+use crate::{CandidateChecker, CoreLauncher, OperationalControl, WebUiPayloadStore};
 #[cfg(feature = "subscription-update")]
 use crate::{
     ConfigChange, ConfigRuntime, ConfigRuntimeCheckpoint, RuleSetUpdatePreparation,
@@ -448,6 +451,9 @@ where
             .map_err(|_| RuntimePolicyError::CoreHealth)?;
         self.data_plane_health
             .replace_inbound_port(inbound_port)
+            .map_err(|_| RuntimePolicyError::DataPlaneHealth)?;
+        self.data_plane_health
+            .replace_health_timeout(health_timeout)
             .map_err(|_| RuntimePolicyError::DataPlaneHealth)
     }
 }
@@ -475,6 +481,9 @@ where
     #[cfg(feature = "subscription-update")]
     dry_run: bool,
     event_hub: crate::EventHub,
+    next_traffic_sample: Duration,
+    webui_payload_store: Option<WebUiPayloadStore>,
+    next_payload_cleanup: Duration,
     #[cfg(feature = "subscription-update")]
     update_schedule: Box<dyn RuntimeUpdateSchedule>,
     #[cfg(feature = "subscription-update")]
@@ -529,7 +538,7 @@ where
     N: NetworkController,
     S: RuntimeRecoverySource<N>,
     S::Process: CandidateProcess,
-    V: NetworkHealthVerifier,
+    V: RuntimeHealthVerifier,
     C: WorkerClock,
 {
     pub fn new(
@@ -575,6 +584,9 @@ where
             #[cfg(feature = "subscription-update")]
             dry_run: self.dry_run,
             event_hub: self.event_hub,
+            next_traffic_sample: self.next_traffic_sample,
+            webui_payload_store: self.webui_payload_store,
+            next_payload_cleanup: self.next_payload_cleanup,
             #[cfg(feature = "subscription-update")]
             update_schedule: self.update_schedule,
             #[cfg(feature = "subscription-update")]
@@ -630,7 +642,7 @@ where
     N: NetworkController,
     S: RuntimeRecoverySource<N>,
     S::Process: CandidateProcess,
-    V: NetworkHealthVerifier,
+    V: RuntimeHealthVerifier,
     C: WorkerClock,
     U: RuntimeUpdateSource,
 {
@@ -669,6 +681,9 @@ where
             #[cfg(feature = "subscription-update")]
             dry_run: false,
             event_hub: crate::EventHub::default(),
+            next_traffic_sample: Duration::ZERO,
+            webui_payload_store: None,
+            next_payload_cleanup: Duration::ZERO,
             #[cfg(feature = "subscription-update")]
             update_schedule: Box::new(UnavailableUpdateSchedule),
             #[cfg(feature = "subscription-update")]
@@ -720,6 +735,11 @@ where
 
     pub fn with_operational_control(mut self, control: OperationalControl) -> Self {
         self.operational_control = Some(control);
+        self
+    }
+
+    pub fn with_webui_payload_store(mut self, store: WebUiPayloadStore) -> Self {
+        self.webui_payload_store = Some(store);
         self
     }
 
@@ -1070,6 +1090,13 @@ where
                     .verifier
                     .replace_inbound_port(advanced.inbound_port())
                     .is_ok();
+            let runtime_policy_ready = runtime_policy_ready
+                && self
+                    .verifier
+                    .replace_health_timeout(Duration::from_secs(u64::from(
+                        advanced.health_timeout_seconds(),
+                    )))
+                    .is_ok();
             if !runtime_policy_ready {
                 self.event_hub.publish(
                     EventKind::Config,
@@ -1283,9 +1310,10 @@ where
         {
             Ok(Some(active)) => {
                 let generation = active.generation();
+                let state = active.state();
                 self.restart_budget.clear();
                 self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
-                self.publish_snapshot(RuntimeState::RunningTproxy, Some(generation));
+                self.publish_snapshot(state, Some(generation));
                 self.replay_selector();
             }
             Ok(None) => {
@@ -1309,7 +1337,7 @@ where
         let cleanup_failed = self
             .runtime
             .as_mut()
-            .is_some_and(|runtime| runtime.stop(&mut self.network).is_err());
+            .is_some_and(|runtime| runtime.stop(&mut self.network, &mut self.verifier).is_err());
         self.runtime = None;
         self.publish_snapshot(RuntimeState::FailOpenDirect, None);
         if cleanup_failed {
@@ -1483,7 +1511,7 @@ where
         };
         let generation = active.generation();
         if self.rule_set_updater.commit_update().is_err() {
-            let cleanup_failed = active.stop(&mut self.network).is_err();
+            let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
             if cleanup_failed {
                 self.publish_snapshot(RuntimeState::CircuitOpen, None);
                 self.publish_rule_set_event("commit_cleanup_failed");
@@ -1494,8 +1522,9 @@ where
         }
 
         self.restart_budget.clear();
+        let state = active.state();
         self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
-        self.publish_snapshot(RuntimeState::RunningTproxy, Some(generation));
+        self.publish_snapshot(state, Some(generation));
         self.replay_selector();
         self.publish_rule_set_event("updated");
         true
@@ -1651,7 +1680,7 @@ where
             .as_ref()
             .is_some_and(|config| !config.disk_matches_current())
         {
-            let cleanup_failed = active.stop(&mut self.network).is_err();
+            let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
             let _ = self.updater.discard(prepared);
             self.publish_update_status(UpdateStatus::Failed);
             if cleanup_failed {
@@ -1660,7 +1689,7 @@ where
             return Ok(());
         }
         if self.updater.commit(prepared).is_err() {
-            let cleanup_failed = active.stop(&mut self.network).is_err();
+            let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
             self.publish_update_status(UpdateStatus::Failed);
             if cleanup_failed {
                 return Err(WorkerServiceError::ShutdownFailed);
@@ -1674,7 +1703,7 @@ where
             .as_ref()
             .is_some_and(|config| !config.disk_matches_current())
         {
-            let cleanup_failed = active.stop(&mut self.network).is_err();
+            let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
             self.publish_update_status(UpdateStatus::Failed);
             if cleanup_failed {
                 return Err(WorkerServiceError::ShutdownFailed);
@@ -1682,9 +1711,10 @@ where
             return Ok(());
         }
         self.restart_budget.clear();
+        let state = active.state();
         self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
         self.publish_update_status(UpdateStatus::Succeeded);
-        self.publish_snapshot(RuntimeState::RunningTproxy, Some(generation));
+        self.publish_snapshot(state, Some(generation));
         self.replay_selector();
         Ok(())
     }
@@ -1793,6 +1823,151 @@ where
         }
         Ok(())
     }
+
+    fn sample_traffic_if_due(&mut self, now: Duration) {
+        if self.event_hub.traffic_subscribers() == 0 || now < self.next_traffic_sample {
+            return;
+        }
+        self.next_traffic_sample = now.saturating_add(Duration::from_secs(1));
+        let snapshot = self.snapshot();
+        let Some(control) = self.operational_control.as_mut() else {
+            return;
+        };
+        let Ok(mut result) = control.handle(
+            ControlMethod::TrafficGet,
+            &ControlParams::default(),
+            snapshot.state,
+            snapshot.generation,
+            &self.policy,
+        ) else {
+            return;
+        };
+        if let Some(object) = result.as_object_mut() {
+            object.insert("kind".into(), json!("traffic"));
+        }
+        self.event_hub.publish(EventKind::Traffic, result);
+    }
+
+    fn handle_webui_payload(&mut self, request: ControlRequest) -> ControlResponse {
+        let request_id = request.request_id().clone();
+        let generation = self.snapshot().generation.map(GenerationId::get);
+        let Some(store) = self.webui_payload_store.clone() else {
+            return webui_payload_failure(request_id, generation, WebUiErrorKind::Unavailable);
+        };
+        let namespace = request
+            .params()
+            .payload_namespace()
+            .expect("protocol validates payload namespace");
+        match request.method() {
+            ControlMethod::WebUiPayloadCreate => match store.create(namespace) {
+                Ok(handle) => ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({"handle":handle,"namespace":namespace}),
+                ),
+                Err(_) => {
+                    webui_payload_failure(request_id, generation, WebUiErrorKind::Unavailable)
+                }
+            },
+            ControlMethod::WebUiPayloadAppend => {
+                let handle = request.params().payload_handle().expect("validated handle");
+                let chunk = request.params().payload_chunk().expect("validated chunk");
+                match store.append(namespace, handle, chunk) {
+                    Ok(bytes) => ControlResponse::success(
+                        request_id,
+                        generation,
+                        json!({"accepted":true,"bytes":bytes}),
+                    ),
+                    Err(crate::WebUiPayloadError::LimitExceeded) => {
+                        webui_payload_failure(request_id, generation, WebUiErrorKind::LimitExceeded)
+                    }
+                    Err(_) => webui_payload_failure(
+                        request_id,
+                        generation,
+                        WebUiErrorKind::InvalidPayload,
+                    ),
+                }
+            }
+            ControlMethod::WebUiPayloadRemove => {
+                let handle = request.params().payload_handle().expect("validated handle");
+                match store.remove(namespace, handle) {
+                    Ok(()) => {
+                        ControlResponse::success(request_id, generation, json!({"removed":true}))
+                    }
+                    Err(_) => webui_payload_failure(
+                        request_id,
+                        generation,
+                        WebUiErrorKind::InvalidPayload,
+                    ),
+                }
+            }
+            ControlMethod::WebUiPayloadCommit => {
+                let handle = request.params().payload_handle().expect("validated handle");
+                let operation = request
+                    .params()
+                    .payload_operation()
+                    .expect("validated operation");
+                let bytes = match store.consume(namespace, handle) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return webui_payload_failure(
+                            request_id,
+                            generation,
+                            WebUiErrorKind::InvalidPayload,
+                        );
+                    }
+                };
+                let params = match serde_json::from_slice::<ControlParams>(&bytes) {
+                    Ok(params) => params,
+                    Err(_) => {
+                        return webui_payload_failure(
+                            request_id,
+                            generation,
+                            WebUiErrorKind::InvalidPayload,
+                        );
+                    }
+                };
+                let method = match operation {
+                    WebUiPayloadOperation::ConfigValidate => ControlMethod::ConfigValidate,
+                    WebUiPayloadOperation::ConfigApply => ControlMethod::ConfigApply,
+                    WebUiPayloadOperation::ConfigMutate => ControlMethod::ConfigMutate,
+                    WebUiPayloadOperation::SubscriptionImportPreview => {
+                        ControlMethod::SubscriptionImportPreview
+                    }
+                    WebUiPayloadOperation::SubscriptionImportApply => {
+                        ControlMethod::SubscriptionImportApply
+                    }
+                    WebUiPayloadOperation::BackupRestore => ControlMethod::ConfigApply,
+                };
+                let inner =
+                    match ControlRequest::new(request_id.clone(), method).with_params(params) {
+                        Ok(request) => request,
+                        Err(_) => {
+                            return webui_payload_failure(
+                                request_id,
+                                generation,
+                                WebUiErrorKind::InvalidPayload,
+                            );
+                        }
+                    };
+                self.handle(inner)
+            }
+            _ => unreachable!("payload handler is called only for payload methods"),
+        }
+    }
+}
+
+fn webui_payload_failure(
+    request_id: nethop_protocol::RequestId,
+    generation: Option<u64>,
+    kind: WebUiErrorKind,
+) -> ControlResponse {
+    ControlResponse::failure(
+        request_id,
+        generation,
+        ControlError::new(kind.error_code(), "webui operation failed")
+            .expect("bounded WebUI error message is valid"),
+    )
 }
 
 impl<S, N, V, C, U> ControlRequestHandler for WorkerApplication<S, N, V, C, U>
@@ -1800,11 +1975,20 @@ where
     N: NetworkController,
     S: RuntimeRecoverySource<N>,
     S::Process: CandidateProcess,
-    V: NetworkHealthVerifier,
+    V: RuntimeHealthVerifier,
     C: WorkerClock,
     U: RuntimeUpdateSource,
 {
     fn handle(&mut self, request: ControlRequest) -> ControlResponse {
+        if matches!(
+            request.method(),
+            ControlMethod::WebUiPayloadCreate
+                | ControlMethod::WebUiPayloadAppend
+                | ControlMethod::WebUiPayloadCommit
+                | ControlMethod::WebUiPayloadRemove
+        ) {
+            return self.handle_webui_payload(request);
+        }
         if request.method() == ControlMethod::RuleSetStatus {
             let request_id = request.request_id().clone();
             let generation = self.snapshot().generation.map(GenerationId::get);
@@ -1971,8 +2155,17 @@ where
             let result = match request.method() {
                 ControlMethod::LogsGet => self
                     .event_hub
-                    .structured_log_history(request.params().limit().unwrap_or(64))
-                    .map(|entries| json!({"entries":entries,"newest_first":true})),
+                    .structured_log_history(
+                        request.params().log_channel(),
+                        request.params().limit().unwrap_or(64),
+                    )
+                    .map(|entries| {
+                        json!({
+                            "entries":entries,
+                            "channel":request.params().log_channel(),
+                            "newest_first":true
+                        })
+                    }),
                 ControlMethod::LogsClear => self
                     .event_hub
                     .clear_structured_logs()
@@ -1991,10 +2184,40 @@ where
                 ),
             };
         }
+        if request.method() == ControlMethod::MetricsGet {
+            let request_id = request.request_id().clone();
+            let snapshot = self.snapshot();
+            let generation = snapshot.generation.map(GenerationId::get);
+            let process = self
+                .runtime
+                .as_ref()
+                .and_then(WorkerRuntime::process_identity);
+            let Some(control) = self.operational_control.as_ref() else {
+                return ControlResponse::failure(
+                    request_id,
+                    generation,
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Core,
+                        "METRICS-UNAVAILABLE",
+                    ),
+                );
+            };
+            return ControlResponse::success(
+                request_id,
+                generation,
+                control.metrics_document(
+                    process,
+                    self.clock.now(),
+                    snapshot.state,
+                    snapshot.generation,
+                ),
+            );
+        }
         if matches!(
             request.method(),
             ControlMethod::NodeList
                 | ControlMethod::NodeTest
+                | ControlMethod::NodeTestAll
                 | ControlMethod::NodeSelect
                 | ControlMethod::NodeExport
                 | ControlMethod::ConnectionsGet
@@ -2133,15 +2356,16 @@ where
             let generation = self.snapshot().generation.map(GenerationId::get);
             match request.method() {
                 ControlMethod::ProtocolHello => {
-                    let compatible = request.params().manager_protocol_range() == Some((1, 1));
+                    let compatible = request.params().manager_protocol_range()
+                        == Some((PROTOCOL_VERSION, PROTOCOL_VERSION));
                     return ControlResponse::success(
                         request_id,
                         generation,
                         json!({
                             "manager_version": request.params().manager_version(),
                             "compatible": compatible,
-                            "daemon_protocol_min": 1,
-                            "daemon_protocol_max": 1,
+                            "daemon_protocol_min": PROTOCOL_VERSION,
+                            "daemon_protocol_max": PROTOCOL_VERSION,
                             "daemon_schema_min": crate::worker_config::CONFIG_SCHEMA_VERSION,
                             "daemon_schema_max": crate::worker_config::CONFIG_SCHEMA_VERSION,
                             "active_schema_version": crate::worker_config::CONFIG_SCHEMA_VERSION,
@@ -2150,17 +2374,19 @@ where
                                 "core.version_check",
                                 "config.schema", "capability.get", "config.mutate", "events.subscribe",
                                 "subscription.import_preview", "subscription.import_apply",
-                                "node.list", "node.test", "node.select", "node.export", "connections.get",
+                                "node.list", "node.test", "node.test_all", "node.select", "node.export", "connections.get",
                                 "connection.close", "connections.close_all", "logs.get", "logs.clear",
-                                "diagnostics.bundle", "topology.get"
+                                "diagnostics.bundle", "topology.get", "traffic.get", "metrics.get",
+                                "webui.payload.create", "webui.payload.append",
+                                "webui.payload.commit", "webui.payload.remove"
                             ],
                             "supported_features": [
                                 "multi_source", "config_cas", "change_preview", "typed_mutation",
                                 "event_stream", "app_scope", "interface_scope",
                                 "persistent_update_schedule", "log_retention", "selector_replay",
-                                "connection_control", "structured_log_control", "diagnostics_bundle"
+                                "connection_control", "structured_log_control", "log_channels", "runtime_metrics", "diagnostics_bundle"
                                 , "persistent_manual_source", "config_backup_v1"
-                                , "core_update_check"
+                                , "core_update_check", "traffic_event", "private_payload"
                             ]
                         }),
                     );
@@ -3109,7 +3335,7 @@ fn config_schema_document() -> serde_json::Value {
         ),
         enum_schema_field(
             "network.tun_stack",
-            json!("system"),
+            json!("gvisor"),
             "network",
             55,
             true,
@@ -3602,7 +3828,7 @@ fn enum_schema_field(
         risk_level,
         stage,
     );
-    value["enum"] = json!(variants);
+    value["enum_values"] = json!(variants);
     value
 }
 
@@ -3675,7 +3901,7 @@ where
     N: NetworkController,
     S: RuntimeRecoverySource<N>,
     S::Process: CandidateProcess,
-    V: NetworkHealthVerifier,
+    V: RuntimeHealthVerifier,
     C: WorkerClock,
     U: RuntimeUpdateSource,
 {
@@ -3727,6 +3953,12 @@ where
             .map(|_| self.wifi_scene_next_probe.saturating_sub(now));
         #[cfg(not(feature = "subscription-update"))]
         let wifi_scene = None;
+        let traffic = (self.event_hub.traffic_subscribers() > 0)
+            .then(|| self.next_traffic_sample.saturating_sub(now));
+        let payload_cleanup = self
+            .webui_payload_store
+            .as_ref()
+            .map(|_| self.next_payload_cleanup.saturating_sub(now));
         runtime
             .into_iter()
             .chain(restart)
@@ -3735,6 +3967,8 @@ where
             .chain(rule_set_update)
             .chain(log_cleanup)
             .chain(wifi_scene)
+            .chain(traffic)
+            .chain(payload_cleanup)
             .min()
             .unwrap_or(IDLE_WAKEUP)
     }
@@ -3753,6 +3987,21 @@ where
             self.control.queue_command(ControlCommand::Update);
         }
         let now = self.clock.now();
+        self.sample_traffic_if_due(now);
+        if now >= self.next_payload_cleanup {
+            if let Some(store) = self.webui_payload_store.as_ref() {
+                if store
+                    .cleanup_expired(SystemTime::now(), crate::PAYLOAD_TTL)
+                    .is_err()
+                {
+                    self.event_hub.publish(
+                        EventKind::Runtime,
+                        json!({"kind":"webui_payload","state":"cleanup_degraded"}),
+                    );
+                }
+            }
+            self.next_payload_cleanup = now.saturating_add(Duration::from_secs(5 * 60));
+        }
         #[cfg(feature = "subscription-update")]
         self.run_scheduled_core_version_check(now);
         #[cfg(feature = "subscription-update")]

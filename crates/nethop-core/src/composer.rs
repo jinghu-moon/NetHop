@@ -383,7 +383,7 @@ impl ManagedProfile {
             capture,
             outbounds,
             clash_api,
-            tun_stack: TunStack::System,
+            tun_stack: TunStack::Gvisor,
             options: ManagedOptions::default(),
         })
     }

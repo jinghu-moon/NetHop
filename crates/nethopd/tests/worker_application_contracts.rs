@@ -31,10 +31,10 @@ use nethopd::{
     CandidateChecker, CapabilitySource, ConfigRuntime, ConfigStore, CoreLauncher,
     CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe, HealthProbe,
     HealthProbeError, InMemoryScheduleStore, PersistentCoreVersionSchedule, RuleSetUpdateError,
-    RuleSetUpdatePreparation, RunnerError, RuntimeCoreVersionSchedule, RuntimePolicyError,
-    RuntimeRuleSetSchedule, RuntimeRuleSetUpdateSource, RuntimeUpdateError, RuntimeUpdateSource,
-    SchedulerError, SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceStatusStore,
-    UpdateStatus,
+    RuleSetUpdatePreparation, RunnerError, RuntimeAttachmentView, RuntimeCoreVersionSchedule,
+    RuntimePolicyError, RuntimeRuleSetSchedule, RuntimeRuleSetUpdateSource, RuntimeUpdateError,
+    RuntimeUpdateSource, SchedulerError, SourceIdEntropy, SourceRegistry, SourceRegistryError,
+    SourceStatusStore, UpdateStatus,
 };
 use nethopd::{CoreReleaseBodyFetcher, CoreVersion, CoreVersionCheckError, CoreVersionChecker};
 #[cfg(feature = "subscription-update")]
@@ -316,7 +316,7 @@ impl DataPlaneHealthProbe<RuleSetProcess> for RuleSetDataPlaneHealth {
     fn wait_healthy(
         &mut self,
         _process: &mut RuleSetProcess,
-        _plan: &NetworkPlan,
+        _attachment: RuntimeAttachmentView<'_>,
         _capabilities: &CapabilityReport,
     ) -> Result<(), DataPlaneHealthError> {
         Ok(())
@@ -1468,12 +1468,12 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     .with_source_status_store(source_status);
 
     let hello = request("hello", ControlMethod::ProtocolHello)
-        .with_params(ControlParams::hello("manager-alpha".into(), 1, 1))
+        .with_params(ControlParams::hello("manager-alpha".into(), 2, 2))
         .unwrap();
     let hello = application.handle(hello);
     assert!(hello.ok());
     assert_eq!(hello.result().unwrap()["compatible"], true);
-    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 1);
+    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 2);
     assert!(
         hello.result().unwrap()["supported_features"]
             .as_array()
@@ -1483,7 +1483,7 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     );
 
     let incompatible = request("hello-new", ControlMethod::ProtocolHello)
-        .with_params(ControlParams::hello("manager-new".into(), 1, 2))
+        .with_params(ControlParams::hello("manager-old".into(), 1, 1))
         .unwrap();
     assert_eq!(
         application.handle(incompatible).result().unwrap()["compatible"],
@@ -1533,6 +1533,14 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
         assert_eq!(field["max_items"], 512);
         assert_eq!(field["apply_impact"], "generation_activation");
     }
+    let tun_stack = fields
+        .iter()
+        .find(|field| field["field_id"] == "network.tun_stack")
+        .expect("missing TUN stack schema field");
+    assert_eq!(tun_stack["default"], "gvisor");
+    assert_eq!(tun_stack["enum_values"], json!(["system", "gvisor"]));
+    assert_eq!(tun_stack["apply_impact"], "generation_activation");
+    assert_eq!(tun_stack["capability_key"], "capture.tun");
     for field in fields {
         for key in [
             "field_id",

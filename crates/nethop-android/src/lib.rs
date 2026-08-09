@@ -54,7 +54,7 @@ pub use private_dns::{
 };
 pub use tun::{
     TunCandidate, TunFallbackError, TunFallbackPlan, TunFallbackPlanner, TunHealthError,
-    TunHealthVerifier, default_tun_interface,
+    TunHealthProbe, TunHealthVerifier, default_tun_interface,
 };
 pub use wifi_scene::{
     CommandWifiFactsSource, WifiFactsSource, WifiNetworkFacts, WifiSceneAction, WifiSceneDecision,

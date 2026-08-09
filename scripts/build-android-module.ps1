@@ -3,6 +3,7 @@ param(
     [string]$SingBoxSource = "refer/sing-box-v1.13.15",
     [string]$SingBoxArchive,
     [string]$NdkVersion = "29.0.14206865",
+    [string]$OutputDirectory = "out/android-arm64",
     [switch]$AllowGoVersionMismatch
 )
 
@@ -10,7 +11,12 @@ $ErrorActionPreference = "Stop"
 $workspace = Split-Path -Parent $PSScriptRoot
 $mappingPath = Join-Path $workspace "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json"
 $moduleTemplate = Join-Path $workspace "module"
-$outputRoot = Join-Path $workspace "out/android-arm64"
+$webui = Join-Path $workspace "webui"
+$outputRoot = [IO.Path]::GetFullPath((Join-Path $workspace $OutputDirectory))
+$workspaceRoot = [IO.Path]::GetFullPath($workspace).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+if (-not $outputRoot.StartsWith($workspaceRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "module output must stay inside the workspace"
+}
 $stage = Join-Path $outputRoot "module"
 $ndk = Join-Path $env:LOCALAPPDATA "Android/Sdk/ndk/$NdkVersion/toolchains/llvm/prebuilt/windows-x86_64"
 $clang = Join-Path $ndk "bin/aarch64-linux-android23-clang.cmd"
@@ -51,9 +57,45 @@ function Get-Sha256 {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-foreach ($required in @($mappingPath, $moduleTemplate, $clang, $clangxx, $ar, $readelf)) {
+function Get-TreeSha256 {
+    param([string[]]$Paths, [string]$Root)
+    $records = foreach ($path in $Paths) {
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            Get-ChildItem -LiteralPath $path -Recurse -File | ForEach-Object {
+                "$([IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')) $(Get-Sha256 $_.FullName)"
+            }
+        } else {
+            "$([IO.Path]::GetRelativePath($Root, $path).Replace('\', '/')) $(Get-Sha256 $path)"
+        }
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes((($records | Sort-Object) -join "`n"))
+    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+foreach ($required in @($mappingPath, $moduleTemplate, (Join-Path $webui "package.json"), (Join-Path $webui "package-lock.json"), $clang, $clangxx, $ar, $readelf)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "required build input is missing: $required"
+    }
+}
+
+Invoke-Checked npm @("ci", "--ignore-scripts") $webui
+foreach ($script in @("build", "check:imports", "check:dependencies", "check:bundle", "check:security", "report:release")) {
+    Invoke-Checked npm @("run", $script) $webui
+}
+$webroot = Join-Path $moduleTemplate "webroot"
+if (-not (Test-Path -LiteralPath (Join-Path $webroot "index.html") -PathType Leaf)) {
+    throw "WebUI production build did not publish module/webroot/index.html"
+}
+$webuiSourceSha256 = Get-TreeSha256 -Paths @(
+    (Join-Path $webui "src"), (Join-Path $webui "package.json"),
+    (Join-Path $webui "package-lock.json"), (Join-Path $webui "vite.config.ts"),
+    (Join-Path $webui "webui-budget.json"), (Join-Path $webui "scripts")
+) -Root $workspace
+$webuiPackage = Get-Content -LiteralPath (Join-Path $webui "package.json") -Raw | ConvertFrom-Json
+$webuiArtifactRoot = Join-Path $workspace "artifacts/webui"
+foreach ($requiredArtifact in @("production-bundle.json", "bundle-metafile.json", "webui-sbom.cdx.json", "webui-licenses.json")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $webuiArtifactRoot $requiredArtifact) -PathType Leaf)) {
+        throw "WebUI release artifact is missing: $requiredArtifact"
     }
 }
 
@@ -196,6 +238,10 @@ Copy-Item -LiteralPath (Join-Path $workspace "LICENSE") -Destination (Join-Path 
 if (-not $SingBoxArchive) {
     Copy-Item -LiteralPath (Join-Path $singBoxSourcePath "LICENSE") -Destination (Join-Path $stage "licenses/sing-box-GPL-3.0.txt")
 }
+Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-sbom.cdx.json") -Destination (Join-Path $stage "licenses/webui-sbom.cdx.json")
+Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-licenses.json") -Destination (Join-Path $stage "licenses/webui-licenses.json")
+Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "production-bundle.json") -Destination (Join-Path $stage "licenses/webui-production-bundle.json")
+Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "bundle-metafile.json") -Destination (Join-Path $stage "licenses/webui-bundle-metafile.json")
 
 $binaryRecords = foreach ($binary in @("nethopd", "nethopctl", "sing-box")) {
     $path = Join-Path $stage "bin/$binary"
@@ -211,6 +257,22 @@ $ruleSetRecords = foreach ($ruleSet in @("cn-domain.srs", "cn-ip.srs")) {
         path = "rulesets/$ruleSet"
         bytes = (Get-Item -LiteralPath $path).Length
         sha256 = Get-Sha256 $path
+    }
+}
+$webuiRecords = Get-ChildItem -LiteralPath (Join-Path $stage "webroot") -Recurse -File | ForEach-Object {
+    [ordered]@{
+        path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
+        bytes = $_.Length
+        sha256 = Get-Sha256 $_.FullName
+    }
+}
+$webuiMetadataRecords = Get-ChildItem -LiteralPath (Join-Path $stage "licenses") -File | Where-Object {
+    $_.Name -like "webui-*"
+} | ForEach-Object {
+    [ordered]@{
+        path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
+        bytes = $_.Length
+        sha256 = Get-Sha256 $_.FullName
     }
 }
 $manifest = [ordered]@{
@@ -239,16 +301,34 @@ $manifest = [ordered]@{
     development_override = (-not $goVersionMatches) -and -not [bool]$SingBoxArchive
     binaries = @($binaryRecords)
     rule_sets = @($ruleSetRecords)
+    webui = [ordered]@{
+        version = $webuiPackage.version
+        source_sha256 = $webuiSourceSha256
+        asset_sha256 = Get-TreeSha256 -Paths @((Join-Path $stage "webroot")) -Root $stage
+        vue = $webuiPackage.dependencies.vue
+        tdesign_mobile_vue = $webuiPackage.dependencies.'tdesign-mobile-vue'
+        tabler_icons_vue = $webuiPackage.dependencies.'@tabler/icons-vue'
+        tanstack_vue_virtual = $webuiPackage.dependencies.'@tanstack/vue-virtual'
+        assets = @($webuiRecords)
+        release_metadata = @($webuiMetadataRecords)
+    }
 }
 $manifestPath = Join-Path $stage "build-manifest.json"
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
 
 $checksumEntries = @($binaryRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
 $checksumEntries += @($ruleSetRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
+$checksumEntries += @($webuiRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
+$checksumEntries += @($webuiMetadataRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
 $checksumEntries += "$(Get-Sha256 $manifestPath)  build-manifest.json"
-$checksumEntries | Set-Content -LiteralPath (Join-Path $stage "checksums.sha256") -Encoding ascii
+$checksumPath = Join-Path $stage "checksums.sha256"
+[IO.File]::WriteAllText($checksumPath, (($checksumEntries -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+$checksumBytes = [IO.File]::ReadAllBytes($checksumPath)
+if ($checksumBytes.Contains([byte]0x0D) -or ($checksumBytes.Length -ge 3 -and $checksumBytes[0] -eq 0xEF -and $checksumBytes[1] -eq 0xBB -and $checksumBytes[2] -eq 0xBF)) {
+    throw "checksum manifest must be LF-only UTF-8 without BOM"
+}
 foreach ($entry in $checksumEntries) {
-    if ($entry -notmatch '^([0-9a-f]{64})  ([A-Za-z0-9./-]+)$') {
+    if ($entry -notmatch '^([0-9a-f]{64})  ([A-Za-z0-9._/-]+)$') {
         throw "generated checksum entry is invalid"
     }
     $asset = Join-Path $stage $Matches[2]
@@ -266,7 +346,7 @@ $archiveListing = & tar -tf $zipPath
 if ($LASTEXITCODE -ne 0 -or $archiveListing -contains ".gitkeep") {
     throw "module archive layout is invalid"
 }
-foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs")) {
+foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs", "webroot/index.html", "licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
     if ($archiveListing -notcontains $required) {
         throw "module archive is missing: $required"
     }

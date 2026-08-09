@@ -3,7 +3,7 @@
 use std::{fs, path::Path};
 
 use nethop_android::{AppCatalog, PackageSnapshot};
-use nethop_protocol::ConfigMutation;
+use nethop_protocol::{ApplicationPolicyMode, ApplicationTarget, ConfigMutation};
 use nethopd::{
     ConfigChange, ConfigRuntime, ConfigStore, SourceIdEntropy, SourceRegistry, SourceRegistryError,
 };
@@ -213,6 +213,67 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
         document["subscriptions"]["sources"][1]["source_id"],
         added_id
     );
+    assert_eq!(document["subscriptions"]["sources"][0]["enabled"], true);
+    assert_eq!(document["subscriptions"]["sources"][1]["enabled"], false);
+
+    let current = runtime.current().digest().to_owned();
+    runtime
+        .mutate_with_entropy(
+            &current,
+            &ConfigMutation::SelectSource {
+                source_id: added_id.clone(),
+            },
+            &mut FixedEntropy(5),
+        )
+        .unwrap();
+    let selected = runtime.redacted_document();
+    assert_eq!(selected["subscriptions"]["sources"][0]["enabled"], false);
+    assert_eq!(selected["subscriptions"]["sources"][1]["enabled"], true);
+    let persisted = fs::read_to_string(&config_path).unwrap();
+    let persisted: toml::Value = toml::from_str(&persisted).unwrap();
+    assert_eq!(
+        persisted["subscriptions"]["sources"][0]["enabled"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        persisted["subscriptions"]["sources"][1]["enabled"].as_bool(),
+        Some(true)
+    );
+}
+
+#[test]
+fn application_policy_mutation_updates_mode_and_targets_in_one_transaction() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    let registry_path = directory.path().join("source-registry.v1.json");
+    write(&config_path, "Primary", "https://one.example/sub", true);
+    let store = ConfigStore::new(&config_path).unwrap();
+    let registry = SourceRegistry::new(&registry_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let mut runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+
+    let digest = runtime.current().digest().to_owned();
+    runtime
+        .mutate_with_entropy(
+            &digest,
+            &ConfigMutation::SetApplicationPolicy {
+                mode: ApplicationPolicyMode::Whitelist,
+                targets: vec![ApplicationTarget::Uid { uid: 10123 }],
+            },
+            &mut FixedEntropy(2),
+        )
+        .unwrap();
+
+    let document = runtime.redacted_document();
+    assert_eq!(document["applications"]["mode"], "whitelist");
+    assert_eq!(
+        document["applications"]["targets"],
+        json!([{ "kind": "uid", "uid": 10123 }])
+    );
+    let persisted = fs::read_to_string(&config_path).unwrap();
+    assert!(persisted.contains("mode = \"whitelist\""));
+    assert!(persisted.contains("uid = 10123"));
 }
 
 #[test]

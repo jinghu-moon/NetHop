@@ -379,6 +379,21 @@ fn managed_composer_generates_tun_stack_without_tproxy_fields() {
 }
 
 #[test]
+fn managed_composer_defaults_tun_to_the_android_verified_gvisor_stack() {
+    let policy = CapturePolicy::new(CaptureMode::Tun, true, None, None, vec![], vec![]).unwrap();
+    let profile = ManagedProfile::new(
+        policy,
+        vec![outbound("node-a")],
+        ClashApi::new("127.0.0.1:9090", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
+    )
+    .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_slice(ManagedConfig::from_profile(profile).unwrap().bytes()).unwrap();
+
+    assert_eq!(value["inbounds"][0]["stack"], "gvisor");
+}
+
+#[test]
 fn managed_composer_rejects_non_loopback_api_and_leaks_no_secret_in_debug() {
     assert!(ClashApi::new("0.0.0.0:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_err());
     let api = ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();

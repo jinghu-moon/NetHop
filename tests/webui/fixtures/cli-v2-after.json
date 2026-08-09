@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "protocol_version": 2,
+  "inherits_legacy_commands_from": "cli-v1-before.json",
+  "allowed_legacy_method_changes": [],
+  "added_commands": [
+    { "id": "WebUiPayloadCreate", "args": ["webui", "payload", "create"], "method": "webui.payload.create" },
+    { "id": "WebUiPayloadAppend", "args": ["webui", "payload", "append"], "method": "webui.payload.append" },
+    { "id": "WebUiPayloadCommit", "args": ["webui", "payload", "commit"], "method": "webui.payload.commit" },
+    { "id": "WebUiPayloadRemove", "args": ["webui", "payload", "remove"], "method": "webui.payload.remove" }
+  ]
+}
