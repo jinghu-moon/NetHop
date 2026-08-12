@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let profile = ManagedProfile::new(
         policy,
         vec![node],
+        vec!["fixture-node".into()],
         ClashApi::new("127.0.0.1:9090", "fixture-secret-32-bytes-long-000")?,
     )?
     .with_tun_stack(TunStack::System);

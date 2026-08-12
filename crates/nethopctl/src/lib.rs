@@ -1,14 +1,26 @@
 #![doc = "Thin, file-independent client for the NetHop local control protocol."]
 
+use std::time::Duration;
+
 use nethop_protocol::{
     ConfigMutation, ControlMethod, ControlParams, ControlRequest, ControlResponse, EventKind,
-    LogChannel, RequestId, WebUiPayloadNamespace, WebUiPayloadOperation,
+    LogChannel, RequestId, SubscriptionMode, WebUiPayloadNamespace, WebUiPayloadOperation,
 };
 use serde_json::Value;
 use thiserror::Error;
 
 pub const DEFAULT_SOCKET_PATH: &str = "/data/adb/nethop/run/nethopd.sock";
 pub const EVENT_SESSION_MAX_RUNTIME_SECONDS: u64 = 300;
+
+pub const fn control_timeout(command: CliCommand, wait: bool) -> Duration {
+    if wait {
+        Duration::from_secs(30)
+    } else if matches!(command, CliCommand::NodeTestAll) {
+        Duration::from_secs(15)
+    } else {
+        Duration::from_secs(5)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliCommand {
@@ -29,7 +41,9 @@ pub enum CliCommand {
     NodeList,
     NodeTest,
     NodeTestAll,
-    NodeSelect,
+    NodeSelection,
+    NodeSelectAuto,
+    NodeSelectManual,
     NodeRemove,
     NodeExport,
     ConnectionsGet,
@@ -39,6 +53,10 @@ pub enum CliCommand {
     LogsTail,
     LogsClear,
     SubscriptionList,
+    SubscriptionMode,
+    SubscriptionModeSetSingle,
+    SubscriptionModeSetMerge,
+    SubscriptionSelect,
     SubscriptionAdd,
     SubscriptionRemove,
     SubscriptionMove,
@@ -258,7 +276,9 @@ impl CliCommand {
             Self::NodeList => ControlMethod::NodeList,
             Self::NodeTest => ControlMethod::NodeTest,
             Self::NodeTestAll => ControlMethod::NodeTestAll,
-            Self::NodeSelect => ControlMethod::NodeSelect,
+            Self::NodeSelection => ControlMethod::NodeSelectionGet,
+            Self::NodeSelectAuto => ControlMethod::NodeSelectAuto,
+            Self::NodeSelectManual => ControlMethod::NodeSelectManual,
             Self::NodeExport => ControlMethod::NodeExport,
             Self::NodeRemove => ControlMethod::ConfigMutate,
             Self::ConnectionsGet => ControlMethod::ConnectionsGet,
@@ -268,20 +288,26 @@ impl CliCommand {
             Self::LogsTail => ControlMethod::EventsSubscribe,
             Self::LogsClear => ControlMethod::LogsClear,
             Self::SubscriptionList => ControlMethod::ConfigGet,
+            Self::SubscriptionMode => ControlMethod::SubscriptionModeGet,
+            Self::SubscriptionModeSetSingle | Self::SubscriptionModeSetMerge => {
+                ControlMethod::SubscriptionModeSet
+            }
+            Self::SubscriptionSelect => ControlMethod::SubscriptionSelect,
             Self::ApplicationList => ControlMethod::ConfigGet,
             Self::SubscriptionImportPreview => ControlMethod::SubscriptionImportPreview,
             Self::SubscriptionImportApply => ControlMethod::SubscriptionImportApply,
             Self::SubscriptionAdd
             | Self::SubscriptionRemove
             | Self::SubscriptionMove
-            | Self::SubscriptionEnable
-            | Self::SubscriptionDisable
             | Self::ApplicationAddPackage
             | Self::ApplicationRemovePackage
             | Self::ApplicationAddUid
             | Self::ApplicationRemoveUid
             | Self::ApplicationMode
             | Self::NetworkSet => ControlMethod::ConfigMutate,
+            Self::SubscriptionEnable | Self::SubscriptionDisable => {
+                ControlMethod::SubscriptionSetEnabled
+            }
             Self::DiagnosticsBundle => ControlMethod::DiagnosticsBundle,
             Self::TopologyGet => ControlMethod::TopologyGet,
             Self::TrafficGet => ControlMethod::TrafficGet,
@@ -329,7 +355,12 @@ where
             Some("list") => CliCommand::NodeList,
             Some("test") => CliCommand::NodeTest,
             Some("test-all") => CliCommand::NodeTestAll,
-            Some("select") => CliCommand::NodeSelect,
+            Some("selection") => CliCommand::NodeSelection,
+            Some("select") => match arguments.next().as_ref().map(AsRef::as_ref) {
+                Some("auto") => CliCommand::NodeSelectAuto,
+                Some("manual") => CliCommand::NodeSelectManual,
+                _ => return Err(CliError::Usage),
+            },
             Some("remove") => CliCommand::NodeRemove,
             Some("export") => CliCommand::NodeExport,
             _ => return Err(CliError::Usage),
@@ -376,6 +407,16 @@ where
         },
         Some("subscription") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("list") => CliCommand::SubscriptionList,
+            Some("mode") => match arguments.next().as_ref().map(AsRef::as_ref) {
+                None => CliCommand::SubscriptionMode,
+                Some("set") => match arguments.next().as_ref().map(AsRef::as_ref) {
+                    Some("single") => CliCommand::SubscriptionModeSetSingle,
+                    Some("merge") => CliCommand::SubscriptionModeSetMerge,
+                    _ => return Err(CliError::Usage),
+                },
+                _ => return Err(CliError::Usage),
+            },
+            Some("select") => CliCommand::SubscriptionSelect,
             Some("add") => CliCommand::SubscriptionAdd,
             Some("remove") => CliCommand::SubscriptionRemove,
             Some("move") => CliCommand::SubscriptionMove,
@@ -420,6 +461,14 @@ where
         .collect();
     let command_length = match arguments.first().map(String::as_str) {
         Some("subscription") if arguments.get(1).map(String::as_str) == Some("import") => 3,
+        Some("subscription")
+            if arguments.get(1).map(String::as_str) == Some("mode")
+                && arguments.get(2).map(String::as_str) == Some("set") =>
+        {
+            4
+        }
+        Some("subscription") if arguments.get(1).map(String::as_str) == Some("mode") => 2,
+        Some("node") if arguments.get(1).map(String::as_str) == Some("select") => 3,
         Some("webui") if arguments.get(1).map(String::as_str) == Some("payload") => 3,
         Some(
             "config" | "capability" | "node" | "connection" | "logs" | "subscription"
@@ -460,7 +509,13 @@ where
         match option.as_str() {
             "--wait" if !wait => wait = true,
             "--if-needed" if !if_needed => if_needed = true,
-            "--source" if source_id.is_none() && command == CliCommand::Update => {
+            "--source"
+                if source_id.is_none()
+                    && matches!(
+                        command,
+                        CliCommand::Update | CliCommand::SubscriptionModeSetSingle
+                    ) =>
+            {
                 let value = options.next().cloned().ok_or(CliError::Usage)?;
                 if value.len() != 36
                     || !value.starts_with("src_")
@@ -557,7 +612,7 @@ where
                     && matches!(
                         command,
                         CliCommand::NodeTest
-                            | CliCommand::NodeSelect
+                            | CliCommand::NodeSelectManual
                             | CliCommand::NodeRemove
                             | CliCommand::NodeExport
                             | CliCommand::ConnectionClose
@@ -582,6 +637,7 @@ where
                             | CliCommand::SubscriptionMove
                             | CliCommand::SubscriptionEnable
                             | CliCommand::SubscriptionDisable
+                            | CliCommand::SubscriptionSelect
                             | CliCommand::ApplicationAddPackage
                             | CliCommand::ApplicationRemovePackage
                             | CliCommand::ApplicationAddUid
@@ -623,6 +679,9 @@ where
             | CliCommand::SubscriptionMove
             | CliCommand::SubscriptionEnable
             | CliCommand::SubscriptionDisable
+            | CliCommand::SubscriptionSelect
+            | CliCommand::SubscriptionModeSetSingle
+            | CliCommand::SubscriptionModeSetMerge
             | CliCommand::ApplicationAddPackage
             | CliCommand::ApplicationRemovePackage
             | CliCommand::ApplicationAddUid
@@ -676,7 +735,7 @@ where
     let target_command = matches!(
         command,
         CliCommand::NodeTest
-            | CliCommand::NodeSelect
+            | CliCommand::NodeSelectManual
             | CliCommand::NodeRemove
             | CliCommand::NodeExport
             | CliCommand::ConnectionClose
@@ -690,6 +749,7 @@ where
         | CliCommand::SubscriptionMove
         | CliCommand::SubscriptionEnable
         | CliCommand::SubscriptionDisable
+        | CliCommand::SubscriptionSelect
         | CliCommand::ApplicationAddPackage
         | CliCommand::ApplicationRemovePackage
         | CliCommand::ApplicationAddUid
@@ -750,6 +810,11 @@ fn parse_event_kinds(value: &str) -> Result<Vec<EventKind>, CliError> {
             "generation" => Ok(EventKind::Generation),
             "network" => Ok(EventKind::Network),
             "traffic" => Ok(EventKind::Traffic),
+            "subscription-mode" => Ok(EventKind::SubscriptionMode),
+            "subscription-active-set" => Ok(EventKind::SubscriptionActiveSet),
+            "node-selection" => Ok(EventKind::NodeSelection),
+            "node-active" => Ok(EventKind::NodeActive),
+            "node-test" => Ok(EventKind::NodeTest),
             _ => Err(CliError::Usage),
         })
         .collect()
@@ -855,15 +920,26 @@ pub fn build_request(
                 before_source_id: invocation.before.clone(),
             },
         ),
-        CliCommand::SubscriptionEnable | CliCommand::SubscriptionDisable => {
-            ControlParams::mutation(
+        CliCommand::SubscriptionModeSetSingle | CliCommand::SubscriptionModeSetMerge => {
+            ControlParams::subscription_mode_set(
                 invocation.expected_digest.clone().ok_or(CliError::Usage)?,
-                ConfigMutation::UpdateSource {
-                    source_id: invocation.positional[0].clone(),
-                    name: None,
-                    url: None,
-                    enabled: Some(invocation.command == CliCommand::SubscriptionEnable),
+                if invocation.command == CliCommand::SubscriptionModeSetSingle {
+                    SubscriptionMode::Single
+                } else {
+                    SubscriptionMode::Merge
                 },
+                invocation.source_id.clone(),
+            )
+        }
+        CliCommand::SubscriptionSelect => ControlParams::subscription_select(
+            invocation.expected_digest.clone().ok_or(CliError::Usage)?,
+            invocation.positional[0].clone(),
+        ),
+        CliCommand::SubscriptionEnable | CliCommand::SubscriptionDisable => {
+            ControlParams::subscription_set_enabled(
+                invocation.expected_digest.clone().ok_or(CliError::Usage)?,
+                invocation.positional[0].clone(),
+                invocation.command == CliCommand::SubscriptionEnable,
             )
         }
         CliCommand::ApplicationAddPackage => ControlParams::mutation(
@@ -922,7 +998,7 @@ pub fn build_request(
             ControlParams::event_subscription(invocation.event_kinds.clone())
         }
         CliCommand::NodeTest
-        | CliCommand::NodeSelect
+        | CliCommand::NodeSelectManual
         | CliCommand::NodeExport
         | CliCommand::ConnectionClose => {
             ControlParams::target(invocation.target.clone().ok_or(CliError::Usage)?)

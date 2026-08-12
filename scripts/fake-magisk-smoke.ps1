@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 $workspace = Split-Path -Parent $PSScriptRoot
 $module = Join-Path $workspace "module"
 $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("nethop-fake-magisk-" + [Guid]::NewGuid().ToString("N"))
+$currentSchemaVersion = 3
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -30,8 +31,8 @@ function Install-FakeModule {
     elseif ((Get-Item -LiteralPath $config).PSIsContainer) {
         throw "existing managed config is not a regular file"
     }
-    elseif ((Get-Content -LiteralPath $config -Raw) -notmatch '(?m)^\s*schema_version\s*=\s*2\s*$') {
-        $backup = "$config.pre-v2"
+    elseif ((Get-Content -LiteralPath $config -Raw) -notmatch "(?m)^\s*schema_version\s*=\s*$currentSchemaVersion\s*$") {
+        $backup = "$config.pre-v3"
         if (-not (Test-Path -LiteralPath $backup)) {
             Copy-Item -LiteralPath $config -Destination $backup
         }
@@ -65,8 +66,6 @@ function Invoke-FakeActivation {
 }
 
 try {
-    & (Join-Path $workspace "scripts/module-contracts.ps1")
-
     $moduleRoot = Join-Path $sandbox "data/adb/modules/nethop"
     $dataRoot = Join-Path $sandbox "data/adb/nethop"
     New-Item -ItemType Directory -Force -Path $moduleRoot, $dataRoot | Out-Null
@@ -77,21 +76,29 @@ try {
 
     $config = Install-FakeModule -DataRoot $dataRoot -ModuleRoot $moduleRoot
     Assert-True (Test-Path -LiteralPath $config -PathType Leaf) "fake install did not publish persistent config"
-    $customV2 = "schema_version = 2`n[service]`nenabled = false`n"
-    Set-Content -LiteralPath $config -NoNewline -Value $customV2
+    $customCurrent = @"
+schema_version = 3
+[service]
+enabled = false
+[[subscriptions.sources]]
+name = "Preserved"
+enabled = true
+url = "https://subscription.example.invalid/private-marker"
+"@
+    Set-Content -LiteralPath $config -NoNewline -Value $customCurrent
     $sameConfig = Install-FakeModule -DataRoot $dataRoot -ModuleRoot $moduleRoot
-    Assert-True ((Get-Content -LiteralPath $sameConfig -Raw) -eq $customV2) "upgrade overwrote v2 user config"
+    Assert-True ((Get-Content -LiteralPath $sameConfig -Raw) -eq $customCurrent) "upgrade overwrote current user config"
 
-    $legacyV1 = "schema_version = 1`n[service]`nenabled = true`n"
-    Set-Content -LiteralPath $config -NoNewline -Value $legacyV1
+    $legacyConfig = "schema_version = 2`n[service]`nenabled = true`n"
+    Set-Content -LiteralPath $config -NoNewline -Value $legacyConfig
     $resetConfig = Install-FakeModule -DataRoot $dataRoot -ModuleRoot $moduleRoot
-    $backup = "$config.pre-v2"
-    Assert-True ((Get-Content -LiteralPath $backup -Raw) -eq $legacyV1) "upgrade did not preserve the pre-v2 config"
-    Assert-True ((Get-Content -LiteralPath $resetConfig -Raw) -match '(?m)^schema_version = 2$') "upgrade did not reset a pre-v2 config"
+    $backup = "$config.pre-v3"
+    Assert-True ((Get-Content -LiteralPath $backup -Raw) -eq $legacyConfig) "upgrade did not preserve the pre-v3 config"
+    Assert-True ((Get-Content -LiteralPath $resetConfig -Raw) -match '(?m)^schema_version = 3$') "upgrade did not reset a pre-v3 config"
 
     Set-Content -LiteralPath $config -NoNewline -Value "schema_version = 1`n[service]`nenabled = false`n"
     [void](Install-FakeModule -DataRoot $dataRoot -ModuleRoot $moduleRoot)
-    Assert-True ((Get-Content -LiteralPath $backup -Raw) -eq $legacyV1) "upgrade overwrote the first pre-v2 backup"
+    Assert-True ((Get-Content -LiteralPath $backup -Raw) -eq $legacyConfig) "upgrade overwrote the first pre-v3 backup"
     foreach ($asset in @("cn-domain.srs", "cn-ip.srs")) {
         $moduleDigest = (Get-FileHash -LiteralPath (Join-Path $moduleRoot "rulesets/$asset") -Algorithm SHA256).Hash
         $persistentDigest = (Get-FileHash -LiteralPath (Join-Path $dataRoot "rulesets/$asset") -Algorithm SHA256).Hash

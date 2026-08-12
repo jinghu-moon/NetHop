@@ -8,14 +8,15 @@ use serde::Deserialize;
 use ureq::config::Config;
 use ureq::unversioned::resolver::{ArrayVec, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{
-    Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, RustlsConnector, Transport,
+    Buffers, ConnectProxyConnector, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout,
+    RustlsConnector, Transport,
 };
-use ureq::{Agent, Error as UreqError};
+use ureq::{Agent, Error as UreqError, Proxy, ProxyProtocol};
 
 use super::{
     ContentEncoding, FetchEndpoint, FetchError, FetchOutcome, FetchPolicy, FetchPolicyError,
-    ParserLimits, RequestProfile, SourceCache, decode_response_body, is_denied_ssrf_address,
-    next_redirect, parse_subscription_userinfo, read_bounded,
+    LocalFetchProxy, ParserLimits, RequestProfile, SourceCache, decode_response_body,
+    is_denied_ssrf_address, next_redirect, parse_subscription_userinfo, read_bounded,
 };
 
 #[derive(Debug)]
@@ -43,13 +44,50 @@ const MAX_RESOLVED_ADDRESSES: usize = 16;
 #[derive(Debug)]
 struct SafeDohResolver {
     agent: Agent,
+    local_proxy: Option<SocketAddr>,
 }
 
 impl Default for SafeDohResolver {
     fn default() -> Self {
         Self {
             agent: build_doh_agent(),
+            local_proxy: None,
         }
+    }
+}
+
+impl SafeDohResolver {
+    fn with_local_proxy(proxy: Option<&LocalFetchProxy>) -> Self {
+        Self {
+            agent: build_doh_agent(),
+            local_proxy: proxy.map(|value| SocketAddr::V4(value.endpoint())),
+        }
+    }
+
+    fn resolve_addresses(
+        &self,
+        uri: &ureq::http::Uri,
+        addresses: impl IntoIterator<Item = IpAddr>,
+        port: u16,
+    ) -> Result<ResolvedSocketAddrs, UreqError> {
+        let mut resolved: ResolvedSocketAddrs =
+            ArrayVec::from_fn(|_| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
+        for address in addresses {
+            let socket = SocketAddr::new(address, port);
+            let allowed_proxy = uri.scheme_str() == Some("http")
+                && self.local_proxy == Some(socket)
+                && address.is_loopback();
+            if is_denied_ssrf_address(address) && !allowed_proxy {
+                return Err(UreqError::Other(Box::new(
+                    SecurityAdapterError::DeniedAddress,
+                )));
+            }
+            resolved.push(socket);
+        }
+        if resolved.is_empty() {
+            return Err(UreqError::HostNotFound);
+        }
+        Ok(resolved)
     }
 }
 
@@ -63,13 +101,13 @@ impl Resolver for SafeDohResolver {
         let host = uri.host().ok_or(UreqError::HostNotFound)?;
         let port = uri.port_u16().unwrap_or(443);
         if let Ok(address) = host.parse::<IpAddr>() {
-            return resolved_addresses([address], port);
+            return self.resolve_addresses(uri, [address], port);
         }
 
         let mut addresses = BTreeSet::new();
         self.resolve_record_type(host, "A", &mut addresses)?;
         self.resolve_record_type(host, "AAAA", &mut addresses)?;
-        resolved_addresses(addresses, port)
+        self.resolve_addresses(uri, addresses, port)
     }
 }
 
@@ -171,24 +209,41 @@ impl Resolver for FixedResolver {
 }
 
 #[derive(Debug, Default)]
-struct SafeTcpConnector;
+struct SafeTcpConnector {
+    local_proxy: Option<SocketAddr>,
+}
 
-impl Connector<()> for SafeTcpConnector {
-    type Out = SafeTcpTransport;
+impl SafeTcpConnector {
+    fn with_local_proxy(proxy: Option<&LocalFetchProxy>) -> Self {
+        Self {
+            local_proxy: proxy.map(|value| SocketAddr::V4(value.endpoint())),
+        }
+    }
+
+    fn address_is_allowed(&self, details: &ConnectionDetails<'_>, address: SocketAddr) -> bool {
+        !is_denied_ssrf_address(address.ip())
+            || (details.uri.scheme_str() == Some("http")
+                && self.local_proxy == Some(address)
+                && address.ip().is_loopback())
+    }
+}
+
+impl<In: Transport> Connector<In> for SafeTcpConnector {
+    type Out = Either<In, SafeTcpTransport>;
 
     fn connect(
         &self,
         details: &ConnectionDetails<'_>,
-        chained: Option<()>,
+        chained: Option<In>,
     ) -> Result<Option<Self::Out>, UreqError> {
-        if chained.is_some() {
-            return Ok(None);
+        if let Some(transport) = chained {
+            return Ok(Some(Either::A(transport)));
         }
         if details.addrs.is_empty()
             || details
                 .addrs
                 .iter()
-                .any(|address| is_denied_ssrf_address(address.ip()))
+                .any(|address| !self.address_is_allowed(details, *address))
         {
             return Err(UreqError::Other(Box::new(
                 SecurityAdapterError::DeniedAddress,
@@ -212,7 +267,7 @@ impl Connector<()> for SafeTcpConnector {
                         details.config.input_buffer_size(),
                         details.config.output_buffer_size(),
                     );
-                    return Ok(Some(SafeTcpTransport::new(stream, buffers)));
+                    return Ok(Some(Either::B(SafeTcpTransport::new(stream, buffers))));
                 }
                 Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
                     last_error = Some(error);
@@ -347,13 +402,21 @@ pub(super) fn fetch_endpoint(
     cache: &SourceCache,
     policy: &FetchPolicy,
     limits: &ParserLimits,
+    local_proxy: Option<&LocalFetchProxy>,
 ) -> Result<FetchOutcome, FetchError> {
-    let config = build_ureq_config(policy);
+    let config = build_ureq_config(policy, local_proxy);
     debug_assert!(!config.tls_config().disable_verification());
     debug_assert!(config.tls_config().use_sni());
 
-    let connector = ().chain(SafeTcpConnector).chain(RustlsConnector::default());
-    let agent = Agent::with_parts(config, connector, SafeDohResolver::default());
+    let connector =
+        ().chain(ConnectProxyConnector::default())
+            .chain(SafeTcpConnector::with_local_proxy(local_proxy))
+            .chain(RustlsConnector::default());
+    let agent = Agent::with_parts(
+        config,
+        connector,
+        SafeDohResolver::with_local_proxy(local_proxy),
+    );
     fetch_with_agent(&agent, endpoint, profile, cache, policy, limits)
 }
 
@@ -376,15 +439,16 @@ fn build_doh_agent() -> Agent {
         .timeout_recv_response(Some(Duration::from_secs(5)))
         .timeout_recv_body(Some(Duration::from_secs(5)))
         .build();
-    let connector = ().chain(SafeTcpConnector).chain(RustlsConnector::default());
+    let connector = ().chain(SafeTcpConnector::default()).chain(RustlsConnector::default());
     Agent::with_parts(config, connector, FixedResolver(DOH_ADDRESS))
 }
 
-fn build_ureq_config(policy: &FetchPolicy) -> Config {
+fn build_ureq_config(policy: &FetchPolicy, local_proxy: Option<&LocalFetchProxy>) -> Config {
+    let proxy = local_proxy.map(build_ureq_proxy);
     Agent::config_builder()
         .http_status_as_error(false)
         .https_only(true)
-        .proxy(None)
+        .proxy(proxy)
         .max_redirects(0)
         .max_redirects_will_error(false)
         .save_redirect_history(false)
@@ -403,6 +467,17 @@ fn build_ureq_config(policy: &FetchPolicy) -> Config {
         .timeout_recv_response(Some(policy.timeouts.first_byte))
         .timeout_recv_body(Some(policy.timeouts.body))
         .build()
+}
+
+fn build_ureq_proxy(proxy: &LocalFetchProxy) -> Proxy {
+    Proxy::builder(ProxyProtocol::Http)
+        .host(&proxy.endpoint().ip().to_string())
+        .port(proxy.endpoint().port())
+        .username(proxy.username())
+        .password(proxy.password())
+        .resolve_target(false)
+        .build()
+        .expect("validated local fetch proxy must produce a valid ureq proxy")
 }
 
 fn fetch_with_agent(
@@ -545,7 +620,7 @@ fn map_ureq_error(error: UreqError) -> FetchError {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
     use std::sync::Arc;
     use std::thread;
 
@@ -601,6 +676,30 @@ mod tests {
     }
 
     #[test]
+    fn local_proxy_exception_never_allows_an_https_loopback_target() {
+        let proxy = LocalFetchProxy::new(
+            "127.0.0.1:7894".parse().unwrap(),
+            "nethop",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        let resolver = SafeDohResolver::with_local_proxy(Some(&proxy));
+        let proxy_uri = "http://127.0.0.1:7894".parse().unwrap();
+        let target_uri = "https://127.0.0.1:7894/subscription".parse().unwrap();
+
+        assert!(
+            resolver
+                .resolve_addresses(&proxy_uri, [Ipv4Addr::LOCALHOST.into()], 7894)
+                .is_ok()
+        );
+        assert!(
+            resolver
+                .resolve_addresses(&target_uri, [Ipv4Addr::LOCALHOST.into()], 7894)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn doh_response_rejects_more_than_resolver_capacity() {
         let answers = (1..=MAX_RESOLVED_ADDRESSES + 1)
             .map(|index| serde_json::json!({"type": 1, "data": format!("8.8.8.{index}")}))
@@ -622,6 +721,32 @@ mod tests {
         ) -> Result<ResolvedSocketAddrs, UreqError> {
             let mut addresses = self.empty();
             addresses.push(self.0);
+            Ok(addresses)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProxyFixtureResolver {
+        proxy: SocketAddr,
+        target_port: u16,
+    }
+
+    impl Resolver for ProxyFixtureResolver {
+        fn resolve(
+            &self,
+            uri: &ureq::http::Uri,
+            _: &Config,
+            _: NextTimeout,
+        ) -> Result<ResolvedSocketAddrs, UreqError> {
+            let mut addresses = self.empty();
+            match uri.host() {
+                Some("127.0.0.1") => addresses.push(self.proxy),
+                Some("subscription.test") => addresses.push(SocketAddr::new(
+                    "35.78.253.2".parse().unwrap(),
+                    self.target_port,
+                )),
+                _ => return Err(UreqError::HostNotFound),
+            }
             Ok(addresses)
         }
     }
@@ -655,7 +780,7 @@ mod tests {
     #[test]
     fn configured_agent_keeps_tls_verification_and_sni_enabled() {
         let policy = FetchPolicy::default();
-        let config = build_ureq_config(&policy);
+        let config = build_ureq_config(&policy, None);
         assert!(!config.tls_config().disable_verification());
         assert!(config.tls_config().use_sni());
         assert!(config.https_only());
@@ -759,6 +884,127 @@ mod tests {
             first.subscription_userinfo()
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn authenticated_local_connect_proxy_preserves_target_tls_validation() {
+        let cert_der = base64::engine::general_purpose::STANDARD
+            .decode(CERT_DER_BASE64)
+            .unwrap();
+        let key_der = base64::engine::general_purpose::STANDARD
+            .decode(KEY_DER_BASE64)
+            .unwrap();
+        let origin_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin_address = origin_listener.local_addr().unwrap();
+        let server_config = Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from(cert_der.clone())],
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
+                )
+                .unwrap(),
+        );
+        let origin = thread::spawn(move || {
+            let (tcp, _) = origin_listener.accept().unwrap();
+            let connection = ServerConnection::new(server_config).unwrap();
+            let mut stream = StreamOwned::new(connection, tcp);
+            let request = read_request_headers(&mut stream);
+            assert!(String::from_utf8(request).unwrap().starts_with("GET /sub "));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 32\r\nConnection: close\r\n\r\ntrojan://secret@example.com:443\n",
+                )
+                .unwrap();
+        });
+
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_address = proxy_listener.local_addr().unwrap();
+        let proxy_password = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let expected_auth = format!(
+            "Proxy-Authorization: Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("nethop:{proxy_password}"))
+        );
+        let proxy = thread::spawn(move || {
+            let (mut client, _) = proxy_listener.accept().unwrap();
+            let headers = String::from_utf8(read_request_headers(&mut client)).unwrap();
+            assert!(headers.starts_with(&format!(
+                "CONNECT subscription.test:{} HTTP/1.1",
+                origin_address.port()
+            )));
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains(&expected_auth.to_ascii_lowercase())
+            );
+            let mut upstream = TcpStream::connect(origin_address).unwrap();
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .unwrap();
+            let mut client_reader = client.try_clone().unwrap();
+            let mut upstream_writer = upstream.try_clone().unwrap();
+            let upload = thread::spawn(move || {
+                let _ = std::io::copy(&mut client_reader, &mut upstream_writer);
+                let _ = upstream_writer.shutdown(Shutdown::Write);
+            });
+            let _ = std::io::copy(&mut upstream, &mut client);
+            let _ = client.shutdown(Shutdown::Write);
+            upload.join().unwrap();
+        });
+
+        let local_proxy = LocalFetchProxy::new(
+            proxy_address.to_string().parse().unwrap(),
+            "nethop",
+            proxy_password,
+        )
+        .unwrap();
+        let root = Certificate::from_der(&cert_der).to_owned();
+        let config = Agent::config_builder()
+            .http_status_as_error(false)
+            .https_only(true)
+            .proxy(Some(build_ureq_proxy(&local_proxy)))
+            .max_redirects(0)
+            .max_idle_connections(0)
+            .max_idle_connections_per_host(0)
+            .tls_config(
+                TlsConfig::builder()
+                    .root_certs(RootCerts::new_with_certs(&[root]))
+                    .build(),
+            )
+            .build();
+        let connector =
+            ().chain(ConnectProxyConnector::default())
+                .chain(SafeTcpConnector::with_local_proxy(Some(&local_proxy)))
+                .chain(RustlsConnector::default());
+        let agent = Agent::with_parts(
+            config,
+            connector,
+            ProxyFixtureResolver {
+                proxy: proxy_address,
+                target_port: origin_address.port(),
+            },
+        );
+        let policy = FetchPolicy::default();
+        let request = crate::fetch::FetchRequest::new(
+            crate::SourceId::new("proxy-smoke").unwrap(),
+            &format!("https://subscription.test:{}/sub", origin_address.port()),
+            std::iter::empty::<&str>(),
+            RequestProfile::NetHopGeneric,
+            &policy,
+        )
+        .unwrap();
+        let outcome = fetch_with_agent(
+            &agent,
+            &request.endpoints()[0],
+            RequestProfile::NetHopGeneric,
+            &SourceCache::default(),
+            &policy,
+            &ParserLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.body(), b"trojan://secret@example.com:443\n");
+        proxy.join().unwrap();
+        origin.join().unwrap();
     }
 
     #[test]

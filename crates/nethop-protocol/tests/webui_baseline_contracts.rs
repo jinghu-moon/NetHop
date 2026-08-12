@@ -13,6 +13,11 @@ fn event_kind_name(kind: EventKind) -> &'static str {
         EventKind::Generation => "generation",
         EventKind::Network => "network",
         EventKind::Traffic => "traffic",
+        EventKind::SubscriptionMode => "subscription_mode",
+        EventKind::SubscriptionActiveSet => "subscription_active_set",
+        EventKind::NodeSelection => "node_selection",
+        EventKind::NodeActive => "node_active",
+        EventKind::NodeTest => "node_test",
     }
 }
 
@@ -20,7 +25,7 @@ fn event_kind_name(kind: EventKind) -> &'static str {
 fn protocol_v1_before_golden_is_frozen_and_rejected_by_v2() {
     let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
     assert_eq!(fixture["protocol_version"], 1);
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 3);
 
     let frames = fixture["frames"].as_object().unwrap();
     for value in frames.values() {

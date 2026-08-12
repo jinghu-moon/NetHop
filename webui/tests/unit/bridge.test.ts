@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { BridgeError, runJson } from "@/bridge/command";
 import { createAppHost } from "@/bridge/context";
 import { detectHostCapability, type ExecResult, type HostAdapter, type HostChild, type PackageInfo } from "@/bridge/host";
+import { createMockHost } from "@/bridge/mock-host";
 import { JsonlDecoder } from "@/bridge/jsonl";
 import { parseSingleJsonEnvelope } from "@/bridge/json";
 import { createEventSessionId } from "@/bridge/event-process";
@@ -46,6 +47,21 @@ describe("operation allowlist", () => {
 });
 
 describe("host capability", () => {
+  it("supports stateful typed mock responses without bypassing command validation", async () => {
+    let mode: "single" | "merge" = "single";
+    const adapter = createMockHost({ responses: {
+      "subscription.mode.set": (request) => {
+        if (request.id !== "subscription.mode.set") throw new Error("unexpected request");
+        mode = request.mode;
+        return { errno: 0, stdout: JSON.stringify({ ok: true }), stderr: "" };
+      },
+      "subscription.mode.get": () => ({ errno: 0, stdout: JSON.stringify({ mode }), stderr: "" }),
+    } });
+    await adapter.run({ id: "subscription.mode.set", mode: "merge", expectedDigest: "0".repeat(64) });
+    expect(JSON.parse((await adapter.run({ id: "subscription.mode.get" })).stdout)).toEqual({ mode: "merge" });
+    await expect(adapter.run({ id: "subscription.mode.set", mode: "single", expectedDigest: "0".repeat(64) })).rejects.toThrow("single mode requires source id");
+  });
+
   it("keeps every overview preview payload valid", async () => {
     const adapter = createAppHost();
     const [status, traffic, config, nodes] = await Promise.all([
@@ -57,7 +73,7 @@ describe("host capability", () => {
     expect(status.lastUpdate).toBe("never");
     expect(traffic.intervalSeconds).toBe(1);
     expect(config.document).toMatchObject({ proxy: { outbound_mode: "rule" } });
-    expect(nodes.find((node) => node.selected)?.name).toBe("自动优选");
+    expect(nodes.nodes.find((node) => node.isActive)?.name).toBe("新加坡 · 高速");
   });
 
   const complete = { exec: () => undefined, spawn: () => undefined, toast: () => undefined };
@@ -115,7 +131,7 @@ describe("private payload and package boundaries", () => {
     const adapter = host(async (request) => {
       requests.push(request);
       const result = request.id === "webui.payload.create" ? { handle: `p_${"b".repeat(32)}` } : { accepted: true };
-      return { errno: 0, stdout: JSON.stringify({ version: 2, request_id: "mock", ok: true, result }), stderr: "" };
+      return { errno: 0, stdout: JSON.stringify({ version: 3, request_id: "mock", ok: true, result }), stderr: "" };
     });
     await uploadPrivatePayload(adapter, "config", "config-apply", "配置".repeat(8_000));
     expect(requests[0]?.id).toBe("webui.payload.create");
@@ -129,7 +145,7 @@ describe("private payload and package boundaries", () => {
       ids.push(request.id);
       if (request.id === "webui.payload.append") throw new Error("fail");
       const result = request.id === "webui.payload.create" ? { handle: `p_${"c".repeat(32)}` } : {};
-      return { errno: 0, stdout: JSON.stringify({ version: 2, request_id: "mock", ok: true, result }), stderr: "" };
+      return { errno: 0, stdout: JSON.stringify({ version: 3, request_id: "mock", ok: true, result }), stderr: "" };
     });
     await expect(uploadPrivatePayload(adapter, "config", "config-apply", "secret")).rejects.toThrow();
     expect(ids.at(-1)).toBe("webui.payload.remove");

@@ -16,9 +16,10 @@ fn authorized_sfa_body_builds_and_checks_a_managed_generation() {
     let body_path = absolute_env_path("NETHOP_TEST_SFA_BODY_PATH");
     let sing_box = absolute_env_path("NETHOP_TEST_SING_BOX_BINARY");
     let body = fs::read(&body_path).expect("authorized subscription body must be readable");
+    let source_id = SourceId::new("src_11111111111111111111111111111111").unwrap();
     let conversion = convert_stable_sources(
         vec![SourceInput {
-            source_id: SourceId::new("authorized-sfa-smoke").unwrap(),
+            source_id: source_id.clone(),
             format_hint: FormatHint::SingboxJson,
             bytes: body,
         }],
@@ -41,10 +42,14 @@ fn authorized_sfa_body_builds_and_checks_a_managed_generation() {
     let candidate = build_candidate(
         GenerationId::new(1).unwrap(),
         &conversion,
-        capture,
-        ClashApi::new("127.0.0.1:9090", "sfa-smoke-secret-32-bytes-long-00").unwrap(),
-        TunStack::System,
-        ManagedOptions::default(),
+        nethopd::CandidateBuildProfile::new(
+            capture,
+            ClashApi::new("127.0.0.1:9090", "sfa-smoke-secret-32-bytes-long-00").unwrap(),
+            TunStack::System,
+            ManagedOptions::default(),
+        ),
+        nethopd::SubscriptionMode::Single,
+        &[source_id],
     )
     .unwrap();
     assert_eq!(candidate.config().node_count(), 18);

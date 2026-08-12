@@ -3,7 +3,7 @@
   "date": "2026-08-02",
   "parser_ipc_schema_version": 1,
   "fingerprint_schema": "nh-fp-sha256-v1",
-  "mapping_digest": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84",
+  "mapping_digest": "d11f0497be4c0d731a6ef75a2543b8fc502957bca1712903fbfcf33c4788b1d6",
   "limits": {
     "active_baseline": 500,
     "managed_active": 2000,

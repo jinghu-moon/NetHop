@@ -6,7 +6,10 @@ use nethop_subscription::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ConfigSnapshot, SourceName, worker_config::atomic_write};
+use crate::{
+    ConfigSnapshot, SourceName, SubscriptionMode,
+    worker_config::{MAX_SOURCES, atomic_write},
+};
 
 const REGISTRY_SCHEMA: &str = "nethop-source-registry-v1";
 const MAX_REGISTRY_BYTES: u64 = 16 * 1024;
@@ -157,7 +160,12 @@ impl SourceRegistry {
         self.persist(&state)?;
         Ok(PreparedSourceConfig {
             source_config: SourceConfig {
-                source_config_digest: source_config_digest(&sources),
+                source_config_digest: source_config_digest(
+                    snapshot.effective().subscriptions().mode(),
+                    &sources,
+                ),
+                config_digest: snapshot.digest().to_owned(),
+                mode: snapshot.effective().subscriptions().mode(),
                 sources,
             },
             binding,
@@ -283,7 +291,12 @@ fn source_config_from_binding(
         });
     }
     Ok(SourceConfig {
-        source_config_digest: source_config_digest(&sources),
+        source_config_digest: source_config_digest(
+            snapshot.effective().subscriptions().mode(),
+            &sources,
+        ),
+        config_digest: snapshot.digest().to_owned(),
+        mode: snapshot.effective().subscriptions().mode(),
         sources,
     })
 }
@@ -307,6 +320,8 @@ impl SourceIdEntropy for SystemSourceIdEntropy {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SourceConfig {
     source_config_digest: String,
+    config_digest: String,
+    mode: SubscriptionMode,
     sources: Vec<SourceDefinition>,
 }
 
@@ -315,14 +330,63 @@ impl SourceConfig {
         &self.source_config_digest
     }
 
+    pub fn config_digest(&self) -> &str {
+        &self.config_digest
+    }
+
+    pub const fn mode(&self) -> SubscriptionMode {
+        self.mode
+    }
+
     pub fn sources(&self) -> &[SourceDefinition] {
         &self.sources
+    }
+
+    pub fn configured_sources(&self) -> impl Iterator<Item = &SourceDefinition> {
+        self.sources.iter().filter(|source| !source.url.is_empty())
     }
 
     pub fn active_sources(&self) -> impl Iterator<Item = &SourceDefinition> {
         self.sources
             .iter()
             .filter(|source| source.enabled && !source.url.is_empty())
+    }
+
+    pub fn update_participation(
+        &self,
+        source_id: &SourceId,
+    ) -> Result<SourceUpdateParticipation, SourceRegistryError> {
+        let source = self
+            .sources
+            .iter()
+            .find(|source| source.id() == source_id)
+            .ok_or(SourceRegistryError::UnknownSource)?;
+        Ok(if source.enabled && !source.url.is_empty() {
+            SourceUpdateParticipation::ActiveGeneration
+        } else {
+            SourceUpdateParticipation::InactiveCacheOnly
+        })
+    }
+
+    pub fn active_set_snapshot(&self) -> SourceActiveSetSnapshot {
+        SourceActiveSetSnapshot {
+            mode: self.mode,
+            active_source_ids: self
+                .active_sources()
+                .map(|source| source.id.clone())
+                .collect(),
+            sources: self
+                .sources
+                .iter()
+                .map(|source| SourceActiveSetItem {
+                    id: source.id.clone(),
+                    name: source.name.as_str().to_owned(),
+                    configured: !source.url.is_empty(),
+                    active: source.enabled && !source.url.is_empty(),
+                })
+                .collect(),
+            config_digest: self.config_digest.clone(),
+        }
     }
 }
 
@@ -331,8 +395,105 @@ impl fmt::Debug for SourceConfig {
         formatter
             .debug_struct("SourceConfig")
             .field("source_config_digest", &self.source_config_digest)
+            .field("mode", &self.mode)
             .field("source_count", &self.sources.len())
             .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceUpdateParticipation {
+    ActiveGeneration,
+    InactiveCacheOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceActiveSetSnapshot {
+    mode: SubscriptionMode,
+    active_source_ids: Vec<SourceId>,
+    sources: Vec<SourceActiveSetItem>,
+    config_digest: String,
+}
+
+impl SourceActiveSetSnapshot {
+    pub const fn mode(&self) -> SubscriptionMode {
+        self.mode
+    }
+
+    pub fn active_source_ids(&self) -> &[SourceId] {
+        &self.active_source_ids
+    }
+
+    pub fn sources(&self) -> &[SourceActiveSetItem] {
+        &self.sources
+    }
+
+    pub fn config_digest(&self) -> &str {
+        &self.config_digest
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceActiveSetItem {
+    id: SourceId,
+    name: String,
+    configured: bool,
+    active: bool,
+}
+
+impl SourceActiveSetItem {
+    pub const fn id(&self) -> &SourceId {
+        &self.id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub const fn configured(&self) -> bool {
+        self.configured
+    }
+
+    pub const fn active(&self) -> bool {
+        self.active
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeAttribution {
+    source_ids: Vec<SourceId>,
+}
+
+impl NodeAttribution {
+    pub fn new(
+        source_ids: impl IntoIterator<Item = SourceId>,
+    ) -> Result<Self, SourceRegistryError> {
+        let mut unique = HashSet::new();
+        let mut ordered = Vec::new();
+        for source_id in source_ids {
+            if unique.insert(source_id.clone()) {
+                ordered.push(source_id);
+            }
+            if ordered.len() > MAX_SOURCES {
+                return Err(SourceRegistryError::TooManyAttributions);
+            }
+        }
+        if ordered.is_empty() {
+            return Err(SourceRegistryError::InvalidAttribution);
+        }
+        Ok(Self {
+            source_ids: ordered,
+        })
+    }
+
+    pub fn source_ids(&self) -> &[SourceId] {
+        &self.source_ids
+    }
+
+    pub fn contains(&self, source_id: &SourceId) -> bool {
+        self.source_ids.contains(source_id)
     }
 }
 
@@ -500,9 +661,13 @@ fn digest(value: &str) -> String {
     Digest::sha256(value.as_bytes()).hex()
 }
 
-fn source_config_digest(sources: &[SourceDefinition]) -> String {
+fn source_config_digest(mode: SubscriptionMode, sources: &[SourceDefinition]) -> String {
     let mut canonical = Vec::new();
     canonical.extend_from_slice(b"nethop-source-config-v3\0");
+    canonical.push(match mode {
+        SubscriptionMode::Single => 1,
+        SubscriptionMode::Merge => 2,
+    });
     for source in sources {
         push_field(&mut canonical, source.id.as_str().as_bytes());
         canonical.push(u8::from(source.enabled));
@@ -614,6 +779,12 @@ pub enum SourceRegistryError {
     EntropyUnavailable,
     #[error("source ID collision retry budget was exhausted")]
     IdentityCollision,
+    #[error("source does not exist")]
+    UnknownSource,
+    #[error("node source attribution is empty")]
+    InvalidAttribution,
+    #[error("node source attribution exceeds the source limit")]
+    TooManyAttributions,
     #[error("source registry could not be written atomically")]
     WriteFailed,
 }
@@ -624,6 +795,8 @@ impl SourceRegistryError {
             Self::InvalidPath | Self::InvalidRegistry | Self::CorruptRegistry => "REGISTRY-INVALID",
             Self::EntropyUnavailable => "ID-ENTROPY-UNAVAILABLE",
             Self::IdentityCollision => "ID-COLLISION",
+            Self::UnknownSource => "SOURCE-NOT-FOUND",
+            Self::InvalidAttribution | Self::TooManyAttributions => "ATTRIBUTION-INVALID",
             Self::WriteFailed => "REGISTRY-PUBLISH-FAILED",
         }
     }

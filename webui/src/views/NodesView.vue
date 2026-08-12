@@ -9,7 +9,7 @@ import PageState from "@/components/PageState.vue";
 import { useHost } from "@/bridge/context";
 import { runJson } from "@/bridge/command";
 import { validatedQuery } from "@/model/client";
-import { parseControlEnvelope, parseNodeDelayList, parseNodeList, parseSubscriptionList, type NodeDto } from "@/model/dto";
+import { parseControlEnvelope, parseNodeDelayList, parseNodeList, parseNodeSelection, parseSubscriptionSnapshot, type NodeDto } from "@/model/dto";
 import { uiStores } from "@/runtime/store";
 import { createActionLock, createOperationStore } from "@/runtime/operation";
 import { parseNodeSort, sortNodes, type NodeSort } from "@/model/node-view";
@@ -33,6 +33,8 @@ const sortPreference = useUiPreference("node-sort", "default");
 const nodeSort = computed(() => parseNodeSort(sortPreference.value));
 
 const allNodes = computed(() => uiStores.runtime.nodeOrder.value.map((id) => uiStores.runtime.nodesById.value[id]).filter((node): node is NodeDto => Boolean(node)));
+const selection = computed(() => uiStores.runtime.selection.value);
+const automatic = computed(() => selection.value?.intent.mode === "auto");
 const nodeItems = computed<readonly NodeListItem[]>(() => {
   const groups = new Map<string, NodeDto[]>();
   for (const node of allNodes.value) {
@@ -49,7 +51,7 @@ const nodeItems = computed<readonly NodeListItem[]>(() => {
   }
   return items;
 });
-const selectedNode = computed(() => allNodes.value.find((node) => node.selected));
+const selectedNode = computed(() => allNodes.value.find((node) => node.isRequested) ?? allNodes.value.find((node) => node.isActive));
 const testOperation = computed(() => operations.byId["node-test-all"]);
 const testingAll = computed(() => testOperation.value?.phase === "accepted" || testOperation.value?.phase === "running");
 const actionItems = computed(() => [
@@ -66,12 +68,12 @@ async function load(): Promise<void> {
   if (loading.value) return;
   loading.value = true; error.value = "";
   try {
-    const [nodes, sources] = await Promise.all([
+    const [snapshot, sources] = await Promise.all([
       validatedQuery(host, { id: "node.list", limit: 128 }, parseNodeList),
-      validatedQuery(host, { id: "subscription.list" }, parseSubscriptionList),
+      validatedQuery(host, { id: "subscription.mode.get" }, parseSubscriptionSnapshot),
     ]);
-    uiStores.runtime.replaceNodes(nodes);
-    sourceNames.value = Object.fromEntries(sources.map((source) => [source.id, source.name]));
+    uiStores.runtime.loadNodeSnapshot(snapshot);
+    sourceNames.value = Object.fromEntries(sources.sources.map((source) => [source.id, source.name]));
   } catch { error.value = "节点列表加载失败"; }
   finally { loading.value = false; }
 }
@@ -102,7 +104,19 @@ async function testAllNodes(): Promise<void> {
   }
 }
 async function selectNode(node: NodeDto): Promise<void> {
-  await lock.run("node-select", async () => { await runJson(host, { id: "node.select", nodeId: node.id }); await load(); });
+  await lock.run("node-select", async () => {
+    const next = await validatedQuery(host, { id: "node.select.manual", nodeId: node.id }, parseNodeSelection);
+    uiStores.runtime.setSelection(next);
+    await load();
+  });
+}
+async function selectAuto(): Promise<void> {
+  if (automatic.value) return;
+  await lock.run("node-select", async () => {
+    const next = await validatedQuery(host, { id: "node.select.auto" }, parseNodeSelection);
+    uiStores.runtime.setSelection(next);
+    await load();
+  });
 }
 async function excludeNode(): Promise<void> {
   const node = pendingExclude.value; if (!node) return;
@@ -153,11 +167,15 @@ useBackDismiss(() => actionSheetOpen.value, () => { actionSheetOpen.value = fals
     <PageState v-else-if="error" kind="error" title="节点加载失败" :detail="error" action-label="重试" @action="load" />
     <PageState v-else-if="allNodes.length === 0" kind="empty" title="没有可用节点" />
     <TPullDownRefresh v-else v-model="refreshing" :disabled="loading" @refresh="pullRefresh">
+    <button type="button" class="node-auto-control" :data-selected="automatic" @click="selectAuto">
+      <span><strong>自动优选</strong><small>{{ automatic ? "由 sing-box URLTest 自动选择" : "点击恢复自动选择" }}</small></span>
+      <span v-if="automatic && selection?.activeNodeId" class="node-auto-active">{{ uiStores.runtime.nodesById.value[selection.activeNodeId]?.name ?? "状态同步中" }}</span>
+    </button>
     <VirtualListViewport :items="nodeItems" :get-item-key="(_index, item) => item.id" :estimate-size="82">
       <template #default="{ item }">
         <div v-if="item.kind === 'heading'" class="node-source-heading"><strong>{{ item.label }}</strong><span>{{ item.count }}</span></div>
         <div v-else class="node-grid-row">
-          <article v-for="node in item.nodes" :key="node.id" class="node-card" :data-selected="node.selected" @click="!node.selected && selectNode(node)">
+          <article v-for="node in item.nodes" :key="node.id" class="node-card" :data-requested="node.isRequested" :data-active="node.isActive" @click="!node.isRequested && selectNode(node)">
             <div class="node-main"><strong :title="node.name">{{ node.name }}</strong><span class="node-protocol">{{ node.protocol }}</span></div>
             <span class="node-latency" :data-ready="node.latencyMs !== undefined">{{ node.latencyMs === undefined ? '--' : `${node.latencyMs} ms` }}</span>
           </article>

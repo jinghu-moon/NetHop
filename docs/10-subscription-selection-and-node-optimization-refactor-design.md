@@ -5,6 +5,7 @@
 > 配置 ABI：破坏性升级为 `schema_version = 3`
 > 目标平台：Android arm64 Root 模块
 > 依赖文档：`00-nethop-system-design.md`、`02-subscription-import-and-parser-design.md`、`06-configuration-toml-refactor-design.md`、`08-webui-design.md`、`09-webui-tdd-task-list.md`
+> 未来候选登记：`11-deferred-capabilities-and-future-design.md`
 
 ## 1. 文档目的
 
@@ -21,12 +22,23 @@
 
 ### 2.1 sing-box 能力边界
 
-sing-box 内核支持：
+NetHop 当前冻结的运行时基线是 sing-box `v1.13.15`。集成形态必须明确为：
+
+- `nethopd` 通过 `Command` 启动独立的 `bin/sing-box run -c <sealed-generation>/config.json` 子进程；
+- composer 在受控配置中生成 `experimental.clash_api.external_controller`；
+- daemon 只连接带随机 secret 的 IPv4 loopback Clash HTTP API；
+- NetHop 不链接 libbox，不嵌入 sing-box Go library，也不使用 Android AAR 驱动核心。
+
+在这条已发布且已验证的 `v1.13.15` 边界内，sing-box 支持：
 
 - 在一份配置中定义多个 terminal outbound；
 - `selector` 在若干 outbound 之间手动选择；
 - `urltest` 周期测试若干 outbound，并按延迟与 tolerance 自动选择；
-- 通过 Clash API 查询组、测试节点和切换 selector。
+- 通过 Clash API 查询 group、执行节点或 group 测速、切换 selector 和观察连接。
+
+sing-box `v1.14.0` 开始提供普通配置可启用的 `services.api`：它把图形客户端原有的 `StartedService` protobuf 接口作为 gRPC/gRPC-Web 服务暴露给独立 `sing-box run` 实例，并提供 `SubscribeGroups`、`URLTest`、`SelectOutbound`、状态、日志和连接流。`v1.13.15` 源码已经存在相关 protobuf 与本地图形客户端控制实现；`v1.14.0` 的新增点是可配置、可远程连接的 API service，而不是第一次出现全部 gRPC 控制代码。
+
+因此，“selector 只能通过 Clash API 控制”只能作为 NetHop 当前 `v1.13.15` 独立进程方案的实现约束，不能写成永久的 sing-box 能力边界。截至 2026-08-10，`v1.14.0-beta.13` 仍是预发布版本，当前最新稳定版本为 `v1.13.18`；本文不因开发线已存在新 API 而改变已冻结的 `v1.13.15` 契约。
 
 sing-box 内核不负责：
 
@@ -106,6 +118,7 @@ sing-box 内核不负责：
 - 不为每个订阅创建独立透明代理栈；
 - 不实现按价格、流量套餐或地理位置的智能计费调度；
 - 不在自动切换时强制中断既有连接；
+- 不在本次重构中升级 sing-box pin、引入 gRPC client 或迁移到 `services.api`；
 - 不为 schema v2、旧 `select_source`、旧 `node.select` wire shape 编写兼容适配器；
 - 不允许用户在 TOML 中填写 source ID、node ID 或内部 sing-box tag。
 
@@ -125,6 +138,7 @@ sing-box 内核不负责：
 | D10 | 节点切换保持 `interrupt_exist_connections = false`，只影响后续新连接 |
 | D11 | 自动模式的实际节点必须递归解析 group，最多 8 层并检测循环 |
 | D12 | WebUI 单源模式使用圆点单选，合并模式使用复选框，两种控件不得共用含混文案 |
+| D13 | 当前 core control 固定为 `v1.13.15` loopback Clash API；`v1.14 services.api` 只进入未来候选登记，不进入本次依赖与实现范围 |
 
 ## 5. Schema v3
 
@@ -175,6 +189,8 @@ concurrency = 10
 - 删除 `proxy.selector_mode`；
 - 其他字段继续遵循 `06` 已冻结的类型、范围和安全约束；
 - schema v2 文件直接返回 `NH-CONFIG-UNSUPPORTED-SCHEMA`，不猜测用户意图。
+
+`interval_minutes = 10` 是 NetHop 的移动端默认值，不是对 sing-box 上游默认值的转述。sing-box `v1.13.15` 的 URLTest 默认间隔为 `3m`、默认 tolerance 为 `50ms`、默认 idle timeout 为 `30m`。NetHop 保留上游 tolerance 与 idle timeout，但把周期延长到 10 分钟，以减少 Android 常驻 Root 模块的周期唤醒、测试流量和电量消耗；用户触发的即时测速不受该周期限制。
 
 ### 5.2 single 模式不变量
 
@@ -446,6 +462,8 @@ while pool 未达到 max_candidates 且仍有未消费节点：
 - `idle_timeout = 30m`；
 - `interrupt_exist_connections = false`。
 
+`10m` 相比 sing-box 默认 `3m` 是有意的移动端功耗取舍，不是兼容性要求。Phase G 真机测试必须记录周期测速造成的唤醒、流量和空闲 CPU；只有证据表明更短周期在预算内且显著改善切换质量时，才调整默认值。
+
 ### 9.2 用户即时测速
 
 `NodeTestAll`：
@@ -495,6 +513,8 @@ selector.now
   -> 其他 group：按受控 group 接口继续解析
   -> direct/block：返回 non_proxy outcome
 ```
+
+当前实现从 Clash API 返回的 group `now/all` 关系读取状态。即使未来改用 `services.api.SubscribeGroups`，gRPC 返回的 `Group.selected` 仍只指向下一层 tag，不会替 NetHop 解析到 terminal outbound；因此递归、深度限制和环检测属于 daemon 领域不变量，不依赖具体控制传输。
 
 边界：
 
@@ -705,6 +725,8 @@ nodeTestOperation
 6. 测速 URL 由 daemon/core allowlist 控制，订阅内容不能覆盖；
 7. source 事务继续执行 HTTPS-only、SSRF、DNS rebinding、大小和超时限制；
 8. active node 解析失败只降级展示，不绕过路由或安全审计。
+9. Clash API 继续只监听 IPv4 loopback，secret 不进入日志、WebUI 或普通状态 DTO；
+10. 未来评估 `services.api` 时必须重新审核监听地址、secret、默认 CORS、gRPC-Web、Dashboard 和新增控制面的攻击面，不能直接沿用本节结论。
 
 ## 15. 性能与资源预算
 
@@ -729,6 +751,8 @@ fair pool benchmark 必须包含：
 - max candidates 16、64、256。
 
 不得用真实公网延迟证明算法性能。远端网络只作为兼容性补充。
+
+本次实现不增加 protobuf、gRPC、HTTP/2 或异步 runtime 依赖。未来若评估 `services.api`，必须把 `nethopd` 二进制增量、依赖树、RSS、空闲 CPU、连接恢复时间和 Android arm64 构建复杂度与当前同步 Clash HTTP client 做同机对比，不能只以 API 功能更多作为迁移理由。
 
 ## 16. 失败与恢复矩阵
 
@@ -968,6 +992,7 @@ merge -> single -> 显式选择目标 source
 - `06`：升级 schema v3，删除 `proxy.selector_mode`，重写 source enabled 与选择事务；
 - `08`：订阅页 single/merge 控件、节点 auto control、代理质量卡片和事件模型；
 - `09`：增加新的 TDD 节点并把旧 K/L 阶段的含混 selected 契约标记为 superseded；
+- `11`：登记 sing-box API service/gRPC 与其他暂缓能力的触发条件、证据门槛和重新评审状态；
 - 模块默认 `nethop.toml`：生成 v3 默认 single 配置；
 - CLI help 与 JSON schema：只暴露新方法。
 
@@ -997,7 +1022,41 @@ merge -> single -> 显式选择目标 source
 
 不采纳。开发期没有必要维护 TOML 默认值与私有 replay state 两个真相源。默认 auto 可以由缺省 selection state直接定义。
 
-## 22. 最终结论
+### 21.7 立即迁移到 sing-box `services.api` gRPC 控制面
+
+暂不采纳。`v1.14.0-beta.13` 已证明 API service 能附着到独立 `sing-box run` 实例，并直接提供 group 订阅、测速、selector 切换、状态、日志和连接流；它不是 libbox/AAR 专属能力，也具备未来替代 Clash API 的技术可行性。
+
+当前不迁移的理由是：
+
+1. NetHop 仍冻结在经过真机验证的 `v1.13.15`，不能把 `v1.14` 预发布接口当成现行契约；
+2. 当前同步 Clash HTTP client 已覆盖本文需要的最小控制能力；
+3. Rust gRPC client 通常会引入 protobuf 生成、HTTP/2、连接管理和异步 runtime，与本文轻量目标及“不新增异步 runtime”约束冲突；
+4. API service 同时支持 gRPC-Web、Dashboard 和跨域配置，采用前必须重新收紧监听与认证边界；
+5. 改用 gRPC 不会消除嵌套 group 的递归解析、环检测和 terminal node 映射责任。
+
+重新评估必须同时满足：sing-box `1.14` 已发布稳定版并完成 NetHop pin 升级评审；Clash API 出现明确能力缺口或维护风险；Android arm64 原型证明功能、体积、RSS、空闲 CPU 和恢复时间不劣于当前方案。完整候选记录见 `11-deferred-capabilities-and-future-design.md`。
+
+## 22. 源码与官方依据
+
+| 证据 | 结论 |
+|---|---|
+| `refer/sing-box-v1.13.15/docs/configuration/outbound/urltest.zh.md` | URLTest 默认 `interval=3m`、`tolerance=50ms`、`idle_timeout=30m`，并支持 `interrupt_exist_connections` |
+| `refer/sing-box-v1.13.15/docs/configuration/outbound/selector.zh.md` | selector 和连接中断字段的 `v1.13.15` 文档语义 |
+| `refer/sing-box-v1.13.15/daemon/started_service.proto` | `v1.13.15` 已包含图形客户端使用的 group、URLTest 和 selector protobuf 方法 |
+| `refer/sing-box-1.14.0-beta.13/docs/configuration/service/api.zh.md` | `v1.14.0` 起普通配置可启用 sing-box API gRPC 服务 |
+| `refer/sing-box-1.14.0-beta.13/service/api/server.go` | API service 创建 attached service，并在独立核心进程中启动 gRPC/gRPC-Web listener |
+| `refer/sing-box-1.14.0-beta.13/daemon/attached_service.go` | `NewAttachedService` 绑定当前运行实例，不要求 libbox/AAR |
+| `refer/sing-box-1.14.0-beta.13/daemon/started_service.proto` | `SubscribeGroups`、`URLTest`、`SelectOutbound` 等公开契约 |
+| `crates/nethopd/src/process.rs`、`crates/nethop-core/src/composer.rs`、`crates/nethopd/src/clash_api.rs` | NetHop 当前是独立子进程 + loopback Clash API，不链接 libbox |
+
+官方网页：
+
+- [sing-box API service](https://sing-box.sagernet.org/configuration/service/api/)
+- [Selector outbound](https://sing-box.sagernet.org/configuration/outbound/selector/)
+- [URLTest outbound](https://sing-box.sagernet.org/configuration/outbound/urltest/)
+- [sing-box v1.14.0-beta.13 release](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0-beta.13)
+
+## 23. 最终结论
 
 NetHop 应继续保留“在 sing-box 之前解析、合并和去重订阅”的架构，但必须把用户语义显式化：默认 single，按需启用 merge；single 只在一个订阅内优选，merge 才允许跨订阅全局优选。
 

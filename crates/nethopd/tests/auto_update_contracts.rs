@@ -23,10 +23,11 @@ impl SourceIdEntropy for FixedEntropy {
 fn write_config(path: &Path) {
     fs::write(
         path,
-        r#"schema_version = 2
+        r#"schema_version = 3
 [service]
 enabled = true
 [subscriptions]
+mode = "merge"
 auto_update = true
 update_interval_hours = 24
 [[subscriptions.sources]]

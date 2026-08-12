@@ -1,8 +1,10 @@
 import type { ExecResult, HostAdapter, HostCapability, HostChild, PackageInfo } from "./host";
 import { buildCommand, type OperationRequest, type OperationRequest as Request } from "./operations";
 
+export type MockResponse = ExecResult | ((request: OperationRequest) => ExecResult | Promise<ExecResult>);
+
 export interface MockHostScript {
-  readonly responses?: Readonly<Partial<Record<Request["id"], ExecResult>>>;
+  readonly responses?: Readonly<Partial<Record<Request["id"], MockResponse>>>;
   readonly streams?: Readonly<Partial<Record<"events.subscribe", readonly string[]>>>;
   readonly packages?: readonly PackageInfo[];
   readonly latencyMs?: number;
@@ -40,7 +42,8 @@ export function createMockHost(script: MockHostScript = {}): HostAdapter {
       buildCommand(request);
       const response = responses[request.id];
       await new Promise((resolve) => setTimeout(resolve, script.latencyMs ?? 0));
-      return response ?? { errno: 0, stdout: JSON.stringify({ version: 2, request_id: "mock", ok: true, result: {} }), stderr: "" };
+      if (typeof response === "function") return response(request);
+      return response ?? { errno: 0, stdout: JSON.stringify({ version: 3, request_id: "mock", ok: true, result: {} }), stderr: "" };
     },
     spawn(request) {
       buildCommand(request);

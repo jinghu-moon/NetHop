@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use nethop_core::{
     Candidate, CaptureMode, CapturePolicy, CapturePolicyError, ClashApi, CoreDiagnosticCode,
     CoreError, GenerationId, GenerationStore, InterfacePolicy, ManagedConfig, ManagedLogLevel,
-    ManagedOptions, ManagedOutboundMode, ManagedProfile, ManagedSelectorMode, RuntimeState,
-    StateTransitionError, TerminalOutbound, TunStack,
+    ManagedOptions, ManagedOutboundMode, ManagedProfile, RuntimeState, StateTransitionError,
+    TerminalOutbound, TunStack,
 };
 use serde_json::json;
 
@@ -91,6 +91,7 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
     let profile = ManagedProfile::new(
         policy,
         vec![outbound("node-b"), outbound("node-a")],
+        vec!["node-a".into(), "node-b".into()],
         ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
     )
     .unwrap();
@@ -100,6 +101,15 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
     assert_eq!(value["inbounds"][0]["type"], "tproxy");
     assert_eq!(value["inbounds"][0]["listen"], "::");
     assert_eq!(value["inbounds"][0]["listen_port"], 7893);
+    assert_eq!(value["inbounds"][1]["type"], "http");
+    assert_eq!(value["inbounds"][1]["tag"], "nethop-fetch");
+    assert_eq!(value["inbounds"][1]["listen"], "127.0.0.1");
+    assert_eq!(value["inbounds"][1]["listen_port"], 7894);
+    assert_eq!(value["inbounds"][1]["users"][0]["username"], "nethop");
+    assert_eq!(
+        value["inbounds"][1]["users"][0]["password"],
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
     assert_eq!(value["route"]["final"], "nethop-select");
     assert_eq!(
         value["experimental"]["clash_api"]["external_controller"],
@@ -164,6 +174,30 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
                         && rules.iter().any(|item| item["port"] == 53)
                 }))
     );
+    let rules = value["route"]["rules"].as_array().unwrap();
+    let fetch_resolve = rules
+        .iter()
+        .position(|rule| {
+            rule["inbound"] == json!(["nethop-fetch"])
+                && rule["action"] == "resolve"
+                && rule["server"] == "dns-proxy"
+        })
+        .unwrap();
+    let fetch_private_block = rules
+        .iter()
+        .position(|rule| {
+            rule["inbound"] == json!(["nethop-fetch"])
+                && rule["ip_is_private"] == true
+                && rule["outbound"] == "block"
+        })
+        .unwrap();
+    let fetch_proxy = rules
+        .iter()
+        .position(|rule| {
+            rule["inbound"] == json!(["nethop-fetch"]) && rule["outbound"] == "nethop-select"
+        })
+        .unwrap();
+    assert!(fetch_resolve < fetch_private_block && fetch_private_block < fetch_proxy);
     assert!(
         value["route"]["rules"]
             .as_array()
@@ -201,13 +235,13 @@ fn managed_options_control_urltest_logging_and_route_without_raw_json() {
     let profile = ManagedProfile::new(
         capture,
         vec![outbound("node-b"), outbound("node-a")],
+        vec!["node-a".into(), "node-b".into()],
         ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
     )
     .unwrap()
     .with_options(
         ManagedOptions::new(
             ManagedOutboundMode::Rule,
-            ManagedSelectorMode::Manual,
             15,
             75,
             1,
@@ -219,6 +253,7 @@ fn managed_options_control_urltest_logging_and_route_without_raw_json() {
         )
         .unwrap(),
     );
+    let profile = profile.with_auto_pool(vec!["node-a".to_owned()]).unwrap();
     let value: serde_json::Value =
         serde_json::from_slice(ManagedConfig::from_profile(profile).unwrap().bytes()).unwrap();
 
@@ -229,7 +264,7 @@ fn managed_options_control_urltest_logging_and_route_without_raw_json() {
         value["outbounds"][2]["outbounds"].as_array().unwrap().len(),
         1
     );
-    assert_eq!(value["outbounds"][3]["default"], "node-a");
+    assert_eq!(value["outbounds"][3]["default"], "nethop-auto");
     assert!(
         value["route"]["rules"]
             .as_array()
@@ -273,6 +308,7 @@ fn managed_domain_overrides_have_explicit_route_and_dns_precedence() {
     let profile = ManagedProfile::new(
         capture,
         vec![outbound("node-a")],
+        vec!["node-a".into()],
         ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
     )
     .unwrap()
@@ -316,7 +352,6 @@ fn managed_outbound_modes_have_distinct_dns_and_cn_routing_semantics() {
         .unwrap();
         let options = ManagedOptions::new(
             mode,
-            ManagedSelectorMode::Urltest,
             10,
             50,
             64,
@@ -330,6 +365,7 @@ fn managed_outbound_modes_have_distinct_dns_and_cn_routing_semantics() {
         let profile = ManagedProfile::new(
             capture,
             vec![outbound("node-a")],
+            vec!["node-a".into()],
             ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
         )
         .unwrap()
@@ -365,6 +401,7 @@ fn managed_composer_generates_tun_stack_without_tproxy_fields() {
     let profile = ManagedProfile::new(
         policy,
         vec![outbound("node-a")],
+        vec!["node-a".into()],
         ClashApi::new("127.0.0.1:9090", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
     )
     .unwrap()
@@ -376,6 +413,8 @@ fn managed_composer_generates_tun_stack_without_tproxy_fields() {
     assert_eq!(value["inbounds"][0]["interface_name"], "nethop0");
     assert_eq!(value["inbounds"][0]["stack"], "system");
     assert!(value["inbounds"][0].get("listen_port").is_none());
+    assert_eq!(value["inbounds"][1]["tag"], "nethop-fetch");
+    assert_eq!(value["inbounds"][1]["type"], "http");
 }
 
 #[test]
@@ -384,6 +423,7 @@ fn managed_composer_defaults_tun_to_the_android_verified_gvisor_stack() {
     let profile = ManagedProfile::new(
         policy,
         vec![outbound("node-a")],
+        vec!["node-a".into()],
         ClashApi::new("127.0.0.1:9090", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
     )
     .unwrap();
@@ -399,7 +439,8 @@ fn managed_composer_rejects_non_loopback_api_and_leaks_no_secret_in_debug() {
     let api = ClashApi::new("127.0.0.1:9090", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
     let policy =
         CapturePolicy::new(CaptureMode::Direct, false, None, None, vec![], vec![]).unwrap();
-    let profile = ManagedProfile::new(policy, vec![outbound("node-a")], api).unwrap();
+    let profile =
+        ManagedProfile::new(policy, vec![outbound("node-a")], vec!["node-a".into()], api).unwrap();
     assert!(!format!("{profile:?}").contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
     let config = ManagedConfig::from_profile(profile).unwrap();
     assert!(!format!("{config:?}").contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
@@ -423,6 +464,7 @@ fn managed_composer_is_order_independent_and_enforces_owned_tags() {
         ManagedProfile::new(
             policy(),
             vec![outbound("node-b"), outbound("node-a")],
+            vec!["node-a".into(), "node-b".into()],
             api(),
         )
         .unwrap(),
@@ -432,6 +474,7 @@ fn managed_composer_is_order_independent_and_enforces_owned_tags() {
         ManagedProfile::new(
             policy(),
             vec![outbound("node-a"), outbound("node-b")],
+            vec!["node-a".into(), "node-b".into()],
             api(),
         )
         .unwrap(),
@@ -440,7 +483,13 @@ fn managed_composer_is_order_independent_and_enforces_owned_tags() {
     assert_eq!(left.bytes(), right.bytes());
 
     assert_eq!(
-        ManagedProfile::new(policy(), vec![outbound("direct")], api()).unwrap_err(),
+        ManagedProfile::new(
+            policy(),
+            vec![outbound("direct")],
+            vec!["direct".into()],
+            api(),
+        )
+        .unwrap_err(),
         nethop_core::ComposerError::ReservedTag
     );
 }
@@ -454,7 +503,7 @@ fn managed_composer_bounds_active_nodes_and_redacts_terminal_fields() {
         .map(|index| outbound(&format!("node-{index}")))
         .collect();
     assert_eq!(
-        ManagedProfile::new(policy, nodes, api).unwrap_err(),
+        ManagedProfile::new(policy, nodes, vec!["node-0".into()], api).unwrap_err(),
         nethop_core::ComposerError::TooManyOutbounds
     );
 

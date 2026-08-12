@@ -22,7 +22,7 @@ impl SourceIdEntropy for FixedEntropy {
 
 fn write(path: &Path, name: &str, url: &str, enabled: bool) {
     let text = format!(
-        "schema_version = 2\n[service]\nenabled = {enabled}\n[subscriptions]\n[[subscriptions.sources]]\nname = \"{name}\"\nurl = \"{url}\"\n"
+        "schema_version = 3\n[service]\nenabled = {enabled}\n[subscriptions]\n[[subscriptions.sources]]\nname = \"{name}\"\nurl = \"{url}\"\n"
     );
     fs::write(path, text).unwrap();
     #[cfg(unix)]
@@ -122,7 +122,7 @@ fn rejected_editor_replacement_does_not_overwrite_persistent_config() {
     let module_directory = directory.path().join("module");
     fs::create_dir(&module_directory).unwrap();
     let module_entry = module_directory.join("nethop.toml");
-    let original = "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n";
+    let original = "schema_version = 3\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n";
     fs::write(&persistent, original).unwrap();
     fs::set_permissions(&persistent, fs::Permissions::from_mode(0o600)).unwrap();
     symlink(&persistent, &module_entry).unwrap();
@@ -138,7 +138,7 @@ fn rejected_editor_replacement_does_not_overwrite_persistent_config() {
     fs::remove_file(&module_entry).unwrap();
     fs::write(
         &module_entry,
-        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n[applications]\nmode = \"whitelist\"\ntargets = [{ kind = \"package\", package = \"com.example.missing\" }]\n",
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n[applications]\nmode = \"whitelist\"\ntargets = [{ kind = \"package\", package = \"com.example.missing\" }]\n",
     )
     .unwrap();
     fs::set_permissions(&module_entry, fs::Permissions::from_mode(0o600)).unwrap();
@@ -217,15 +217,7 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
     assert_eq!(document["subscriptions"]["sources"][1]["enabled"], false);
 
     let current = runtime.current().digest().to_owned();
-    runtime
-        .mutate_with_entropy(
-            &current,
-            &ConfigMutation::SelectSource {
-                source_id: added_id.clone(),
-            },
-            &mut FixedEntropy(5),
-        )
-        .unwrap();
+    runtime.subscription_select(&current, &added_id).unwrap();
     let selected = runtime.redacted_document();
     assert_eq!(selected["subscriptions"]["sources"][0]["enabled"], false);
     assert_eq!(selected["subscriptions"]["sources"][1]["enabled"], true);
@@ -239,6 +231,108 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
         persisted["subscriptions"]["sources"][1]["enabled"].as_bool(),
         Some(true)
     );
+
+    let single_digest = runtime.current().digest().to_owned();
+    runtime
+        .subscription_mode_set(&single_digest, nethopd::SubscriptionMode::Merge, None)
+        .unwrap();
+    assert_eq!(runtime.source_config().active_sources().count(), 1);
+    let merge_digest = runtime.current().digest().to_owned();
+    runtime
+        .subscription_set_enabled(&merge_digest, &first_id, true)
+        .unwrap();
+    assert_eq!(runtime.source_config().active_sources().count(), 2);
+    let both_digest = runtime.current().digest().to_owned();
+    assert!(
+        runtime
+            .subscription_set_enabled(&merge_digest, &added_id, false)
+            .is_err()
+    );
+    assert_eq!(runtime.current().digest(), both_digest);
+    runtime
+        .subscription_set_enabled(&both_digest, &added_id, false)
+        .unwrap();
+    let last_digest = runtime.current().digest().to_owned();
+    assert!(
+        runtime
+            .subscription_set_enabled(&last_digest, &first_id, false)
+            .is_err()
+    );
+    assert_eq!(runtime.source_config().active_sources().count(), 1);
+}
+
+#[test]
+fn subscription_candidate_preview_is_pure_and_cas_guarded() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    let registry_path = directory.path().join("source-registry.v1.json");
+    fs::write(
+        &config_path,
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\nmode = \"single\"\n[[subscriptions.sources]]\nname = \"Primary\"\nenabled = true\nurl = \"https://one.example/sub\"\n[[subscriptions.sources]]\nname = \"Backup\"\nenabled = false\nurl = \"https://two.example/sub\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let store = ConfigStore::new(&config_path).unwrap();
+    let registry = SourceRegistry::new(&registry_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let digest = runtime.current().digest().to_owned();
+    let backup_id = runtime.source_config().sources()[1]
+        .id()
+        .as_str()
+        .to_owned();
+    let config_before = fs::read(&config_path).unwrap();
+    let registry_before = fs::read(&registry_path).unwrap();
+
+    let preview = runtime
+        .preview_subscription_select(&digest, &backup_id)
+        .unwrap();
+    assert_ne!(preview.candidate_digest(), digest);
+    let candidate = std::str::from_utf8(preview.bytes()).unwrap();
+    assert!(candidate.contains("name = \"Backup\"\nenabled = true"));
+    assert_eq!(fs::read(&config_path).unwrap(), config_before);
+    assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+
+    let error = runtime
+        .preview_subscription_select(&"0".repeat(64), &backup_id)
+        .unwrap_err();
+    assert!(error.is_conflict());
+    assert_eq!(fs::read(&config_path).unwrap(), config_before);
+    assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+}
+
+#[test]
+fn schema_v3_scalar_mutation_rejects_removed_selector_mode_without_writing() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    let registry_path = directory.path().join("source-registry.v1.json");
+    write(&config_path, "Primary", "https://one.example/sub", true);
+    let store = ConfigStore::new(&config_path).unwrap();
+    let registry = SourceRegistry::new(&registry_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let mut runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let before = fs::read(&config_path).unwrap();
+    let digest = runtime.current().digest().to_owned();
+
+    let error = runtime
+        .mutate_with_entropy(
+            &digest,
+            &ConfigMutation::SetScalarField {
+                field_id: "proxy.selector_mode".into(),
+                value: json!("manual"),
+            },
+            &mut FixedEntropy(2),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.diagnostic().1, "UNKNOWN-FIELD");
+    assert_eq!(fs::read(config_path).unwrap(), before);
 }
 
 #[test]
@@ -297,7 +391,7 @@ fn package_names_are_admitted_to_uids_before_any_config_write() {
         .unwrap();
     let digest = runtime.current().digest().to_owned();
     let document = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "service": {"enabled": true},
         "subscriptions": {"sources":[{"name":"Primary","url":"https://one.example/sub"}]},
         "applications": {"mode":"whitelist","targets":[
@@ -316,7 +410,7 @@ fn package_names_are_admitted_to_uids_before_any_config_write() {
     let before = fs::read(&config_path).unwrap();
     let digest = runtime.current().digest().to_owned();
     let unknown = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "service": {"enabled": true},
         "subscriptions": {"sources":[{"name":"Primary","url":"https://one.example/sub"}]},
         "applications": {"mode":"whitelist","targets":[{"kind":"package","android_user_id":0,"package":"com.missing"}]}
@@ -373,7 +467,7 @@ fn complete_apply_repairs_invalid_observed_toml_with_exact_cas() {
     let observed = runtime.observed_digest().unwrap();
     assert_ne!(observed, runtime.current().digest());
     let document = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "service": {"enabled": true},
         "subscriptions": {"sources":[{"name":"Primary","url":"https://one.example/sub"}]}
     });
@@ -394,7 +488,7 @@ fn manager_self_write_followed_by_watcher_reload_is_a_digest_noop() {
     let mut runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
     let original_digest = runtime.current().digest().to_owned();
     let document = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "service": {"enabled": true},
         "subscriptions": {
             "sources": [{"name": "Primary", "url": "https://one.example/sub"}]

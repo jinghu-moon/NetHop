@@ -1,0 +1,28 @@
+schema_version = 2
+
+[service]
+enabled = true
+
+[subscriptions]
+auto_update = true
+update_interval_hours = 24
+
+[[subscriptions.sources]]
+name = "Primary"
+enabled = true
+url = "https://subscription.invalid/token"
+
+[[subscriptions.sources]]
+name = "Backup"
+enabled = false
+url = ""
+
+[proxy]
+outbound_mode = "rule"
+selector_mode = "urltest"
+
+[proxy.urltest]
+interval_minutes = 10
+tolerance_ms = 50
+max_candidates = 64
+concurrency = 10

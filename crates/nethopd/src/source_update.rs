@@ -6,12 +6,12 @@ use std::{
 };
 
 use nethop_core::{
-    CapturePolicy, ClashApi, CoreError, GenerationId, GenerationStore, ManagedOptions,
-    SealedGeneration, TunStack,
+    CapturePolicy, CoreError, GenerationId, GenerationStore, ManagedOptions, SealedGeneration,
+    TunStack,
 };
 #[cfg(feature = "subscription-update")]
 use nethop_subscription::{
-    CandidateAcceptance, FetchClient, FetchPolicy, FetchRequest, SourceCache,
+    CandidateAcceptance, FetchClient, FetchPolicy, FetchRequest, LocalFetchProxy, SourceCache,
 };
 use nethop_subscription::{
     CapabilityMatrix, Digest, FilteredSourceInput, FormatHint, NodeFilter, ParserLimits, SourceId,
@@ -21,40 +21,12 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    BuildCandidateError, CandidateChecker, ManualSource, ManualSourceStore, RuntimeUpdateError,
-    RuntimeUpdateSource, SourceConfig, SourceDefinition, build_candidate,
-    worker_config::atomic_write,
+    BuildCandidateError, CandidateBuildProfile, CandidateChecker, ManualSource, ManualSourceStore,
+    RuntimeUpdateError, RuntimeUpdateSource, SourceConfig, SourceDefinition, SubscriptionMode,
+    build_candidate, worker_config::atomic_write,
 };
 
-#[derive(Debug, Clone)]
-pub struct UpdateRuntimePolicy {
-    capture: CapturePolicy,
-    clash_api: ClashApi,
-    tun_stack: TunStack,
-    options: ManagedOptions,
-}
-
-impl UpdateRuntimePolicy {
-    pub const fn new(
-        capture: CapturePolicy,
-        clash_api: ClashApi,
-        tun_stack: TunStack,
-        options: ManagedOptions,
-    ) -> Self {
-        Self {
-            capture,
-            clash_api,
-            tun_stack,
-            options,
-        }
-    }
-
-    fn replace(&mut self, capture: CapturePolicy, tun_stack: TunStack, options: ManagedOptions) {
-        self.capture = capture;
-        self.tun_stack = tun_stack;
-        self.options = options;
-    }
-}
+pub type UpdateRuntimePolicy = CandidateBuildProfile;
 
 pub trait SourceBodyFetcher {
     fn fetch(&mut self, source: &SourceDefinition) -> Result<SourceBody, SourceUpdateError>;
@@ -138,6 +110,11 @@ impl HttpSourceBodyFetcher {
         }
         self.cache_root = Some(root);
         Ok(self)
+    }
+
+    pub fn with_local_proxy(mut self, proxy: LocalFetchProxy) -> Self {
+        self.client = self.client.with_local_proxy(proxy);
+        self
     }
 
     fn cache_path(&self, source: &SourceDefinition) -> Option<PathBuf> {
@@ -392,13 +369,13 @@ where
             return Err(SourceUpdateError::Conversion);
         }
         let generation = self.next_generation()?;
+        let pool_source_ids = source_ids_with_manual_typed(config);
         let candidate = build_candidate(
             generation,
             &conversion,
-            self.runtime.capture.clone(),
-            self.runtime.clash_api.clone(),
-            self.runtime.tun_stack,
-            self.runtime.options.clone(),
+            self.runtime.clone(),
+            SubscriptionMode::Merge,
+            &pool_source_ids,
         )?
         .bind_sources(
             effective_source_digest(config, Some(Digest::sha256(bytes).hex().as_str())),
@@ -427,13 +404,13 @@ where
             return Err(SourceUpdateError::Conversion);
         }
         let generation = self.next_generation()?;
+        let pool_source_ids = source_ids_with_manual_typed(config);
         let candidate = build_candidate(
             generation,
             &conversion,
-            self.runtime.capture.clone(),
-            self.runtime.clash_api.clone(),
-            self.runtime.tun_stack,
-            self.runtime.options.clone(),
+            self.runtime.clone(),
+            SubscriptionMode::Merge,
+            &pool_source_ids,
         )?
         .bind_sources(
             effective_source_digest(config, Some(Digest::sha256(bytes).hex().as_str())),
@@ -614,13 +591,22 @@ where
         if !conversion.report.summary.source_success || conversion.nodes.is_empty() {
             return Err(SourceUpdateError::Conversion);
         }
+        let pool_source_ids = active_sources
+            .iter()
+            .map(|source| source.id().clone())
+            .chain(manual.as_ref().map(|_| ManualSource::source_id()))
+            .collect::<Vec<_>>();
+        let pool_mode = if manual.is_some() {
+            SubscriptionMode::Merge
+        } else {
+            config.mode()
+        };
         let candidate = build_candidate(
             generation,
             &conversion,
-            self.runtime.capture.clone(),
-            self.runtime.clash_api.clone(),
-            self.runtime.tun_stack,
-            self.runtime.options.clone(),
+            self.runtime.clone(),
+            pool_mode,
+            &pool_source_ids,
         )?
         .bind_sources(
             effective_source_digest(config, manual.as_ref().map(ManualSource::digest)),
@@ -735,6 +721,14 @@ fn source_ids_with_manual(config: &SourceConfig) -> Vec<String> {
         .chain(std::iter::once(
             ManualSource::source_id().as_str().to_owned(),
         ))
+        .collect()
+}
+
+fn source_ids_with_manual_typed(config: &SourceConfig) -> Vec<SourceId> {
+    config
+        .active_sources()
+        .map(|source| source.id().clone())
+        .chain(std::iter::once(ManualSource::source_id()))
         .collect()
 }
 

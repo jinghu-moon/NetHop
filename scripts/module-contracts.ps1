@@ -39,7 +39,7 @@ Assert-True ($properties.id -eq "nethop") "module id must be nethop"
 Assert-True ($properties.versionCode -match '^[1-9][0-9]*$') "versionCode must be positive"
 
 $default = Get-Content -LiteralPath (Join-Path $module "defaults/nethop.toml") -Raw
-Assert-True ($default -match '(?m)^schema_version = 2$') "default TOML schema is not frozen"
+Assert-True ($default -match '(?m)^schema_version = 3$') "default TOML schema is not frozen"
 Assert-True ($default -match '(?m)^enabled = true$') "default service switch drifted"
 Assert-True ($default -match '(?m)^\[\[subscriptions\.sources\]\]$') "default source table is missing"
 Assert-True ($default -match '(?m)^name = "Primary"$') "default source name drifted"
@@ -77,14 +77,16 @@ Assert-True ($customize.Contains('chmod 0600 "$temporary" || fail')) "persistent
 Assert-True ($customize.Contains('[ "${API:-0}" -ge 33 ]')) "installer does not enforce API 33"
 Assert-True ($customize.Contains('[ "${ARCH:-}" = "arm64" ]')) "installer does not enforce arm64"
 Assert-True ($customize.Contains('if [ ! -e "$DATA_ROOT/config/nethop.toml" ]; then')) "installer does not initialize managed config"
-Assert-True ($customize.Contains("schema_version[[:space:]]*=[[:space:]]*2")) "installer does not reject an obsolete development config ABI"
-Assert-True ($customize.Contains('nethop.toml.pre-v2')) "installer does not preserve one private pre-v2 backup"
+Assert-True ($customize.Contains('CONFIG_SCHEMA_VERSION=3')) "installer schema ABI drifted from the default config"
+Assert-True ($customize.Contains('${CONFIG_SCHEMA_VERSION}[[:space:]]*$')) "installer does not validate the current config ABI"
+Assert-True ($customize.Contains('nethop.toml.pre-v3')) "installer does not preserve one private pre-v3 backup"
 Assert-True ($customize.Contains('chmod 0600 "$DATA_ROOT/config/nethop.toml"')) "installer does not protect the managed config"
 Assert-True ($customize.Contains('ln -s "$DATA_ROOT/config/nethop.toml" "$MODPATH/config/nethop.toml"')) "installer does not publish the controlled config link"
 Assert-True (-not $customize.Contains('nethop.json')) "installer retains the removed JSON worker config"
 Assert-True (-not $customize.Contains('sources.json')) "installer retains the removed JSON source config"
 
 $buildScript = Get-Content -LiteralPath (Join-Path $workspace "scripts/build-android-module.ps1") -Raw
+Assert-True ($buildScript.Contains('scripts/fake-magisk-smoke.ps1')) "build does not run the persistent-config upgrade smoke test"
 Assert-True ($buildScript.Contains('[IO.File]::WriteAllText($checksumPath, (($checksumEntries -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))')) "build does not force an LF-only checksum manifest"
 Assert-True ($buildScript.Contains('$checksumBytes.Contains([byte]0x0D)')) "build does not reject CR bytes in the checksum manifest"
 Assert-True ($buildScript.Contains('$checksumBytes[0] -eq 0xEF')) "build does not reject a UTF-8 BOM in the checksum manifest"

@@ -6,24 +6,24 @@ use std::{
     time::Duration,
 };
 
-use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
-use nethop_protocol::{ControlMethod, ControlParams};
-use serde::{Deserialize, Serialize};
+use nethop_core::{CapturePolicy, GenerationId, GenerationNodeRegistry, RuntimeState};
+use nethop_protocol::{ControlMethod, ControlParams, ErrorDomain};
+use serde::Serialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
-    ClashApiClient, ClashApiError, ProcessIdentity, collect_outbound_route, collect_process_metrics,
+    ClashApiClient, ClashApiError, ClashGroupSnapshot, NodeListSnapshot, NodeSelectionIntent,
+    NodeSelectionStore, ProcessIdentity, SelectionModelError, StableNodeId, collect_outbound_route,
+    collect_process_metrics, join_node_snapshot, resolve_active_terminal,
 };
 
-const SELECTOR_SCHEMA_VERSION: u8 = 1;
 const AUTO_SELECTOR_TAG: &str = "nethop-auto";
-const MAX_SELECTOR_STATE_BYTES: usize = 512;
 static TEMP_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
 pub struct OperationalControl {
     api: ClashApiClient,
-    selector_store: SelectorStore,
+    selection_store: NodeSelectionStore,
     diagnostics_path: PathBuf,
     generation_root: Option<PathBuf>,
 }
@@ -31,14 +31,14 @@ pub struct OperationalControl {
 impl OperationalControl {
     pub fn new(
         api: ClashApiClient,
-        selector_store: SelectorStore,
+        selection_store: NodeSelectionStore,
         diagnostics_path: impl Into<PathBuf>,
     ) -> Result<Self, OperationalControlError> {
         let diagnostics_path = diagnostics_path.into();
         validate_output_path(&diagnostics_path)?;
         Ok(Self {
             api,
-            selector_store,
+            selection_store,
             diagnostics_path,
             generation_root: None,
         })
@@ -67,26 +67,68 @@ impl OperationalControl {
         policy: &CapturePolicy,
     ) -> Result<Value, OperationalControlError> {
         match method {
-            ControlMethod::NodeList => Ok(json!({
-                "nodes": self.api.nodes(params.query_value(), params.limit())?,
-            })),
-            ControlMethod::NodeTest => Ok(json!(
-                self.api.test_node(
+            ControlMethod::NodeList => Ok(serde_json::to_value(self.node_snapshot()?)?),
+            ControlMethod::NodeTest => {
+                let node_id = StableNodeId::new(
                     params
                         .target_value()
                         .expect("protocol validated node target"),
-                )?
-            )),
-            ControlMethod::NodeTestAll => Ok(json!({
-                "results": self.api.test_all_nodes()?,
-            })),
-            ControlMethod::NodeSelect => {
-                let target = params
-                    .target_value()
-                    .expect("protocol validated node target");
-                self.api.select_node(target)?;
-                self.selector_store.save(target)?;
-                Ok(json!({"selected":target,"persisted":true}))
+                )?;
+                let registry = self.current_registry()?;
+                let record = registry
+                    .by_stable_id(node_id.as_str())
+                    .ok_or(OperationalControlError::UnknownNode)?;
+                let result = self.api.test_node(record.internal_tag())?;
+                Ok(json!({"id":node_id,"latency_ms":result.delay_ms}))
+            }
+            ControlMethod::NodeTestAll => {
+                let registry = self.current_registry()?;
+                let results = self
+                    .api
+                    .test_all_nodes()?
+                    .into_iter()
+                    .filter_map(|result| {
+                        registry.by_internal_tag(&result.tag).map(|record| {
+                            json!({
+                                "id": record.stable_node_id(),
+                                "latency_ms": result.delay_ms,
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let selection = self.node_snapshot()?.selection().clone();
+                Ok(json!({"results":results,"selection":selection}))
+            }
+            ControlMethod::NodeSelectManual => {
+                let node_id = StableNodeId::new(
+                    params
+                        .target_value()
+                        .expect("protocol validated node target"),
+                )?;
+                let registry = self.current_registry()?;
+                let record = registry
+                    .by_stable_id(node_id.as_str())
+                    .ok_or(OperationalControlError::UnknownNode)?;
+                let snapshot = self.api.group_snapshot()?;
+                let selectable = snapshot.groups().get("nethop-select").is_some_and(|group| {
+                    group.all().iter().any(|tag| tag == record.internal_tag())
+                });
+                if !selectable {
+                    return Err(OperationalControlError::UnknownNode);
+                }
+                self.api.select_manual_tag(record.internal_tag())?;
+                self.selection_store
+                    .save(&NodeSelectionIntent::Manual { node_id }, unix_seconds())?;
+                Ok(serde_json::to_value(self.node_snapshot()?.selection())?)
+            }
+            ControlMethod::NodeSelectAuto => {
+                self.api.select_auto()?;
+                self.selection_store
+                    .save(&NodeSelectionIntent::Auto, unix_seconds())?;
+                Ok(serde_json::to_value(self.node_snapshot()?.selection())?)
+            }
+            ControlMethod::NodeSelectionGet => {
+                Ok(serde_json::to_value(self.node_snapshot()?.selection())?)
             }
             ControlMethod::NodeExport => {
                 let target = params
@@ -119,8 +161,12 @@ impl OperationalControl {
                 "operational": self.status_document(),
             })),
             ControlMethod::DiagnosticsBundle => {
-                let nodes = self.api.nodes(None, Some(128));
+                let core = self.api.group_snapshot();
                 let connections = self.api.connections(None, Some(128));
+                let selection = core
+                    .as_ref()
+                    .ok()
+                    .and_then(|core| self.node_snapshot_from_core(core).ok());
                 let document = json!({
                     "schema_version": 1,
                     "runtime": {
@@ -129,9 +175,10 @@ impl OperationalControl {
                     },
                     "capture": capture_document(policy),
                     "clash_api": {
-                        "available": nodes.is_ok() && connections.is_ok(),
-                        "node_count": nodes.as_ref().map_or(0, Vec::len),
-                        "selected": nodes.as_ref().ok().and_then(|nodes| nodes.iter().find(|node| node.selected)).map(|node| &node.tag),
+                        "available": core.is_ok() && connections.is_ok(),
+                        "node_count": selection.as_ref().map_or(0, |snapshot| snapshot.nodes().len()),
+                        "active_node_id": selection.as_ref().and_then(|snapshot| snapshot.selection().active_node_id()),
+                        "degraded_reason": selection.as_ref().and_then(|snapshot| snapshot.selection().degraded_reason()),
                         "active_connection_count": connections.as_ref().map_or(0, Vec::len),
                     },
                 });
@@ -146,19 +193,30 @@ impl OperationalControl {
     }
 
     pub fn status_document(&mut self) -> Value {
-        let nodes = self.api.nodes(None, Some(128));
+        let core = self.api.group_snapshot();
         let connections = self.api.connections(None, Some(128));
+        let selection = core
+            .as_ref()
+            .ok()
+            .and_then(|core| self.node_snapshot_from_core(core).ok());
         json!({
-            "core_api": if nodes.is_ok() && connections.is_ok() { "available" } else { "unavailable" },
+            "core_api": if core.is_ok() && connections.is_ok() { "available" } else { "unavailable" },
             "selector": {
-                "selected": nodes.as_ref().ok().and_then(|nodes| nodes.iter().find(|node| node.selected)).map(|node| &node.tag),
-                "candidate_count": nodes.as_ref().map_or(0, Vec::len),
+                "intent": selection.as_ref().map(|snapshot| snapshot.selection().intent()),
+                "active_node_id": selection.as_ref().and_then(|snapshot| snapshot.selection().active_node_id()),
+                "degraded_reason": selection.as_ref().and_then(|snapshot| snapshot.selection().degraded_reason()),
+                "candidate_count": selection.as_ref().map_or(0, |snapshot| snapshot.nodes().len()),
             },
             "active_connection_count": connections.as_ref().map_or(0, Vec::len),
         })
     }
 
     fn export_node(&self, target: &str) -> Result<Value, OperationalControlError> {
+        let internal_tag = self
+            .current_registry()?
+            .by_stable_id(target)
+            .map(|record| record.internal_tag().to_owned())
+            .ok_or(OperationalControlError::UnknownNode)?;
         let root = self
             .generation_root
             .as_ref()
@@ -197,28 +255,82 @@ impl OperationalControl {
             .get("outbounds")
             .and_then(Value::as_array)
             .and_then(|outbounds| {
-                outbounds
-                    .iter()
-                    .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some(target))
+                outbounds.iter().find(|outbound| {
+                    outbound.get("tag").and_then(Value::as_str) == Some(internal_tag.as_str())
+                })
             })
             .cloned()
             .ok_or(OperationalControlError::UnknownNode)?;
-        Ok(json!({"generation":generation,"tag":target,"outbound":outbound}))
+        Ok(json!({"generation":generation,"node_id":target,"outbound":outbound}))
     }
 
     pub fn replay_selection(&mut self) -> Result<ReplayResult, OperationalControlError> {
-        let Some(selected) = self.selector_store.load()? else {
-            return Ok(ReplayResult::NoSelection);
-        };
-        match self.api.select_node(&selected) {
-            Ok(()) => Ok(ReplayResult::Restored),
-            Err(ClashApiError::UnknownTarget) => {
+        let (intent, _) = self.selection_store.load()?;
+        match intent {
+            NodeSelectionIntent::Auto => {
                 self.api.select_node(AUTO_SELECTOR_TAG)?;
-                self.selector_store.save(AUTO_SELECTOR_TAG)?;
-                Ok(ReplayResult::FellBackToAuto)
+                Ok(ReplayResult::Restored)
             }
-            Err(error) => Err(error.into()),
+            NodeSelectionIntent::Manual { node_id } => {
+                let registry = self.current_registry()?;
+                let Some(record) = registry.by_stable_id(node_id.as_str()) else {
+                    self.api.select_auto()?;
+                    self.selection_store.reset_auto(unix_seconds())?;
+                    return Ok(ReplayResult::FellBackToAuto);
+                };
+                match self.api.select_manual_tag(record.internal_tag()) {
+                    Ok(()) => Ok(ReplayResult::Restored),
+                    Err(ClashApiError::UnknownTarget) => {
+                        self.api.select_auto()?;
+                        self.selection_store.reset_auto(unix_seconds())?;
+                        Ok(ReplayResult::FellBackToAuto)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
         }
+    }
+
+    fn node_snapshot(&self) -> Result<NodeListSnapshot, OperationalControlError> {
+        let core = self.api.group_snapshot()?;
+        self.node_snapshot_from_core(&core)
+    }
+
+    fn node_snapshot_from_core(
+        &self,
+        core: &ClashGroupSnapshot,
+    ) -> Result<NodeListSnapshot, OperationalControlError> {
+        let registry = self.current_registry()?;
+        let (intent, changed_at) = self.selection_store.load()?;
+        let active = resolve_active_terminal("nethop-select", core.groups(), &registry);
+        let mut snapshot = join_node_snapshot(&registry, intent, active, changed_at)?;
+        for node in snapshot.nodes_mut() {
+            if let Some(record) = registry.by_stable_id(node.id().as_str())
+                && let Some(observation) = core.terminal(record.internal_tag())
+            {
+                node.set_observation(observation.latency_ms(), observation.alive());
+            }
+        }
+        Ok(snapshot)
+    }
+
+    fn current_registry(&self) -> Result<GenerationNodeRegistry, OperationalControlError> {
+        let root = self
+            .generation_root
+            .as_ref()
+            .ok_or(OperationalControlError::GenerationUnavailable)?;
+        let current = controlled_current_generation(root)?;
+        let path = root.join(current.to_string()).join("nodes.json");
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| OperationalControlError::GenerationUnavailable)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024
+        {
+            return Err(OperationalControlError::GenerationUnavailable);
+        }
+        serde_json::from_slice(
+            &fs::read(path).map_err(|_| OperationalControlError::GenerationUnavailable)?,
+        )
+        .map_err(|_| OperationalControlError::GenerationUnavailable)
     }
 
     pub fn metrics_document(
@@ -246,67 +358,8 @@ impl OperationalControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplayResult {
-    NoSelection,
     Restored,
     FellBackToAuto,
-}
-
-pub struct SelectorStore {
-    path: PathBuf,
-}
-
-impl SelectorStore {
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self, OperationalControlError> {
-        let path = path.into();
-        validate_output_path(&path)?;
-        Ok(Self { path })
-    }
-
-    pub fn load(&self) -> Result<Option<String>, OperationalControlError> {
-        if !self.path.exists() {
-            return Ok(None);
-        }
-        let metadata =
-            fs::symlink_metadata(&self.path).map_err(|_| OperationalControlError::SelectorState)?;
-        if !metadata.is_file()
-            || metadata.file_type().is_symlink()
-            || metadata.len() as usize > MAX_SELECTOR_STATE_BYTES
-        {
-            return Err(OperationalControlError::SelectorState);
-        }
-        let state: SelectorState = serde_json::from_slice(
-            &fs::read(&self.path).map_err(|_| OperationalControlError::SelectorState)?,
-        )
-        .map_err(|_| OperationalControlError::SelectorState)?;
-        if state.schema_version != SELECTOR_SCHEMA_VERSION || !valid_tag(&state.selected_tag) {
-            return Err(OperationalControlError::SelectorState);
-        }
-        Ok(Some(state.selected_tag))
-    }
-
-    pub fn save(&self, selected_tag: &str) -> Result<(), OperationalControlError> {
-        if !valid_tag(selected_tag) {
-            return Err(OperationalControlError::SelectorState);
-        }
-        publish_json(
-            &self.path,
-            &SelectorState {
-                schema_version: SELECTOR_SCHEMA_VERSION,
-                selected_tag: selected_tag.to_owned(),
-            },
-        )
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SelectorState {
-    schema_version: u8,
-    selected_tag: String,
-}
-
-fn valid_tag(tag: &str) -> bool {
-    !tag.is_empty() && tag.len() <= 128 && !tag.chars().any(char::is_control)
 }
 
 fn validate_output_path(path: &Path) -> Result<(), OperationalControlError> {
@@ -411,12 +464,33 @@ fn runtime_state_wire(state: RuntimeState) -> &'static str {
     }
 }
 
+fn controlled_current_generation(root: &Path) -> Result<u64, OperationalControlError> {
+    let path = root.join("current");
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| OperationalControlError::GenerationUnavailable)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 32 {
+        return Err(OperationalControlError::GenerationUnavailable);
+    }
+    fs::read_to_string(path)
+        .map_err(|_| OperationalControlError::GenerationUnavailable)?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|generation| *generation > 0)
+        .ok_or(OperationalControlError::GenerationUnavailable)
+}
+
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[derive(Debug, Error)]
 pub enum OperationalControlError {
     #[error("operational control path is invalid")]
     InvalidPath,
-    #[error("selector state is invalid")]
-    SelectorState,
     #[error("operational state could not be written atomically")]
     Write,
     #[error("operational method is unsupported")]
@@ -427,4 +501,41 @@ pub enum OperationalControlError {
     UnknownNode,
     #[error("Clash API operation failed")]
     ClashApi(#[from] ClashApiError),
+    #[error("node selection model operation failed")]
+    Selection(#[from] SelectionModelError),
+    #[error("operational response serialization failed")]
+    Json(#[from] serde_json::Error),
+}
+
+impl OperationalControlError {
+    pub const fn control_diagnostic(&self) -> (ErrorDomain, &'static str) {
+        match self {
+            Self::UnknownNode | Self::ClashApi(ClashApiError::UnknownTarget) => {
+                (ErrorDomain::Node, "SELECTION-STALE")
+            }
+            Self::GenerationUnavailable => (ErrorDomain::Node, "ACTIVE-UNRESOLVED"),
+            Self::Selection(SelectionModelError::InvalidNodeId) => {
+                (ErrorDomain::Node, "INVALID-ID")
+            }
+            Self::Selection(_) => (ErrorDomain::Node, "SELECTION-STATE"),
+            Self::ClashApi(ClashApiError::Unavailable) => {
+                (ErrorDomain::Core, "CONTROL-UNAVAILABLE")
+            }
+            Self::ClashApi(ClashApiError::Rejected) => (ErrorDomain::Core, "CONTROL-REJECTED"),
+            Self::ClashApi(
+                ClashApiError::ResponseTooLarge
+                | ClashApiError::InvalidResponse
+                | ClashApiError::Json(_),
+            ) => (ErrorDomain::Core, "CONTROL-INVALID-RESPONSE"),
+            Self::ClashApi(
+                ClashApiError::InvalidEndpoint
+                | ClashApiError::InvalidLimits
+                | ClashApiError::InvalidRequest,
+            )
+            | Self::InvalidPath
+            | Self::UnsupportedMethod
+            | Self::Json(_) => (ErrorDomain::Core, "CONTROL-INVALID"),
+            Self::Write => (ErrorDomain::Core, "CONTROL-WRITE-FAILED"),
+        }
+    }
 }

@@ -50,10 +50,10 @@ pub use diagnostics::{
 pub use fetch::{
     CandidateAcceptance, ContentEncoding, FetchAgentConfig, FetchClient, FetchDiagnosticCode,
     FetchEndpoint, FetchEndpointKind, FetchError, FetchOutcome, FetchPolicy, FetchPolicyError,
-    FetchRequest, FetchTimeouts, SourceCache, SubscriptionUserInfo, UREQ_SECURITY_ADAPTER_VERSION,
-    decode_response_body, is_denied_ssrf_address, next_redirect, parse_subscription_userinfo,
-    validate_peer_address, validate_peer_in_approved_set, validate_resolved_addresses,
-    validate_response_limits,
+    FetchRequest, FetchTimeouts, LocalFetchProxy, SourceCache, SubscriptionUserInfo,
+    UREQ_SECURITY_ADAPTER_VERSION, decode_response_body, is_denied_ssrf_address, next_redirect,
+    parse_subscription_userinfo, validate_peer_address, validate_peer_in_approved_set,
+    validate_resolved_addresses, validate_response_limits,
 };
 pub use ipc::{
     ACTIVE_OUTBOUND_BASELINE, CONVERSION_NODE_LIMIT, CandidateStatus, IpcPayloadOrigin,

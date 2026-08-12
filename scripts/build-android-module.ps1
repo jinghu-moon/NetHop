@@ -338,6 +338,7 @@ foreach ($entry in $checksumEntries) {
 }
 
 Invoke-Checked pwsh @("-NoProfile", "-File", (Join-Path $workspace "scripts/module-contracts.ps1"))
+Invoke-Checked pwsh @("-NoProfile", "-File", (Join-Path $workspace "scripts/fake-magisk-smoke.ps1"))
 
 $zipPath = Join-Path $outputRoot "NetHop-$rustCommit-arm64.zip"
 $archiveInputs = Get-ChildItem -LiteralPath $stage -Force | ForEach-Object { $_.FullName }

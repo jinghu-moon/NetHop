@@ -7,7 +7,8 @@ use nethop_protocol::MAX_FRAME_BYTES;
 use nethop_protocol::RequestId;
 #[cfg(unix)]
 use nethopctl::{
-    CliCommand, build_request, execute_with_input, render_response, render_status_human,
+    CliCommand, build_request, control_timeout, execute_with_input, render_response,
+    render_status_human,
 };
 use nethopctl::{CliError, DEFAULT_SOCKET_PATH, parse_invocation};
 
@@ -58,11 +59,7 @@ fn run() -> Result<bool, CliError> {
         } else {
             None
         };
-        let timeout = if invocation.wait() {
-            Duration::from_secs(30)
-        } else {
-            Duration::from_secs(5)
-        };
+        let timeout = control_timeout(invocation.command(), invocation.wait());
         let mut transport = nethopctl::UnixControlTransport::new(DEFAULT_SOCKET_PATH, timeout)?;
         if matches!(
             invocation.command(),

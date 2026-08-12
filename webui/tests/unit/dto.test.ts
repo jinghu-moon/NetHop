@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { safeExtension, ValidationError } from "@/model/bounds";
-import { parseApplication, parseApplicationList, parseCapability, parseConfig, parseConfigSchema, parseControlEnvelope, parseEventFrame, parseHello, parseLogs, parseNode, parseNodeDelayList, parseNodeList, parseOperational, parseRuntimeMetrics, parseSourceStatus, parseStatus, parseSubscription, parseSubscriptionList, parseTraffic } from "@/model/dto";
+import { parseApplication, parseApplicationList, parseCapability, parseConfig, parseConfigSchema, parseControlEnvelope, parseEventFrame, parseHello, parseLogs, parseNode, parseNodeDelayList, parseNodeList, parseNodeSelection, parseOperational, parseRuntimeMetrics, parseSourceStatus, parseStatus, parseSubscription, parseSubscriptionSnapshot, parseTraffic } from "@/model/dto";
 
 const digest = "a".repeat(64);
 
 describe("strict DTO validators", () => {
-  it("negotiates protocol v2 and denies unknown hello fields", () => {
-    const hello = { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 2, daemon_protocol_max: 2, daemon_schema_min: 2, daemon_schema_max: 2, active_schema_version: 2, supported_operations: ["status.get"], supported_features: ["event_stream"] };
+  it("negotiates protocol v3 and denies unknown hello fields", () => {
+    const hello = { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 3, daemon_protocol_max: 3, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: ["status.get"], supported_features: ["event_stream"] };
     expect(parseHello(hello).compatible).toBe(true);
     expect(() => parseHello({ ...hello, unknown: true })).toThrow("unknown field");
     expect(() => parseHello({ ...hello, manager_version: "x".repeat(65) })).toThrow();
@@ -15,7 +15,7 @@ describe("strict DTO validators", () => {
 
   it("validates control envelope and status state", () => {
     const status = { schema_version: 1, state: "running_tproxy", generation: 2, last_update: "succeeded", watcher_health: "healthy", runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} };
-    const envelope = { version: 2, request_id: "test", ok: true, generation: 2, result: status };
+    const envelope = { version: 3, request_id: "test", ok: true, generation: 2, result: status };
     expect(parseControlEnvelope(envelope, parseStatus).result.state).toBe("running_tproxy");
     expect(() => parseStatus({ ...status, state: "invented" })).toThrow("invalid enum");
     expect(() => parseControlEnvelope({ ...envelope, extra: true }, parseStatus)).toThrow("unknown field");
@@ -62,17 +62,17 @@ describe("strict DTO validators", () => {
       stage: 2,
       enum_values: ["system", "gvisor"],
     };
-    const schema = parseConfigSchema({ schema_version: 2, fields: [field], features: [] });
+    const schema = parseConfigSchema({ schema_version: 3, fields: [field], features: [] });
 
     expect(schema.fields[0]?.options).toEqual(["system", "gvisor"]);
     expect(schema.fields[0]?.capabilityKey).toBe("capture.tun");
-    expect(() => parseConfigSchema({ schema_version: 2, fields: [{ ...field, enum: field.enum_values }], features: [] })).toThrow("unknown field");
+    expect(() => parseConfigSchema({ schema_version: 3, fields: [{ ...field, enum: field.enum_values }], features: [] })).toThrow("unknown field");
   });
 
   it("rejects source URL leakage and credential-shaped node fields", () => {
-    expect(parseSubscription({ id: "src_abc", name: "Primary", enabled: true, url_redacted: "[REDACTED]" }).name).toBe("Primary");
-    expect(() => parseSubscription({ id: "src_abc", name: "Primary", enabled: true, url_redacted: "https://secret" })).toThrow("redacted");
-    const node = { id: "node-1", name: "Tokyo", protocol: "vless", latency_ms: 23, selected: true, source_ids: ["src_abc"] };
+    expect(parseSubscription({ id: "src_abc", name: "Primary", configured: true, active: true, url_redacted: "[REDACTED]" }).name).toBe("Primary");
+    expect(() => parseSubscription({ id: "src_abc", name: "Primary", configured: true, active: true, url_redacted: "https://secret" })).toThrow("redacted");
+    const node = { id: "nh1s-0123456789abcdef", name: "Tokyo", protocol: "vless", latency_ms: 23, alive: true, is_requested: true, is_active: true, source_ids: ["src_abc"] };
     expect(parseNode(node).latencyMs).toBe(23);
     expect(() => parseNode({ ...node, password: "secret" })).toThrow("unknown field");
   });
@@ -81,10 +81,10 @@ describe("strict DTO validators", () => {
     expect(parseApplication({ package_name: "tv.danmaku.bili", uid: 10123, mode: "blacklist", shared_uid: false }).uid).toBe(10123);
     expect(parseTraffic({ kind: "traffic", sample: { up: 12, down: 34 }, interval_seconds: 1 }).down).toBe(34);
     expect(() => parseTraffic({ sample: { up: -1, down: Number.NaN }, interval_seconds: 1 })).toThrow();
-    const snapshot = { version: 2, request_id: "events", sequence: 1, kind: "item", payload: { kind: "snapshot", runtime: {} } };
+    const snapshot = { version: 3, request_id: "events", sequence: 1, kind: "item", payload: { kind: "snapshot", runtime: {} } };
     expect(parseEventFrame(snapshot).type).toBe("item");
-    expect(parseEventFrame({ version: 2, request_id: "events", sequence: 2, kind: "end" }).type).toBe("end");
-    expect(parseEventFrame({ version: 2, request_id: "events", sequence: 3, kind: "error", error: { code: "NH-CORE-UNAVAILABLE", message: "unavailable" } }).type).toBe("error");
+    expect(parseEventFrame({ version: 3, request_id: "events", sequence: 2, kind: "end" }).type).toBe("end");
+    expect(parseEventFrame({ version: 3, request_id: "events", sequence: 3, kind: "error", error: { code: "NH-CORE-UNAVAILABLE", message: "unavailable" } }).type).toBe("error");
     expect(() => parseEventFrame({ ...snapshot, sequence: 0 })).toThrow();
   });
 
@@ -97,20 +97,23 @@ describe("strict DTO validators", () => {
   });
 
   it("parses non-empty daemon lists without adding wrapper fields", () => {
-    expect(parseSubscriptionList({ subscriptions: [{ id: "src_abc", name: "Primary", enabled: true }] })[0]?.name).toBe("Primary");
-    expect(parseNodeList({ nodes: [{ id: "node-1", name: "Tokyo", protocol: "vless", selected: true, source_ids: [] }] })[0]?.selected).toBe(true);
+    expect(parseSubscriptionSnapshot({ mode: "single", active_source_ids: ["src_abc"], config_digest: digest, sources: [{ id: "src_abc", name: "Primary", configured: true, active: true }] }).sources[0]?.name).toBe("Primary");
+    const selection = { version: 1, intent: { mode: "manual", node_id: "nh1s-0123456789abcdef" }, active_node_id: "nh1s-0123456789abcdef", changed_at: 1 };
+    expect(parseNodeList({ nodes: [{ id: "nh1s-0123456789abcdef", name: "Tokyo", protocol: "vless", is_requested: true, is_active: true, source_ids: ["src_abc"] }], selection }).selection.intent.mode).toBe("manual");
+    expect(() => parseNode({ id: "nh1s-0123456789abcdef", name: "old", protocol: "vless", selected: true, source_ids: ["src_abc"] })).toThrow("unknown field");
+    expect(parseNodeSelection(selection).activeNodeId).toBe("nh1s-0123456789abcdef");
     expect(parseApplicationList({ applications: [{ package_name: "tv.danmaku.bili", uid: 10123, mode: "blacklist", shared_uid: false }] })[0]?.packageName).toBe("tv.danmaku.bili");
   });
 
   it("accepts only bounded stable node IDs in all-node delay results", () => {
-    expect(parseNodeDelayList({ results: [{ tag: "nh1s-0123456789abcdef", delay_ms: 64 }] })).toEqual([{ id: "nh1s-0123456789abcdef", latencyMs: 64 }]);
-    expect(() => parseNodeDelayList({ results: [{ tag: "direct", delay_ms: 1 }] })).toThrow("invalid node id");
-    expect(() => parseNodeDelayList({ results: [{ tag: "nh1s-0123456789abcdef", delay_ms: 65_536 }] })).toThrow();
+    expect(parseNodeDelayList({ results: [{ id: "nh1s-0123456789abcdef", latency_ms: 64 }] })).toEqual([{ id: "nh1s-0123456789abcdef", latencyMs: 64 }]);
+    expect(() => parseNodeDelayList({ results: [{ id: "direct", latency_ms: 1 }] })).toThrow("invalid node id");
+    expect(() => parseNodeDelayList({ results: [{ id: "nh1s-0123456789abcdef", latency_ms: 65_536 }] })).toThrow();
   });
 
   it("bounds operational extensions and 10,000-node corpus", () => {
     expect(parseOperational({ connections: [] }, "connections")).toEqual({ connections: [] });
-    const nodes = Array.from({ length: 10_000 }, (_, index) => parseNode({ id: `node-${index}`, name: `Node ${index}`, protocol: "trojan", selected: false, source_ids: [] }));
+    const nodes = Array.from({ length: 10_000 }, (_, index) => parseNode({ id: `nh1s-${index.toString(16).padStart(16, "0")}`, name: `Node ${index}`, protocol: "trojan", is_requested: false, is_active: false, source_ids: ["src_abc"] }));
     expect(nodes).toHaveLength(10_000);
     expect(nodes.every((node) => !("password" in node))).toBe(true);
   });
@@ -126,8 +129,9 @@ describe("bounded corpus", () => {
   });
 
   it("rejects oversized external collections and strings before store admission", () => {
-    const node = { id: "node-1", name: "Node", protocol: "trojan", selected: false, source_ids: [] };
-    expect(() => parseNodeList({ nodes: new Array(10_001).fill(node) })).toThrow("too many items");
+    const node = { id: "nh1s-0123456789abcdef", name: "Node", protocol: "trojan", is_requested: false, is_active: false, source_ids: ["src_abc"] };
+    const selection = { version: 1, intent: { mode: "auto" }, active_node_id: null, changed_at: 0 };
+    expect(() => parseNodeList({ nodes: new Array(10_001).fill(node), selection })).toThrow("too many items");
     expect(() => parseNode({ ...node, name: "x".repeat(513) })).toThrow("invalid string");
     expect(() => parseOperational({ logs: new Array(10_001).fill({ message: "bounded" }) }, "logs")).toThrow("too many items");
     expect(() => parseOperational({ connections: [{ address: "x".repeat(16 * 1024 + 1) }] }, "connections")).toThrow("invalid string");

@@ -6,7 +6,7 @@ import { EventSession } from "@/runtime/event-session";
 import { ReconnectBackoff } from "@/runtime/reconnect";
 import { TrafficCoalescer, TrafficRing, type FrameScheduler } from "@/runtime/traffic-ring";
 
-const frame = (sequence: number, kind: string, extra: Record<string, unknown> = {}): unknown => ({ version: 2, request_id: "events", sequence, kind: "item", payload: { kind, ...extra } });
+const frame = (sequence: number, kind: string, extra: Record<string, unknown> = {}): unknown => ({ version: 3, request_id: "events", sequence, kind: "item", payload: { kind, ...extra } });
 
 describe("snapshot-first event state", () => {
   it("rejects item before snapshot and requests resync", () => {
@@ -70,9 +70,9 @@ describe("bounded reconnect and traffic", () => {
     vi.useFakeTimers();
     const host = createMockHost({
       responses: {
-        hello: { errno: 0, stderr: "", stdout: JSON.stringify({ version: 2, request_id: "hello", ok: true, result: { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 2, daemon_protocol_max: 2, daemon_schema_min: 1, daemon_schema_max: 1, active_schema_version: 1, supported_operations: [], supported_features: [] } }) },
+        hello: { errno: 0, stderr: "", stdout: JSON.stringify({ version: 3, request_id: "hello", ok: true, result: { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 3, daemon_protocol_max: 3, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: [] } }) },
       },
-      streams: { "events.subscribe": ['{"version":2,"request_id":"events","sequence":1,"kind":"item","payload":{"kind":"snapshot","runtime":{}}}\n'] },
+      streams: { "events.subscribe": ['{"version":3,"request_id":"events","sequence":1,"kind":"item","payload":{"kind":"snapshot","runtime":{}}}\n'] },
       closeStreams: false,
     });
     const session = new EventSession({ host, kinds: ["runtime"], managerVersion: "webui-0.1.0" });
@@ -88,7 +88,7 @@ describe("bounded reconnect and traffic", () => {
 
   it("treats an incompatible hello as terminal and never spawns events", async () => {
     vi.useFakeTimers();
-    const host = createMockHost({ responses: { hello: { errno: 0, stderr: "", stdout: JSON.stringify({ version: 2, request_id: "hello", ok: true, result: { manager_version: "webui-0.1.0", compatible: false, daemon_protocol_min: 1, daemon_protocol_max: 1, daemon_schema_min: 1, daemon_schema_max: 1, active_schema_version: 1, supported_operations: [], supported_features: [] } }) } } });
+    const host = createMockHost({ responses: { hello: { errno: 0, stderr: "", stdout: JSON.stringify({ version: 3, request_id: "hello", ok: true, result: { manager_version: "webui-0.1.0", compatible: false, daemon_protocol_min: 1, daemon_protocol_max: 1, daemon_schema_min: 1, daemon_schema_max: 1, active_schema_version: 1, supported_operations: [], supported_features: [] } }) } } });
     const session = new EventSession({ host, kinds: ["runtime"], managerVersion: "webui-0.1.0" });
     session.start();
     await vi.runAllTimersAsync();

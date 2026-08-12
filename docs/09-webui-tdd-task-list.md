@@ -8,6 +8,8 @@
 >
 > 原则：开发期允许破坏性重构，不维护未发布接口兼容层；必须用变更前后测试证明新能力增加且既有用户行为仍成立
 
+> 现行契约说明（2026-08-11）：本文已完成的 Protocol v2 节点属于 WebUI 初始实现及 before 回归证据；当前生产契约已由 [`12-subscription-selection-and-node-optimization-tdd-task-list.md`](./12-subscription-selection-and-node-optimization-tdd-task-list.md) 破坏性升级为 schema v3 / Protocol v3。新实现不得恢复旧 `NodeSelect { target }`、`selected: bool` 或前端乐观 source 状态。
+
 ## 1. 目的
 
 本文把 `08-webui-design.md` 拆成可按 TDD 执行的有向无环任务图。每个任务节点只交付一个可验证结果；节点之间要么由 `depends_on` 明确递进，要么由 `parallel_with` 明确允许并行。
@@ -16,9 +18,9 @@
 
 ## 2. 已核验事实
 
-### 2.1 当前 NetHop 基线
+### 2.1 本文制定时的 NetHop 基线（历史）
 
-- 当前协议版本为 `PROTOCOL_VERSION = 1`。
+- 本文制定时协议版本为 `PROTOCOL_VERSION = 1`；当前生产协议为 v3。
 - `nethopctl` 已覆盖 hello、status、start/stop、capability、config、subscription、node、application、connection、logs、diagnostics、topology、traffic、ruleset、backup 和 core version check。
 - `events.subscribe` 已存在，但 `EventKind` 当前只有 `config/runtime/subscription/generation/network`，尚无 `traffic`。
 - 当前不存在 `nethopctl webui payload create/append/commit/remove` 受控命令。
@@ -361,7 +363,7 @@ pwsh -NoProfile -File "scripts/webui-phase-a-gate.ps1"
 pwsh -NoProfile -File "scripts/webui-phase-b-gate.ps1"
 ```
 
-该入口聚合 protocol v2、CLI、daemon payload、traffic coalesced lane、旧功能回归矩阵、模块契约和 secret canary 扫描。traffic 只走 latest-value ephemeral lane；payload 仅允许 daemon 拥有的 `config` namespace，采用服务端随机 handle、`0600` 文件、12 KiB chunk、1 MiB 总量、consume-before-apply 和 15 分钟 TTL。
+该入口聚合当时的 protocol v2 before 基线、CLI、daemon payload、traffic coalesced lane、旧功能回归矩阵、模块契约和 secret canary 扫描。traffic 只走 latest-value ephemeral lane；payload 仅允许 daemon 拥有的 `config` namespace，采用服务端随机 handle、`0600` 文件、12 KiB chunk、1 MiB 总量、consume-before-apply 和 15 分钟 TTL。现行订阅与节点 operation 使用 Protocol v3 typed 方法，v2 证据只用于证明升级前功能没有回退。
 
 ## 9. 阶段 C：WebUI workspace、依赖与构建门禁
 
@@ -661,8 +663,8 @@ pwsh -NoProfile -File "scripts/webui-phase-d-gate.ps1"
 
 - [x] **E006 - 校验 node DTO**
   - `depends_on`: C015；`parallel_with`: E005, E007
-  - `RED`: stable node ID、protocol、latency、selected、source refs 和 page limit fixture 失败。
-  - `GREEN`: 实现 node validator。
+  - `RED`: 历史 before fixture 的 stable node ID、protocol、latency、selected、source refs 和 page limit 校验失败。
+  - `GREEN`: 实现初始 node validator；现行 v3 validator 已在 `12` 中将 `selected` 替换为 requested/active。
   - `REFACTOR`: 凭据字段在 schema 中根本不存在。
   - `VERIFY`: 10,000 节点 fixture 与恶意长名称。
   - `done`: 节点列表模型不包含 secret。
@@ -1817,7 +1819,7 @@ pwsh -NoProfile -File "scripts/webui-phase-k-gate.ps1"
 | 阶段 | 完成证据 | 允许进入 |
 |---|---|---|
 | A | before golden、旧功能矩阵、secret/破坏性证据门禁 | B、C |
-| B | protocol v2、traffic lane、private payload、旧 CLI 回归 | D、E |
+| B | 历史 protocol v2 before 基线、traffic lane、private payload、旧 CLI 回归 | D、E |
 | C | 可复现 workspace、三层测试、依赖/包体/CSP 门禁 | D、E |
 | D | 无任意 shell 的 HostAdapter/WebUiBridge | F |
 | E | 所有 WebUI 可达响应有 runtime validator | F、G |
@@ -1904,6 +1906,6 @@ pwsh -NoProfile -File "scripts/webui-phase-k-gate.ps1"
 
 ## 27. 最终结论
 
-WebUI 的实现顺序必须从安全、可测试的后端契约开始，而不是从页面开始。当前最先要完成的是 protocol v2 的 traffic event 和受控 private payload；完成后才能建立窄 HostAdapter、严格 DTO validator、可恢复 event stream 和 CAS operation state，最后再组合页面。
+WebUI 的实现顺序必须从安全、可测试的后端契约开始，而不是从页面开始。本文定义的 traffic event、受控 private payload、窄 HostAdapter、严格 DTO validator、可恢复 event stream 和 CAS operation state 已构成基础层；当前订阅 single/merge、稳定 node ID、requested/active 与 selection operation 统一以 Protocol v3 为准，详见 `12`。
 
 项目尚未发布，因此本文明确选择删除旧路径并直接升级协议，不用兼容层拖累实现；但每次破坏性重构都以 before fixture、after golden 和完整旧功能矩阵证明行为质量。最终发布标准不是“页面能打开”，而是日常闭环、全部稳定 CLI 覆盖、Android WebView 性能、安全、视觉质量、真机进程清理和模块供应链同时成立。

@@ -1,21 +1,25 @@
 use std::{collections::VecDeque, time::Duration};
 
 use nethop_android::{IpFamily, NetworkAction, NetworkChange, NetworkEvent};
-use nethop_core::{
-    CaptureMode, CapturePolicy, ClashApi, GenerationId, ManagedOptions, RuntimeState, TunStack,
-};
+#[cfg(feature = "subscription-update")]
+use nethop_core::{CaptureMode, CapturePolicy, ClashApi, ManagedOptions, TunStack};
+use nethop_core::{GenerationId, RuntimeState};
 use nethop_protocol::{ControlMethod, ControlRequest, RequestId};
+#[cfg(feature = "subscription-update")]
 use nethop_subscription::{
     CapabilityMatrix, FormatHint, ParserLimits, SourceId, SourceInput, convert_stable_sources,
 };
+#[cfg(feature = "subscription-update")]
+use nethopd::build_candidate;
 use nethopd::{
     ControlCommand, ControlRequestHandler, ControlSnapshot, CounterBatch, CounterName,
     CounterReading, CounterTransport, EventReconcileGate, ScheduleKey, SchedulePolicy,
     ScheduleStore, SchedulerEngine, StatsCollector, StatsError, StatsStore, UpdateStatus,
-    WorkerControlHandler, build_candidate,
+    WorkerControlHandler,
 };
 use tempfile::tempdir;
 
+#[cfg(feature = "subscription-update")]
 fn capture() -> CapturePolicy {
     CapturePolicy::new(
         CaptureMode::Tproxy,
@@ -29,10 +33,12 @@ fn capture() -> CapturePolicy {
 }
 
 #[test]
+#[cfg(feature = "subscription-update")]
 fn stable_parser_output_builds_a_managed_generation_candidate() {
+    let source_id = SourceId::new("src_11111111111111111111111111111111").unwrap();
     let conversion = convert_stable_sources(
         vec![SourceInput {
-            source_id: SourceId::new("integration").unwrap(),
+            source_id: source_id.clone(),
             format_hint: FormatHint::UriList,
             bytes: b"trojan://secret@example.com:443#node-a".to_vec(),
         }],
@@ -42,10 +48,14 @@ fn stable_parser_output_builds_a_managed_generation_candidate() {
     let candidate = build_candidate(
         GenerationId::new(7).unwrap(),
         &conversion,
-        capture(),
-        ClashApi::new("127.0.0.1:9090", "x".repeat(32)).unwrap(),
-        TunStack::System,
-        ManagedOptions::default(),
+        nethopd::CandidateBuildProfile::new(
+            capture(),
+            ClashApi::new("127.0.0.1:9090", "x".repeat(32)).unwrap(),
+            TunStack::System,
+            ManagedOptions::default(),
+        ),
+        nethopd::SubscriptionMode::Single,
+        &[source_id],
     )
     .unwrap();
 

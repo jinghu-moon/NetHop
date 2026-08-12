@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     io::{BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     time::Duration,
@@ -7,6 +8,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+
+use crate::GroupState;
 use ureq::Agent;
 
 const SELECTOR_TAG: &str = "nethop-select";
@@ -15,6 +18,7 @@ const DEFAULT_LIMIT: u8 = 64;
 const GROUP_DELAY_TIMEOUT_MILLIS: u64 = 10_000;
 const GROUP_DELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_GROUP_DELAY_RESULTS: usize = 2_000;
+const MAX_PROXY_ENTRIES: usize = 2_004;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClashApiLimits {
@@ -102,67 +106,66 @@ impl ClashApiClient {
         })
     }
 
-    pub fn nodes(
-        &self,
-        query: Option<&str>,
-        limit: Option<u8>,
-    ) -> Result<Vec<NodeSummary>, ClashApiError> {
+    pub fn group_snapshot(&self) -> Result<ClashGroupSnapshot, ClashApiError> {
         let document = self.request(ApiMethod::Get, "/proxies", None)?;
         let proxies = document
             .get("proxies")
             .and_then(Value::as_object)
+            .filter(|proxies| proxies.len() <= MAX_PROXY_ENTRIES)
             .ok_or(ClashApiError::InvalidResponse)?;
-        let selector = proxies
-            .get(SELECTOR_TAG)
-            .and_then(Value::as_object)
-            .ok_or(ClashApiError::InvalidResponse)?;
-        let selected = selector.get("now").and_then(Value::as_str);
-        let members = selector
-            .get("all")
-            .and_then(Value::as_array)
-            .ok_or(ClashApiError::InvalidResponse)?;
-        let query = query.map(str::to_lowercase);
-        let limit = usize::from(limit.unwrap_or(DEFAULT_LIMIT));
-        let mut nodes = Vec::with_capacity(members.len().min(limit));
-        for tag in members.iter().filter_map(Value::as_str) {
-            if tag == "direct"
-                || !valid_stable_node_tag(tag)
-                || query
-                    .as_ref()
-                    .is_some_and(|query| !tag.to_lowercase().contains(query))
-            {
-                continue;
+        let mut groups = BTreeMap::new();
+        let mut terminals = BTreeMap::new();
+        for (tag, value) in proxies {
+            if !valid_tag(tag) {
+                return Err(ClashApiError::InvalidResponse);
             }
-            let details = proxies.get(tag).and_then(Value::as_object);
-            let Some(kind) = details
-                .and_then(|details| details.get("type"))
-                .and_then(Value::as_str)
-                .and_then(normalize_protocol)
-            else {
-                continue;
-            };
-            let delay_ms = details
-                .and_then(|details| details.get("history"))
-                .and_then(Value::as_array)
-                .and_then(|history| history.last())
-                .and_then(|entry| entry.get("delay"))
-                .and_then(Value::as_u64);
-            nodes.push(NodeSummary {
-                tag: tag.to_owned(),
-                name: tag.to_owned(),
-                kind: kind.to_owned(),
-                selected: selected == Some(tag),
-                alive: details
-                    .and_then(|details| details.get("alive"))
-                    .and_then(Value::as_bool),
-                delay_ms,
-                source_ids: Vec::new(),
-            });
-            if nodes.len() == limit {
-                break;
+            let object = value.as_object().ok_or(ClashApiError::InvalidResponse)?;
+            if object.contains_key("all") || object.contains_key("now") {
+                let now = object.get("now").and_then(Value::as_str).map(str::to_owned);
+                let all = object
+                    .get("all")
+                    .and_then(Value::as_array)
+                    .ok_or(ClashApiError::InvalidResponse)?
+                    .iter()
+                    .map(|member| {
+                        member
+                            .as_str()
+                            .filter(|member| valid_tag(member))
+                            .map(str::to_owned)
+                            .ok_or(ClashApiError::InvalidResponse)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let group =
+                    GroupState::new(tag, now, all).map_err(|_| ClashApiError::InvalidResponse)?;
+                groups.insert(tag.clone(), group);
+            } else {
+                let kind = object
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .filter(|kind| !kind.is_empty() && kind.len() <= 32)
+                    .ok_or(ClashApiError::InvalidResponse)?
+                    .to_owned();
+                let latency_ms = object
+                    .get("history")
+                    .and_then(Value::as_array)
+                    .and_then(|history| history.last())
+                    .and_then(|entry| entry.get("delay"))
+                    .and_then(Value::as_u64)
+                    .and_then(|delay| u32::try_from(delay).ok());
+                terminals.insert(
+                    tag.clone(),
+                    ClashTerminalState {
+                        kind,
+                        latency_ms,
+                        alive: object.get("alive").and_then(Value::as_bool),
+                    },
+                );
             }
         }
-        Ok(nodes)
+        if !groups.contains_key(SELECTOR_TAG) {
+            return Err(ClashApiError::InvalidResponse);
+        }
+        Ok(ClashGroupSnapshot { groups, terminals })
     }
 
     pub fn test_node(&self, tag: &str) -> Result<DelayResult, ClashApiError> {
@@ -229,6 +232,17 @@ impl ClashApiClient {
             Some(&json!({"name":tag})),
         )?;
         Ok(())
+    }
+
+    pub fn select_auto(&self) -> Result<(), ClashApiError> {
+        self.select_node(AUTO_SELECTOR_TAG)
+    }
+
+    pub fn select_manual_tag(&self, tag: &str) -> Result<(), ClashApiError> {
+        if !valid_stable_node_tag(tag) {
+            return Err(ClashApiError::UnknownTarget);
+        }
+        self.select_node(tag)
     }
 
     pub fn connections(
@@ -437,6 +451,9 @@ impl ClashApiClient {
                 .header("Accept", "application/json")
                 .config()
                 .timeout_global(Some(timeout))
+                .timeout_per_call(Some(timeout))
+                .timeout_recv_response(Some(timeout))
+                .timeout_recv_body(Some(timeout))
                 .build()
                 .call(),
             ApiMethod::Put => self
@@ -485,27 +502,49 @@ impl ClashApiClient {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClashGroupSnapshot {
+    groups: BTreeMap<String, GroupState>,
+    terminals: BTreeMap<String, ClashTerminalState>,
+}
+
+impl ClashGroupSnapshot {
+    pub fn groups(&self) -> &BTreeMap<String, GroupState> {
+        &self.groups
+    }
+
+    pub fn terminal(&self, tag: &str) -> Option<&ClashTerminalState> {
+        self.terminals.get(tag)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClashTerminalState {
+    kind: String,
+    latency_ms: Option<u32>,
+    alive: Option<bool>,
+}
+
+impl ClashTerminalState {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub const fn latency_ms(&self) -> Option<u32> {
+        self.latency_ms
+    }
+
+    pub const fn alive(&self) -> Option<bool> {
+        self.alive
+    }
+}
+
 fn valid_stable_node_tag(tag: &str) -> bool {
     tag.len() == 21
         && tag.starts_with("nh1s-")
         && tag[5..]
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn normalize_protocol(kind: &str) -> Option<&'static str> {
-    match kind {
-        "VLESS" => Some("vless"),
-        "VMess" => Some("vmess"),
-        "Shadowsocks" => Some("shadowsocks"),
-        "Trojan" => Some("trojan"),
-        "Hysteria2" => Some("hysteria2"),
-        "TUIC" => Some("tuic"),
-        "AnyTLS" => Some("anytls"),
-        "HTTP" => Some("http"),
-        "SOCKS" | "Socks" | "Socks5" => Some("socks"),
-        _ => None,
-    }
 }
 
 fn read_bounded_line(reader: &mut impl BufRead, maximum: usize) -> Result<String, ClashApiError> {
@@ -558,21 +597,6 @@ pub struct TrafficTotals {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NodeSummary {
-    #[serde(rename = "id")]
-    pub tag: String,
-    pub name: String,
-    #[serde(rename = "protocol")]
-    pub kind: String,
-    pub selected: bool,
-    #[serde(skip)]
-    pub alive: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delay_ms: Option<u64>,
-    pub source_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DelayResult {
     pub tag: String,
     pub delay_ms: u64,
@@ -610,6 +634,10 @@ fn encode_path_segment(value: &str) -> String {
         }
     }
     encoded
+}
+
+fn valid_tag(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 
 #[derive(Debug, Error)]

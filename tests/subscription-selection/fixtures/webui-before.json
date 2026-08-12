@@ -1,0 +1,14 @@
+{
+  "valid_behaviors": [
+    "overview_subscription_navigation",
+    "overview_node_navigation",
+    "source_update_feedback",
+    "node_test_all_feedback"
+  ],
+  "known_defects": [
+    "single_mode_radio_implies_selection_without_transaction",
+    "overview_falls_back_to_first_node",
+    "manual_selection_cannot_return_to_auto",
+    "node_selected_conflates_intent_and_active_terminal"
+  ]
+}

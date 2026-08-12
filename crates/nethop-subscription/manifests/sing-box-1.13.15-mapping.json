@@ -38,6 +38,7 @@
       "capabilities": [
         {"transport":"tcp","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
         {"transport":"tcp","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
+        {"transport":"websocket","tls":false,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
         {"transport":"websocket","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
         {"transport":"http","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},
         {"transport":"httpupgrade","tls":true,"reality":false,"utls":false,"udp":false,"flow":null,"plugin":null},

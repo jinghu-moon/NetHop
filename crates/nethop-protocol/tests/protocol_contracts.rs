@@ -13,14 +13,14 @@ fn request_id() -> RequestId {
 }
 
 #[test]
-fn request_golden_uses_big_endian_length_and_v2_json() {
+fn request_golden_uses_big_endian_length_and_v3_json() {
     let frame = WireFrame::Request(ControlRequest::new(request_id(), ControlMethod::StatusGet));
     let encoded = FrameCodec::encode(&frame).unwrap();
     let length = u32::from_be_bytes(encoded[..4].try_into().unwrap()) as usize;
     assert_eq!(length, encoded.len() - 4);
     assert_eq!(
         &encoded[4..],
-        br#"{"version":2,"request_id":"req-001","method":"status.get","params":{}}"#
+        br#"{"version":3,"request_id":"req-001","method":"status.get","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -28,7 +28,7 @@ fn request_golden_uses_big_endian_length_and_v2_json() {
 #[test]
 fn request_rejects_unknown_fields_versions_and_unbounded_ids() {
     let unknown =
-        br#"{"version":2,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
+        br#"{"version":3,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
     let mut framed = (unknown.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(unknown);
     assert_eq!(
@@ -72,7 +72,7 @@ fn response_requires_exactly_one_result_or_error_branch() {
         failure
     );
 
-    let invalid = br#"{"version":2,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
+    let invalid = br#"{"version":3,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
     let mut framed = (invalid.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(invalid);
     assert_eq!(
@@ -90,6 +90,7 @@ fn all_stable_error_domains_round_trip() {
         ErrorDomain::Capability,
         ErrorDomain::Network,
         ErrorDomain::Core,
+        ErrorDomain::Node,
         ErrorDomain::Stats,
         ErrorDomain::Auth,
     ] {
@@ -159,7 +160,7 @@ fn codec_rejects_trailing_bytes_invalid_utf8_and_truncated_io() {
 
 #[test]
 fn protocol_version_is_frozen() {
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 3);
 }
 
 #[test]
@@ -190,7 +191,7 @@ fn control_error_details_are_optional_and_bounded_by_the_outer_frame() {
 }
 
 #[test]
-fn subscription_update_is_a_bounded_v2_empty_params_command() {
+fn subscription_update_is_a_bounded_v3_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::SubscriptionUpdate,
@@ -198,7 +199,7 @@ fn subscription_update_is_a_bounded_v2_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":2,"request_id":"req-001","method":"subscription.update","params":{}}"#
+        br#"{"version":3,"request_id":"req-001","method":"subscription.update","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -238,7 +239,7 @@ fn local_import_preview_and_apply_are_digest_bound_documents() {
 }
 
 #[test]
-fn config_reload_is_a_bounded_v2_empty_params_command() {
+fn config_reload_is_a_bounded_v3_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::ConfigReload,
@@ -246,7 +247,7 @@ fn config_reload_is_a_bounded_v2_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":2,"request_id":"req-001","method":"config.reload","params":{}}"#
+        br#"{"version":3,"request_id":"req-001","method":"config.reload","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -312,7 +313,9 @@ fn operational_methods_use_stable_wire_names_and_scoped_params() {
         (ControlMethod::NodeList, "node.list"),
         (ControlMethod::NodeTest, "node.test"),
         (ControlMethod::NodeTestAll, "node.test_all"),
-        (ControlMethod::NodeSelect, "node.select"),
+        (ControlMethod::NodeSelectionGet, "node.selection_get"),
+        (ControlMethod::NodeSelectAuto, "node.select_auto"),
+        (ControlMethod::NodeSelectManual, "node.select_manual"),
         (ControlMethod::NodeExport, "node.export"),
         (ControlMethod::ConnectionsGet, "connections.get"),
         (ControlMethod::ConnectionClose, "connection.close"),
@@ -326,8 +329,10 @@ fn operational_methods_use_stable_wire_names_and_scoped_params() {
     ];
     for (method, wire_name) in cases {
         let params = match method {
+            ControlMethod::NodeSelectManual => {
+                ControlParams::target("nh1s-0123456789abcdef".to_owned())
+            }
             ControlMethod::NodeTest
-            | ControlMethod::NodeSelect
             | ControlMethod::NodeExport
             | ControlMethod::ConnectionClose => ControlParams::target("stable-id".to_owned()),
             ControlMethod::NodeList | ControlMethod::ConnectionsGet => {
@@ -352,7 +357,7 @@ fn operational_methods_use_stable_wire_names_and_scoped_params() {
 fn operational_targets_are_required_bounded_and_method_scoped() {
     for method in [
         ControlMethod::NodeTest,
-        ControlMethod::NodeSelect,
+        ControlMethod::NodeSelectManual,
         ControlMethod::NodeExport,
         ControlMethod::ConnectionClose,
     ] {
@@ -447,7 +452,7 @@ fn close_all_and_log_clear_accept_only_empty_params() {
 #[test]
 fn operational_params_reject_unknown_fields() {
     let payload =
-        br#"{"version":2,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
+        br#"{"version":3,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
     let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(payload);
     assert_eq!(
@@ -535,11 +540,11 @@ fn manager_config_methods_require_bounded_cas_documents() {
 
 #[test]
 fn source_selection_mutation_is_typed_and_round_trips() {
-    let mutation = ConfigMutation::SelectSource {
-        source_id: "src_0123456789abcdef0123456789abcdef".into(),
-    };
-    let request = ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
-        .with_params(ControlParams::mutation("a".repeat(64), mutation))
+    let request = ControlRequest::new(request_id(), ControlMethod::SubscriptionSelect)
+        .with_params(ControlParams::subscription_select(
+            "a".repeat(64),
+            "src_0123456789abcdef0123456789abcdef".into(),
+        ))
         .unwrap();
     let frame = WireFrame::Request(request);
     assert_eq!(
@@ -547,12 +552,10 @@ fn source_selection_mutation_is_typed_and_round_trips() {
         frame
     );
     assert_eq!(
-        ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
-            .with_params(ControlParams::mutation(
+        ControlRequest::new(request_id(), ControlMethod::SubscriptionSelect)
+            .with_params(ControlParams::subscription_select(
                 "a".repeat(64),
-                ConfigMutation::SelectSource {
-                    source_id: "source".into(),
-                },
+                "source".into(),
             ))
             .unwrap_err(),
         ProtocolError::InvalidEnvelope

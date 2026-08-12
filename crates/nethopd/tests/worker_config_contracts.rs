@@ -4,12 +4,13 @@ use nethopd::{ConfigError, ConfigStore};
 use tempfile::tempdir;
 
 fn valid_config() -> &'static str {
-    r#"schema_version = 2
+    r#"schema_version = 3
 
 [service]
 enabled = true
 
 [subscriptions]
+mode = "single"
 
 [[subscriptions.sources]]
 name = "Primary"
@@ -102,7 +103,7 @@ fn source_name_and_file_limits_are_bounded_before_runtime_use() {
             "name = \"Primary\"",
             &format!("name = \"{}\"", "x".repeat(129)),
         ),
-        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\nsources = []\n".to_owned(),
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\nsources = []\n".to_owned(),
     ] {
         write_private(&path, &contents);
         assert!(ConfigStore::new(&path).unwrap().load().is_err());
@@ -145,7 +146,7 @@ fn service_enabled_is_persisted_as_canonical_toml_with_cas() {
 }
 
 #[test]
-fn module_default_is_the_complete_v2_toml_schema() {
+fn module_default_is_the_complete_v3_toml_schema() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../module/defaults/nethop.toml")
         .canonicalize()
@@ -165,6 +166,78 @@ fn module_default_is_the_complete_v2_toml_schema() {
         10
     );
     assert_eq!(snapshot.effective().allocations().len(), 3);
+}
+
+#[test]
+fn schema_v3_subscription_modes_enforce_active_source_invariants() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+
+    write_private(
+        &path,
+        &valid_config().replace("schema_version = 3", "schema_version = 2"),
+    );
+    assert_eq!(
+        ConfigStore::new(&path).unwrap().load().unwrap_err(),
+        ConfigError::UnsupportedSchema
+    );
+
+    let multiple_single = valid_config().replace(
+        "name = \"Backup\"\nenabled = false\nurl = \"\"",
+        "name = \"Backup\"\nenabled = true\nurl = \"https://backup.example/sub\"",
+    );
+    write_private(&path, &multiple_single);
+    assert_eq!(
+        ConfigStore::new(&path).unwrap().load().unwrap_err(),
+        ConfigError::SingleSourceNotUnique
+    );
+
+    let merge = multiple_single.replace("mode = \"single\"", "mode = \"merge\"");
+    write_private(&path, &merge);
+    let snapshot = ConfigStore::new(&path).unwrap().load().unwrap();
+    assert_eq!(
+        snapshot.effective().subscriptions().mode(),
+        nethopd::SubscriptionMode::Merge
+    );
+
+    let no_active = valid_config()
+        .replace("mode = \"single\"", "mode = \"merge\"")
+        .replace(
+            "name = \"Primary\"\nurl =",
+            "name = \"Primary\"\nenabled = false\nurl =",
+        );
+    write_private(&path, &no_active);
+    assert_eq!(
+        ConfigStore::new(&path).unwrap().load().unwrap_err(),
+        ConfigError::NoActiveSource
+    );
+}
+
+#[test]
+fn schema_v3_rejects_selector_and_daemon_owned_identity_fields() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.toml");
+    for contents in [
+        format!("{}\n[proxy]\nselector_mode = \"urltest\"\n", valid_config()),
+        valid_config().replace(
+            "name = \"Primary\"",
+            "source_id = \"src_11111111111111111111111111111111\"\nname = \"Primary\"",
+        ),
+        valid_config().replace(
+            "name = \"Primary\"",
+            "node_id = \"nh1s-0123456789abcdef\"\nname = \"Primary\"",
+        ),
+        valid_config().replace(
+            "name = \"Primary\"",
+            "internal_tag = \"nethop-auto\"\nname = \"Primary\"",
+        ),
+    ] {
+        write_private(&path, &contents);
+        assert_eq!(
+            ConfigStore::new(&path).unwrap().load().unwrap_err(),
+            ConfigError::UnknownField
+        );
+    }
 }
 
 #[test]

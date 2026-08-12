@@ -4,7 +4,7 @@ import type { SubscriptionDto } from "@/model/dto";
 import { formatRelativeTime, presentSubscription } from "@/model/subscription-presentation";
 
 const now = 2_000_000_000;
-const source = (overrides: Partial<SubscriptionDto> = {}): SubscriptionDto => ({ id: "src_primary", name: "Primary", enabled: true, ...overrides });
+const source = (overrides: Partial<SubscriptionDto> = {}): SubscriptionDto => ({ id: "src_primary", name: "Primary", configured: true, active: true, ...overrides });
 
 describe("subscription presentation", () => {
   it("formats bounded relative timestamps", () => {
@@ -18,7 +18,7 @@ describe("subscription presentation", () => {
     const status = { sourceId: "src_primary", health: "healthy" as const, lastSuccessWallSeconds: now - 120, accepted: 56, duplicate: 1, rejected: 2, warnings: 3, subscriptionUploadBytes: 20 * gib, subscriptionDownloadBytes: Math.round(108.4 * gib), subscriptionTotalBytes: 200 * gib, subscriptionExpireAt: now + 23 * 86_400, usingLastKnownGood: false };
     expect(presentSubscription(source({ status }), now)).toEqual({ tone: "healthy", summary: "128.4 / 200 GB · 剩余 23 天 · 57 节点", detail: "2 分钟前更新", quotaPercent: 64.2, warning: "3 个警告 · 2 个未导入" });
     expect(presentSubscription(source({ status: { ...status, health: "degraded", usingLastKnownGood: true } }), now).summary).toBe("128.4 / 200 GB · 剩余 23 天 · 57 节点");
-    expect(presentSubscription(source({ enabled: false, status }), now).summary).toBe("128.4 / 200 GB · 剩余 23 天 · 57 节点");
+    expect(presentSubscription(source({ active: false, status }), now).summary).toBe("128.4 / 200 GB · 剩余 23 天 · 57 节点");
   });
 
   it("does not claim a node count after a failed or never-attempted update", () => {

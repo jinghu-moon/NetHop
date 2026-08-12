@@ -1,24 +1,70 @@
 use std::{collections::VecDeque, time::Duration};
 
 use nethop_android::{NetlinkDebouncer, NetlinkError, NetworkEvent};
+#[cfg(feature = "subscription-update")]
 use nethop_core::{
-    Candidate, CapturePolicy, ClashApi, GenerationId, ManagedConfig, ManagedOptions,
-    ManagedProfile, RuntimeState, TunStack,
+    Candidate, CapturePolicy, ClashApi, GenerationNodeRecord, GenerationNodeRegistry,
+    ManagedConfig, ManagedOptions, ManagedProfile, TunStack,
 };
+use nethop_core::{GenerationId, RuntimeState};
 use nethop_protocol::{
     ControlError, ControlMethod, ControlRequest, ControlResponse, ErrorCode, ErrorDomain,
 };
+#[cfg(feature = "subscription-update")]
 use nethop_subscription::{
-    StableConversion, TerminalOutboundAdapterError, adapt_terminal_outbounds,
+    SourceId, StableConversion, TerminalOutboundAdapterError, adapt_terminal_outbounds,
 };
 use serde_json::json;
 use thiserror::Error;
 
+#[cfg(feature = "subscription-update")]
+use crate::{
+    CandidatePoolError, CandidatePoolNode, NodeAttribution, SelectionModelError, StableNodeId,
+    SubscriptionMode, build_candidate_pools,
+};
 use crate::{
     CandidateProcess, ControlRequestHandler, CounterDeltaTracker, CounterTransport, StatsError,
     StatsStore, StatsStoreError, WorkerRuntime, WorkerRuntimeError,
 };
 
+#[cfg(feature = "subscription-update")]
+#[derive(Debug, Clone)]
+pub struct CandidateBuildProfile {
+    capture: CapturePolicy,
+    clash_api: ClashApi,
+    tun_stack: TunStack,
+    options: ManagedOptions,
+}
+
+#[cfg(feature = "subscription-update")]
+impl CandidateBuildProfile {
+    pub const fn new(
+        capture: CapturePolicy,
+        clash_api: ClashApi,
+        tun_stack: TunStack,
+        options: ManagedOptions,
+    ) -> Self {
+        Self {
+            capture,
+            clash_api,
+            tun_stack,
+            options,
+        }
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        capture: CapturePolicy,
+        tun_stack: TunStack,
+        options: ManagedOptions,
+    ) {
+        self.capture = capture;
+        self.tun_stack = tun_stack;
+        self.options = options;
+    }
+}
+
+#[cfg(feature = "subscription-update")]
 #[derive(Debug, Error)]
 pub enum BuildCandidateError {
     #[error("stable conversion contains no usable terminal outbounds")]
@@ -27,25 +73,100 @@ pub enum BuildCandidateError {
     Adapter(#[from] TerminalOutboundAdapterError),
     #[error("managed configuration composer rejected the conversion")]
     Composer(#[from] nethop_core::ComposerError),
+    #[error("candidate pool rejected the conversion")]
+    Pool(#[from] CandidatePoolError),
+    #[error("candidate node identity is invalid")]
+    NodeIdentity(#[from] SelectionModelError),
+    #[error("candidate source attribution is invalid")]
+    Attribution(#[from] crate::SourceRegistryError),
+    #[error("generation node registry rejected the conversion")]
+    Registry(#[from] nethop_core::CoreError),
 }
 
+#[cfg(feature = "subscription-update")]
 pub fn build_candidate(
     generation: GenerationId,
     conversion: &StableConversion,
-    capture: CapturePolicy,
-    clash_api: ClashApi,
-    tun_stack: TunStack,
-    options: ManagedOptions,
+    profile: CandidateBuildProfile,
+    subscription_mode: SubscriptionMode,
+    active_source_ids: &[SourceId],
 ) -> Result<Candidate, BuildCandidateError> {
     if conversion.nodes.is_empty() || !conversion.report.summary.source_success {
         return Err(BuildCandidateError::EmptyConversion);
     }
+    let pool_nodes = conversion
+        .nodes
+        .iter()
+        .map(|node| {
+            Ok(CandidatePoolNode::new(
+                StableNodeId::new(node.node_id.as_str())?,
+                NodeAttribution::new(
+                    node.source_refs
+                        .iter()
+                        .map(|source| source.source_id.clone()),
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, BuildCandidateError>>()?;
+    let pools = build_candidate_pools(
+        subscription_mode,
+        active_source_ids,
+        &pool_nodes,
+        profile.options.urltest_max_candidates(),
+    )?;
+    let auto_tags = pools
+        .auto()
+        .iter()
+        .map(|node_id| node_id.as_str().to_owned())
+        .collect::<Vec<_>>();
     let outbounds = adapt_terminal_outbounds(&conversion.nodes)?;
-    let profile = ManagedProfile::new(capture, outbounds, clash_api)?
-        .with_tun_stack(tun_stack)
-        .with_options(options);
-    let config = ManagedConfig::from_profile(profile)?;
-    Ok(Candidate::new(generation, config))
+    let managed = ManagedProfile::new(profile.capture, outbounds, auto_tags, profile.clash_api)?
+        .with_tun_stack(profile.tun_stack)
+        .with_options(profile.options);
+    let config = ManagedConfig::from_profile(managed)?;
+    let auto_ids = pools
+        .auto()
+        .iter()
+        .map(StableNodeId::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let records = conversion
+        .nodes
+        .iter()
+        .map(|node| {
+            GenerationNodeRecord::new(
+                node.node_id.as_str(),
+                node.node_id.as_str(),
+                bounded_display_name(node.node.display_name().as_str()),
+                node.node.protocol().as_str(),
+                NodeAttribution::new(
+                    node.source_refs
+                        .iter()
+                        .map(|source| source.source_id.clone()),
+                )?
+                .source_ids()
+                .iter()
+                .map(|source_id| source_id.as_str().to_owned())
+                .collect(),
+                auto_ids.contains(node.node_id.as_str()),
+            )
+            .map_err(BuildCandidateError::from)
+        })
+        .collect::<Result<Vec<_>, BuildCandidateError>>()?;
+    Ok(Candidate::new(generation, config)
+        .with_node_registry(GenerationNodeRegistry::new(records)?)?)
+}
+
+#[cfg(feature = "subscription-update")]
+fn bounded_display_name(value: &str) -> String {
+    const MAX_BYTES: usize = 128;
+    if value.len() <= MAX_BYTES {
+        return value.to_owned();
+    }
+    let mut end = MAX_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -285,6 +406,10 @@ impl ControlRequestHandler for WorkerControlHandler {
             | ControlMethod::ConfigMutate
             | ControlMethod::SubscriptionImportPreview
             | ControlMethod::SubscriptionImportApply
+            | ControlMethod::SubscriptionModeGet
+            | ControlMethod::SubscriptionModeSet
+            | ControlMethod::SubscriptionSelect
+            | ControlMethod::SubscriptionSetEnabled
             | ControlMethod::EventsSubscribe
             | ControlMethod::WebUiPayloadCreate
             | ControlMethod::WebUiPayloadAppend
@@ -297,7 +422,9 @@ impl ControlRequestHandler for WorkerControlHandler {
             ControlMethod::NodeList
             | ControlMethod::NodeTest
             | ControlMethod::NodeTestAll
-            | ControlMethod::NodeSelect
+            | ControlMethod::NodeSelectionGet
+            | ControlMethod::NodeSelectAuto
+            | ControlMethod::NodeSelectManual
             | ControlMethod::NodeExport
             | ControlMethod::ConnectionsGet
             | ControlMethod::ConnectionClose

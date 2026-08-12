@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -13,6 +14,12 @@ use crate::{
 };
 
 const MANIFEST_SCHEMA: &str = "nethop-generation-v1";
+const NODE_REGISTRY_SCHEMA: &str = "nethop-generation-nodes-v1";
+const MAX_GENERATION_NODES: usize = 2_000;
+const MAX_NODE_NAME_BYTES: usize = 128;
+const MAX_TAG_BYTES: usize = 128;
+const MAX_PROTOCOL_BYTES: usize = 32;
+const MAX_SOURCE_IDS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -31,15 +38,162 @@ impl GenerationId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenerationManifest {
     pub schema: String,
     pub generation: GenerationId,
     pub config_sha256: String,
     pub node_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_registry_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_config_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationNodeRecord {
+    stable_node_id: String,
+    internal_tag: String,
+    display_name: String,
+    protocol: String,
+    source_ids: Vec<String>,
+    auto_candidate: bool,
+}
+
+impl GenerationNodeRecord {
+    pub fn new(
+        stable_node_id: impl Into<String>,
+        internal_tag: impl Into<String>,
+        display_name: impl Into<String>,
+        protocol: impl Into<String>,
+        source_ids: Vec<String>,
+        auto_candidate: bool,
+    ) -> Result<Self, CoreError> {
+        let stable_node_id = stable_node_id.into();
+        let internal_tag = internal_tag.into();
+        let display_name = display_name.into();
+        let protocol = protocol.into();
+        let unique_sources = source_ids.iter().collect::<HashSet<_>>();
+        let valid_node_id = stable_node_id.len() == 21
+            && stable_node_id.starts_with("nh1s-")
+            && stable_node_id[5..]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+        let valid_tag = !internal_tag.is_empty()
+            && internal_tag.len() <= MAX_TAG_BYTES
+            && !internal_tag.chars().any(char::is_control);
+        let valid_name = !display_name.is_empty()
+            && display_name.len() <= MAX_NODE_NAME_BYTES
+            && !display_name.chars().any(char::is_control);
+        let valid_protocol = !protocol.is_empty()
+            && protocol.len() <= MAX_PROTOCOL_BYTES
+            && protocol
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+        let valid_sources = !source_ids.is_empty()
+            && source_ids.len() <= MAX_SOURCE_IDS
+            && unique_sources.len() == source_ids.len()
+            && source_ids.iter().all(|id| valid_source_id(id));
+        if !valid_node_id || !valid_tag || !valid_name || !valid_protocol || !valid_sources {
+            return Err(publish_error(
+                "node_registry",
+                "generation node record is invalid",
+            ));
+        }
+        Ok(Self {
+            stable_node_id,
+            internal_tag,
+            display_name,
+            protocol,
+            source_ids,
+            auto_candidate,
+        })
+    }
+
+    pub fn stable_node_id(&self) -> &str {
+        &self.stable_node_id
+    }
+
+    pub fn internal_tag(&self) -> &str {
+        &self.internal_tag
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    pub fn source_ids(&self) -> &[String] {
+        &self.source_ids
+    }
+
+    pub const fn auto_candidate(&self) -> bool {
+        self.auto_candidate
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationNodeRegistry {
+    schema: String,
+    records: Vec<GenerationNodeRecord>,
+}
+
+impl GenerationNodeRegistry {
+    pub fn new(mut records: Vec<GenerationNodeRecord>) -> Result<Self, CoreError> {
+        if records.is_empty() || records.len() > MAX_GENERATION_NODES {
+            return Err(publish_error(
+                "node_registry",
+                "generation node registry size is invalid",
+            ));
+        }
+        records.sort_unstable_by(|left, right| left.stable_node_id.cmp(&right.stable_node_id));
+        let stable_ids = records
+            .iter()
+            .map(GenerationNodeRecord::stable_node_id)
+            .collect::<HashSet<_>>();
+        let tags = records
+            .iter()
+            .map(GenerationNodeRecord::internal_tag)
+            .collect::<HashSet<_>>();
+        if stable_ids.len() != records.len() || tags.len() != records.len() {
+            return Err(publish_error(
+                "node_registry",
+                "generation node registry contains duplicate mappings",
+            ));
+        }
+        Ok(Self {
+            schema: NODE_REGISTRY_SCHEMA.to_owned(),
+            records,
+        })
+    }
+
+    pub fn records(&self) -> &[GenerationNodeRecord] {
+        &self.records
+    }
+
+    pub fn by_stable_id(&self, stable_node_id: &str) -> Option<&GenerationNodeRecord> {
+        self.records
+            .binary_search_by_key(&stable_node_id, |record| record.stable_node_id())
+            .ok()
+            .map(|index| &self.records[index])
+    }
+
+    pub fn by_internal_tag(&self, internal_tag: &str) -> Option<&GenerationNodeRecord> {
+        self.records
+            .iter()
+            .find(|record| record.internal_tag() == internal_tag)
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, CoreError> {
+        serde_json::to_vec(self).map_err(|error| CoreError::SerializationFailure(error.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +201,7 @@ pub struct Candidate {
     generation: GenerationId,
     config: ManagedConfig,
     manifest: GenerationManifest,
+    node_registry: Option<GenerationNodeRegistry>,
 }
 
 impl Candidate {
@@ -56,6 +211,7 @@ impl Candidate {
             generation,
             config_sha256: config.digest_sha256().to_owned(),
             node_count: config.node_count(),
+            node_registry_sha256: None,
             source_config_digest: None,
             source_ids: Vec::new(),
         };
@@ -63,7 +219,23 @@ impl Candidate {
             generation,
             config,
             manifest,
+            node_registry: None,
         }
+    }
+
+    pub fn with_node_registry(
+        mut self,
+        registry: GenerationNodeRegistry,
+    ) -> Result<Self, CoreError> {
+        if registry.records.len() != self.config.node_count() {
+            return Err(publish_error(
+                "node_registry",
+                "generation node registry does not match terminal node count",
+            ));
+        }
+        self.manifest.node_registry_sha256 = Some(sha256_hex(&registry.bytes()?));
+        self.node_registry = Some(registry);
+        Ok(self)
     }
 
     pub fn bind_sources(
@@ -107,6 +279,10 @@ impl Candidate {
     pub const fn manifest(&self) -> &GenerationManifest {
         &self.manifest
     }
+
+    pub const fn node_registry(&self) -> Option<&GenerationNodeRegistry> {
+        self.node_registry.as_ref()
+    }
 }
 
 /// Capability token for a fully written candidate that is not yet at a stable path.
@@ -129,6 +305,10 @@ impl PreparedCandidate {
     pub fn config_path(&self) -> PathBuf {
         self.directory.join("config.json")
     }
+
+    pub fn node_registry_path(&self) -> PathBuf {
+        self.directory.join("nodes.json")
+    }
 }
 
 /// Capability token for a generation at its stable path but not necessarily active.
@@ -150,6 +330,10 @@ impl SealedGeneration {
 
     pub fn config_path(&self) -> PathBuf {
         self.directory.join("config.json")
+    }
+
+    pub fn node_registry_path(&self) -> PathBuf {
+        self.directory.join("nodes.json")
     }
 }
 
@@ -214,6 +398,21 @@ impl GenerationStore {
         )
         .map_err(|_| publish_error("read_manifest", "generation manifest is invalid"))?;
         Ok(Some(manifest))
+    }
+
+    pub fn read_node_registry(
+        &self,
+        generation: GenerationId,
+    ) -> Result<GenerationNodeRegistry, CoreError> {
+        self.verify_generation(generation)?;
+        let path = self
+            .generations_root()
+            .join(generation.get().to_string())
+            .join("nodes.json");
+        serde_json::from_slice(
+            &fs::read(path).map_err(|error| io_error("read_node_registry", error))?,
+        )
+        .map_err(|_| publish_error("read_node_registry", "node registry is invalid"))
     }
 
     pub fn prepare_candidate(&self, candidate: &Candidate) -> Result<PreparedCandidate, CoreError> {
@@ -350,6 +549,10 @@ impl GenerationStore {
     fn write_candidate(&self, candidate: &Candidate, directory: &Path) -> Result<(), CoreError> {
         write_sync(&directory.join("config.json"), candidate.config.bytes())
             .map_err(|error| io_error("write_config", error))?;
+        if let Some(registry) = &candidate.node_registry {
+            write_sync(&directory.join("nodes.json"), &registry.bytes()?)
+                .map_err(|error| io_error("write_node_registry", error))?;
+        }
         let manifest = serde_json::to_vec(&candidate.manifest)
             .map_err(|error| CoreError::SerializationFailure(error.to_string()))?;
         write_sync(&directory.join("manifest.json"), &manifest)
@@ -385,8 +588,8 @@ impl GenerationStore {
         let directory_valid = fs::symlink_metadata(&directory)
             .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
         if !directory_valid
-            || !is_regular_non_symlink(&config)
-            || !is_regular_non_symlink(&manifest)
+            || !is_private_regular_file(&config)
+            || !is_private_regular_file(&manifest)
         {
             return Err(publish_error(
                 "verify_generation",
@@ -398,10 +601,7 @@ impl GenerationStore {
         )
         .map_err(|_| publish_error("verify_manifest", "generation manifest is invalid"))?;
         let config = fs::read(config).map_err(|error| io_error("read_config", error))?;
-        let digest = Sha256::digest(&config)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let digest = sha256_hex(&config);
         if manifest.schema != MANIFEST_SCHEMA
             || manifest.generation != generation
             || manifest.config_sha256 != digest
@@ -411,11 +611,74 @@ impl GenerationStore {
                 "generation manifest does not match config",
             ));
         }
+        match manifest.node_registry_sha256 {
+            Some(expected) => {
+                let registry_path = directory.join("nodes.json");
+                if !is_private_regular_file(&registry_path) {
+                    return Err(publish_error(
+                        "verify_node_registry",
+                        "generation node registry is missing or insecure",
+                    ));
+                }
+                let bytes = fs::read(&registry_path)
+                    .map_err(|error| io_error("read_node_registry", error))?;
+                let registry: GenerationNodeRegistry =
+                    serde_json::from_slice(&bytes).map_err(|_| {
+                        publish_error(
+                            "verify_node_registry",
+                            "generation node registry is invalid",
+                        )
+                    })?;
+                if expected != sha256_hex(&bytes)
+                    || registry.schema != NODE_REGISTRY_SCHEMA
+                    || registry.records.len() != manifest.node_count
+                {
+                    return Err(publish_error(
+                        "verify_node_registry",
+                        "generation node registry does not match manifest",
+                    ));
+                }
+            }
+            None if directory.join("nodes.json").exists() => {
+                return Err(publish_error(
+                    "verify_node_registry",
+                    "unbound generation node registry is not allowed",
+                ));
+            }
+            None => {}
+        }
         Ok(())
     }
 }
 
-fn is_regular_non_symlink(path: &Path) -> bool {
+fn valid_source_id(value: &str) -> bool {
+    value.starts_with("src_")
+        && value.len() == 36
+        && value[4..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(unix)]
+fn is_private_regular_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.is_file()
+            && !metadata.file_type().is_symlink()
+            && metadata.permissions().mode() & 0o077 == 0
+    })
+}
+
+#[cfg(not(unix))]
+fn is_private_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }

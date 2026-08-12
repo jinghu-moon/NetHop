@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { IconActivityHeartbeat, IconArrowDown, IconArrowUp, IconChevronRight, IconClock, IconPower } from "@tabler/icons-vue";
-import { Switch as TSwitch } from "tdesign-mobile-vue";
+import { IconActivityHeartbeat, IconArrowDown, IconArrowUp, IconBolt, IconChevronRight, IconClock, IconPower } from "@tabler/icons-vue";
+import { Button as TButton, Switch as TSwitch } from "tdesign-mobile-vue";
 import { computed, onActivated, ref } from "vue";
 import { RouterLink } from "vue-router";
 import OperationBanner from "@/components/OperationBanner.vue";
@@ -10,7 +10,7 @@ import { runJson } from "@/bridge/command";
 import { useHost } from "@/bridge/context";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { validatedQuery } from "@/model/client";
-import { parseConfig, parseNodeList, parseRuntimeMetrics, parseStatus, parseTraffic, type NodeDto, type RuntimeMetricsDto, type StatusDto } from "@/model/dto";
+import { parseConfig, parseNodeList, parseRuntimeMetrics, parseStatus, parseTraffic, type RuntimeMetricsDto, type StatusDto } from "@/model/dto";
 import { liveTrafficPoints } from "@/runtime/live-store";
 import { createActionLock, createOperationStore } from "@/runtime/operation";
 import { uiStores } from "@/runtime/store";
@@ -22,7 +22,6 @@ type CaptureMode = "auto" | "tproxy" | "tun";
 const host = useHost();
 const status = ref<StatusDto>();
 const metrics = ref<RuntimeMetricsDto>();
-const nodes = ref<readonly NodeDto[]>([]);
 const running = computed(() => status.value?.state === "running_tproxy" || status.value?.state === "running_tun");
 const pending = ref(false);
 const modePending = ref(false);
@@ -38,8 +37,11 @@ const ring = new TrafficRing(60);
 const fallbackPoints = ref(ring.snapshot());
 const points = computed(() => liveTrafficPoints.value.length > 0 ? liveTrafficPoints.value : fallbackPoints.value);
 const currentTraffic = computed(() => points.value.at(-1) ?? { up: 0, down: 0 });
-const currentNode = computed(() => nodes.value.find((node) => node.selected) ?? nodes.value[0]);
+const selection = computed(() => uiStores.runtime.selection.value);
+const currentNode = computed(() => selection.value?.activeNodeId ? uiStores.runtime.nodesById.value[selection.value.activeNodeId] : undefined);
 const nodeLatency = computed(() => currentNode.value?.latencyMs === undefined ? "未测速" : `${currentNode.value.latencyMs} ms`);
+const nodeStateLabel = computed(() => selection.value?.degradedReason ? "状态暂不可用" : currentNode.value?.name ?? "状态暂不可用");
+const qualityTesting = ref(false);
 const modeDescription = computed(() => ({ rule: "按路由规则分流", global: "全部流量代理", direct: "全部流量直连" })[outboundMode.value]);
 const captureDescription = computed(() => ({ auto: "使用 daemon 默认接管策略", tproxy: "通过内核透明代理接管", tun: "通过虚拟网络接口接管" })[captureMode.value]);
 const modeOptions: Array<{ value: OutboundMode; label: string }> = [
@@ -105,7 +107,7 @@ async function refresh(): Promise<void> {
     ring.push(trafficResult.value, Date.now());
     fallbackPoints.value = ring.snapshot();
   }
-  if (nodesResult.status === "fulfilled") nodes.value = nodesResult.value;
+  if (nodesResult.status === "fulfilled") uiStores.runtime.loadNodeSnapshot(nodesResult.value);
   if (metricsResult.status === "fulfilled") metrics.value = metricsResult.value;
   if (configResult.status === "fulfilled") {
     uiStores.config.load(configResult.value);
@@ -126,6 +128,15 @@ async function refresh(): Promise<void> {
     modeReady.value = false;
   }
   if ([statusResult, trafficResult, configResult, nodesResult, metricsResult].every((result) => result.status === "rejected")) throw new Error("overview unavailable");
+}
+
+async function testProxyQuality(): Promise<void> {
+  if (qualityTesting.value) return;
+  qualityTesting.value = true;
+  try {
+    await runJson(host, { id: "node.test-all" });
+    await refresh();
+  } finally { qualityTesting.value = false; }
 }
 
 async function changeCaptureMode(context: { value: string | number }): Promise<void> {
@@ -242,21 +253,24 @@ onActivated(() => { void refresh().catch(() => { modeReady.value = false; }); })
     </section>
 
     <div class="overview-insight-grid">
-      <RouterLink to="/nodes" class="overview-insight-card proxy-quality-card node-summary">
-        <div class="insight-heading">
-          <span class="insight-icon"><IconActivityHeartbeat :size="17" /></span>
-          <strong>代理质量</strong>
-          <IconChevronRight :size="17" />
-        </div>
-        <div class="insight-primary">
-          <strong>{{ currentNode?.name ?? "暂无可用节点" }}</strong>
-          <span class="node-latency" :data-ready="currentNode?.latencyMs !== undefined">{{ nodeLatency }}</span>
-        </div>
-        <div class="insight-detail">
-          <span>{{ currentNode?.protocol?.toUpperCase() ?? "--" }}</span>
-          <span>{{ metrics?.publicIp ?? "未探测出口" }}</span>
-        </div>
-      </RouterLink>
+      <section class="overview-insight-card proxy-quality-card node-summary">
+        <RouterLink to="/nodes" class="proxy-quality-link">
+          <div class="insight-heading">
+            <span class="insight-icon"><IconActivityHeartbeat :size="17" /></span>
+            <strong>代理质量</strong>
+            <IconChevronRight :size="17" />
+          </div>
+          <div class="insight-primary">
+            <strong>{{ nodeStateLabel }}</strong>
+            <span class="node-latency" :data-ready="currentNode?.latencyMs !== undefined">{{ nodeLatency }}</span>
+          </div>
+          <div class="insight-detail">
+            <span>{{ selection?.intent.mode === "auto" ? "自动优选" : "手动选择" }} · {{ currentNode?.protocol?.toUpperCase() ?? "--" }}</span>
+            <span>{{ metrics?.publicIp ?? "未探测出口" }}</span>
+          </div>
+        </RouterLink>
+        <TButton class="quality-test-button" size="small" shape="square" variant="text" theme="default" :loading="qualityTesting" title="测试全部节点" @click="testProxyQuality"><IconBolt :size="17" /></TButton>
+      </section>
 
       <section class="overview-insight-card runtime-card">
         <div class="insight-heading">

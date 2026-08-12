@@ -1,10 +1,10 @@
 export const NETHOPCTL_PATH = "/data/adb/modules/nethop/bin/nethopctl";
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const MAX_COMMAND_ARG_BYTES = 16 * 1024;
 export const MAX_JSON_BYTES = 1024 * 1024;
 export const EVENT_SESSION_MAX_RUNTIME_SECONDS = 300;
 
-export type EventKind = "config" | "runtime" | "subscription" | "generation" | "network" | "traffic";
+export type EventKind = "config" | "runtime" | "subscription" | "generation" | "network" | "traffic" | "subscription-mode" | "subscription-active-set" | "node-selection" | "node-active" | "node-test";
 export type LogChannel = "service" | "subscription" | "core";
 export type PayloadNamespace = "config" | "subscription" | "backup";
 export type PayloadOperation =
@@ -31,10 +31,16 @@ export type OperationRequest =
   | { readonly id: "node.list"; readonly query?: string; readonly limit?: number }
   | { readonly id: "node.test"; readonly nodeId: string }
   | { readonly id: "node.test-all" }
-  | { readonly id: "node.select"; readonly nodeId: string }
+  | { readonly id: "node.selection.get" }
+  | { readonly id: "node.select.auto" }
+  | { readonly id: "node.select.manual"; readonly nodeId: string }
   | { readonly id: "node.export"; readonly nodeId: string }
   | { readonly id: "node.remove"; readonly nodeId: string; readonly expectedDigest: string }
   | { readonly id: "subscription.list" }
+  | { readonly id: "subscription.mode.get" }
+  | { readonly id: "subscription.mode.set"; readonly mode: "single" | "merge"; readonly sourceId?: string; readonly expectedDigest: string }
+  | { readonly id: "subscription.select"; readonly sourceId: string; readonly expectedDigest: string }
+  | { readonly id: "subscription.set-enabled"; readonly sourceId: string; readonly enabled: boolean; readonly expectedDigest: string }
   | { readonly id: "subscription.update"; readonly sourceId?: string; readonly wait?: boolean }
   | { readonly id: "subscription.enable"; readonly sourceId: string; readonly expectedDigest: string }
   | { readonly id: "subscription.disable"; readonly sourceId: string; readonly expectedDigest: string }
@@ -73,7 +79,7 @@ const SAFE_SOURCE_ID = /^src_[a-f0-9]{32}$/;
 const SAFE_DIGEST = /^[a-f0-9]{64}$/;
 const SAFE_NODE_ID = /^nh1s-[a-f0-9]{16}$/;
 const SAFE_CONNECTION_ID = /^[A-Za-z0-9_.:-]{1,256}$/;
-const allowedKinds: readonly EventKind[] = ["config", "runtime", "subscription", "generation", "network", "traffic"];
+const allowedKinds: readonly EventKind[] = ["config", "runtime", "subscription", "generation", "network", "traffic", "subscription-mode", "subscription-active-set", "node-selection", "node-active", "node-test"];
 
 function assertSafe(value: string, pattern: RegExp, label: string): void {
   if (!pattern.test(value) || /[\0\r\n;&|`$<>]/.test(value)) {
@@ -128,9 +134,11 @@ export function buildCommand(request: OperationRequest): BuiltCommand {
       return { executable: NETHOPCTL_PATH, args: ["node", "test", request.nodeId, "--json"], timeoutMs: 15000, sensitive: false };
     case "node.test-all":
       return { executable: NETHOPCTL_PATH, args: ["node", "test-all", "--json"], timeoutMs: 20000, sensitive: false };
-    case "node.select":
+    case "node.selection.get": return { executable: NETHOPCTL_PATH, args: ["node", "selection", "--json"], timeoutMs: 5000, sensitive: false };
+    case "node.select.auto": return { executable: NETHOPCTL_PATH, args: ["node", "select", "auto", "--json"], timeoutMs: 5000, sensitive: false };
+    case "node.select.manual":
       assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
-      return { executable: NETHOPCTL_PATH, args: ["node", "select", request.nodeId, "--json"], timeoutMs: 5000, sensitive: false };
+      return { executable: NETHOPCTL_PATH, args: ["node", "select", "manual", request.nodeId, "--json"], timeoutMs: 5000, sensitive: false };
     case "node.export":
       assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
       return { executable: NETHOPCTL_PATH, args: ["node", "export", request.nodeId, "--json"], timeoutMs: 5000, sensitive: true };
@@ -139,6 +147,23 @@ export function buildCommand(request: OperationRequest): BuiltCommand {
       assertSafe(request.expectedDigest, SAFE_DIGEST, "config digest");
       return { executable: NETHOPCTL_PATH, args: ["node", "remove", request.nodeId, "--json", "--expected-digest", request.expectedDigest], timeoutMs: 30000, sensitive: false };
     case "subscription.list": return { executable: NETHOPCTL_PATH, args: ["subscription", "list", "--json"], timeoutMs: 5000, sensitive: false };
+    case "subscription.mode.get": return { executable: NETHOPCTL_PATH, args: ["subscription", "mode", "--json"], timeoutMs: 5000, sensitive: false };
+    case "subscription.mode.set": {
+      assertSafe(request.expectedDigest, SAFE_DIGEST, "config digest");
+      if (request.mode === "single") {
+        if (!request.sourceId) throw new Error("single mode requires source id");
+        assertSafe(request.sourceId, SAFE_SOURCE_ID, "source id");
+      } else if (request.sourceId !== undefined) throw new Error("merge mode does not accept source id");
+      return { executable: NETHOPCTL_PATH, args: ["subscription", "mode", "set", request.mode, "--json", "--expected-digest", request.expectedDigest, ...(request.sourceId ? ["--source", request.sourceId] : [])], timeoutMs: 30000, sensitive: false };
+    }
+    case "subscription.select":
+      assertSafe(request.sourceId, SAFE_SOURCE_ID, "source id");
+      assertSafe(request.expectedDigest, SAFE_DIGEST, "config digest");
+      return { executable: NETHOPCTL_PATH, args: ["subscription", "select", request.sourceId, "--json", "--expected-digest", request.expectedDigest], timeoutMs: 30000, sensitive: false };
+    case "subscription.set-enabled":
+      assertSafe(request.sourceId, SAFE_SOURCE_ID, "source id");
+      assertSafe(request.expectedDigest, SAFE_DIGEST, "config digest");
+      return { executable: NETHOPCTL_PATH, args: ["subscription", request.enabled ? "enable" : "disable", request.sourceId, "--json", "--expected-digest", request.expectedDigest], timeoutMs: 30000, sensitive: false };
     case "subscription.update": {
       if (request.sourceId !== undefined) assertSafe(request.sourceId, SAFE_SOURCE_ID, "source id");
       return { executable: NETHOPCTL_PATH, args: ["subscription", "update", "--json", "--wait", ...(request.sourceId ? ["--source", request.sourceId] : [])], timeoutMs: 30000, sensitive: false };

@@ -1,6 +1,7 @@
 #!/system/bin/sh
 
 DATA_ROOT=/data/adb/nethop
+CONFIG_SCHEMA_VERSION=3
 CHECKSUMS="$MODPATH/checksums.sha256"
 BUILD_MANIFEST="$MODPATH/build-manifest.json"
 
@@ -111,11 +112,11 @@ if [ ! -e "$DATA_ROOT/config/nethop.toml" ]; then
   cp "$MODPATH/defaults/nethop.toml" "$DATA_ROOT/config/nethop.toml"
 elif [ -L "$DATA_ROOT/config/nethop.toml" ] || [ ! -f "$DATA_ROOT/config/nethop.toml" ]; then
   fail "existing managed config is not a regular file"
-elif ! grep -Eq '^[[:space:]]*schema_version[[:space:]]*=[[:space:]]*2[[:space:]]*$' "$DATA_ROOT/config/nethop.toml"; then
-  if [ ! -e "$DATA_ROOT/config/nethop.toml.pre-v2" ]; then
-    cp "$DATA_ROOT/config/nethop.toml" "$DATA_ROOT/config/nethop.toml.pre-v2"
-    chown 0:0 "$DATA_ROOT/config/nethop.toml.pre-v2"
-    chmod 0600 "$DATA_ROOT/config/nethop.toml.pre-v2"
+elif ! grep -Eq "^[[:space:]]*schema_version[[:space:]]*=[[:space:]]*${CONFIG_SCHEMA_VERSION}[[:space:]]*$" "$DATA_ROOT/config/nethop.toml"; then
+  if [ ! -e "$DATA_ROOT/config/nethop.toml.pre-v3" ]; then
+    cp "$DATA_ROOT/config/nethop.toml" "$DATA_ROOT/config/nethop.toml.pre-v3"
+    chown 0:0 "$DATA_ROOT/config/nethop.toml.pre-v3"
+    chmod 0600 "$DATA_ROOT/config/nethop.toml.pre-v3"
   fi
   cp "$MODPATH/defaults/nethop.toml" "$DATA_ROOT/config/nethop.toml"
 fi

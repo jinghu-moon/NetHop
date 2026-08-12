@@ -28,13 +28,13 @@ use nethopd::{
 };
 #[cfg(feature = "subscription-update")]
 use nethopd::{
-    CandidateChecker, CapabilitySource, ConfigRuntime, ConfigStore, CoreLauncher,
-    CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe, HealthProbe,
-    HealthProbeError, InMemoryScheduleStore, PersistentCoreVersionSchedule, RuleSetUpdateError,
-    RuleSetUpdatePreparation, RunnerError, RuntimeAttachmentView, RuntimeCoreVersionSchedule,
-    RuntimePolicyError, RuntimeRuleSetSchedule, RuntimeRuleSetUpdateSource, RuntimeUpdateError,
-    RuntimeUpdateSource, SchedulerError, SourceIdEntropy, SourceRegistry, SourceRegistryError,
-    SourceStatusStore, UpdateStatus,
+    CandidateChecker, CapabilitySource, CommitJournalStore, ConfigRuntime, ConfigStore,
+    CoreLauncher, CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe,
+    HealthProbe, HealthProbeError, InMemoryScheduleStore, MutationCoordinator,
+    PersistentCoreVersionSchedule, RuleSetUpdateError, RuleSetUpdatePreparation, RunnerError,
+    RuntimeAttachmentView, RuntimeCoreVersionSchedule, RuntimePolicyError, RuntimeRuleSetSchedule,
+    RuntimeRuleSetUpdateSource, RuntimeUpdateError, RuntimeUpdateSource, SchedulerError,
+    SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceStatusStore, UpdateStatus,
 };
 use nethopd::{CoreReleaseBodyFetcher, CoreVersion, CoreVersionCheckError, CoreVersionChecker};
 #[cfg(feature = "subscription-update")]
@@ -1329,7 +1329,7 @@ fn enabling_a_configured_service_without_a_generation_attempts_initial_update() 
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n",
+        "schema_version = 3\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -1376,6 +1376,145 @@ fn enabling_a_configured_service_without_a_generation_attempts_initial_update() 
 
 #[test]
 #[cfg(feature = "subscription-update")]
+fn source_change_prepare_failure_does_not_stop_the_active_generation() {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://old.example/sub\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = ConfigStore::new(&config_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let digest = snapshot.digest().to_owned();
+    let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let config_runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let runtime_events = Rc::new(RefCell::new(Vec::new()));
+    let starts = Rc::new(Cell::new(0));
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&runtime_events), starts, None);
+    let updater = TestUpdater {
+        events: Rc::clone(&update_events),
+        fail_prepare: true,
+        needed: false,
+        generation: GenerationId::new(2).unwrap(),
+        current: true,
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater)
+    .with_configuration(config_runtime, true);
+    application.run_ready().unwrap();
+    assert_eq!(
+        application.snapshot().generation,
+        Some(GenerationId::new(1).unwrap())
+    );
+    assert_eq!(runtime_events.borrow().as_slice(), ["core_start"]);
+
+    let request = ControlRequest::new(
+        RequestId::new("replace-source-url").unwrap(),
+        ControlMethod::ConfigApply,
+    )
+    .with_params(ControlParams::config_document(
+        digest,
+        json!({
+            "schema_version": 3,
+            "service": {"enabled": true},
+            "subscriptions": {
+                "sources": [{"name": "Primary", "url": "https://new.example/sub"}]
+            }
+        }),
+    ))
+    .unwrap();
+    let response = application.handle(request);
+
+    assert!(response.ok(), "{response:?}");
+    assert_eq!(update_events.borrow().as_slice(), ["prepare"]);
+    assert_eq!(runtime_events.borrow().as_slice(), ["core_start"]);
+    assert_eq!(application.snapshot().state, RuntimeState::RunningTproxy);
+    assert_eq!(
+        application.snapshot().generation,
+        Some(GenerationId::new(1).unwrap())
+    );
+    assert_eq!(application.snapshot().last_update, UpdateStatus::Failed);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
+fn subscription_select_uses_the_real_journaled_worker_transaction() {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let config_path = root.join("nethop.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 3\n[service]\nenabled = false\n[subscriptions]\nmode = \"single\"\n[[subscriptions.sources]]\nname = \"Primary\"\nenabled = true\nurl = \"https://one.example/sub\"\n[[subscriptions.sources]]\nname = \"Backup\"\nenabled = false\nurl = \"https://two.example/sub\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = ConfigStore::new(&config_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let digest = snapshot.digest().to_owned();
+    let registry = SourceRegistry::new(root.join("source-registry.v1.json")).unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let backup_id = sources.sources()[1].id().as_str().to_owned();
+    let config_runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let journal = CommitJournalStore::new(&root).unwrap();
+    let journal_path = journal.path();
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_configuration(config_runtime, false)
+    .with_subscription_transactions(journal, MutationCoordinator::default());
+
+    let request = ControlRequest::new(
+        RequestId::new("select-backup").unwrap(),
+        ControlMethod::SubscriptionSelect,
+    )
+    .with_params(ControlParams::subscription_select(
+        digest,
+        backup_id.clone(),
+    ))
+    .unwrap();
+    let response = application.handle(request);
+
+    assert!(response.ok(), "{response:?}");
+    assert!(!journal_path.exists());
+    let canonical = fs::read_to_string(config_path).unwrap();
+    assert!(canonical.contains("name = \"Primary\"\nenabled = false"));
+    assert!(canonical.contains("name = \"Backup\"\nenabled = true"));
+    assert_eq!(
+        response.result().unwrap()["active_set"]["active_source_ids"],
+        json!([backup_id])
+    );
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
 fn stale_manager_apply_returns_current_observed_digest_without_sensitive_values() {
     use std::fs;
     #[cfg(unix)]
@@ -1385,7 +1524,7 @@ fn stale_manager_apply_returns_current_observed_digest_without_sensitive_values(
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
+        "schema_version = 3\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -1411,7 +1550,7 @@ fn stale_manager_apply_returns_current_observed_digest_without_sensitive_values(
         .with_params(ControlParams::config_document(
             "0".repeat(64),
             json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "service": {"enabled": true},
                 "subscriptions": {"sources": [{"name": "Primary", "url": "https://new-secret.example/token"}]}
             }),
@@ -1444,7 +1583,7 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
+        "schema_version = 3\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://secret.example/account-token\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -1468,12 +1607,12 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     .with_source_status_store(source_status);
 
     let hello = request("hello", ControlMethod::ProtocolHello)
-        .with_params(ControlParams::hello("manager-alpha".into(), 2, 2))
+        .with_params(ControlParams::hello("manager-alpha".into(), 3, 3))
         .unwrap();
     let hello = application.handle(hello);
     assert!(hello.ok());
     assert_eq!(hello.result().unwrap()["compatible"], true);
-    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 2);
+    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 3);
     assert!(
         hello.result().unwrap()["supported_features"]
             .as_array()
@@ -1519,6 +1658,11 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
         !fields
             .iter()
             .any(|field| field["field_id"] == "subscriptions.sources[].source_id")
+    );
+    assert!(
+        !fields
+            .iter()
+            .any(|field| field["field_id"] == "proxy.selector_mode")
     );
     for field_id in [
         "routing.force_proxy_domains",
@@ -1613,7 +1757,7 @@ fn dry_run_prepares_and_discards_a_checked_candidate_without_capture() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[advanced]\ndry_run = true\n",
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[advanced]\ndry_run = true\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -1661,7 +1805,7 @@ fn wifi_scene_can_transiently_disable_but_never_override_the_persistent_master_s
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[network.wifi_scenes]\nenabled = true\nprobe_interval_seconds = 30\n[[network.wifi_scenes.rules]]\nid = \"trusted-home\"\nssid = \"Trusted Home\"\nbssid = \"aa:bb:cc:dd:ee:ff\"\naction = \"disable_proxy\"\n",
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[network.wifi_scenes]\nenabled = true\nprobe_interval_seconds = 30\n[[network.wifi_scenes.rules]]\nid = \"trusted-home\"\nssid = \"Trusted Home\"\nbssid = \"aa:bb:cc:dd:ee:ff\"\naction = \"disable_proxy\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -1724,7 +1868,7 @@ fn advanced_apply_refreshes_runtime_probe_health_and_reconcile_policy() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        "schema_version = 2\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
+        "schema_version = 3\n[service]\nenabled = false\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -1759,7 +1903,7 @@ fn advanced_apply_refreshes_runtime_probe_health_and_reconcile_policy() {
     .with_params(ControlParams::config_document(
         digest,
         json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "service": {"enabled": false},
             "subscriptions": {"sources": [{"name": "Primary", "url": ""}]},
             "advanced": {

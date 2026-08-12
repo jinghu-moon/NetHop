@@ -1,12 +1,13 @@
 # NetHop user configuration
 # Source IDs are daemon-owned and never belong in this file.
-schema_version = 2
+schema_version = 3
 
 [service]
 # Persistent proxy switch. The daemon remains available when disabled.
 enabled = true
 
 [subscriptions]
+mode = "single"
 auto_update = true
 update_interval_hours = 24
 
@@ -33,7 +34,6 @@ filter = { include_names = [], exclude_names = [], excluded_node_ids = [], proto
 
 [proxy]
 outbound_mode = "rule"
-selector_mode = "urltest"
 
 [proxy.urltest]
 interval_minutes = 10

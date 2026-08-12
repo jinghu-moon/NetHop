@@ -1,14 +1,14 @@
 # NetHop 系统设计
 
-> 状态：Draft v0.5，作为 Phase 0-A 至首版实现基线
+> 状态：Draft v0.6，作为 Phase 0-A 至首版实现基线
 >
-> 文档版本：0.5
+> 文档版本：0.6
 >
 > 目标平台：Android 13+（API 33+）、arm64-v8a、Magisk / KernelSU
 >
 > 许可证：AGPL-3.0
 >
-> 参考资料核验日期：2026-08-01
+> 参考资料核验日期：2026-08-11
 
 ## 1. 文档目的
 
@@ -30,6 +30,7 @@
 | 后续控制面 | 独立 Kotlin Android App |
 | 项目许可证 | AGPL-3.0 |
 | sing-box 基线 | 固定稳定版 `1.13.15`；升级需审核、兼容测试和重新发版 |
+| 当前控制契约 | 用户配置只接受 schema v3；`nethopctl <-> nethopd` 只接受 Protocol v3，不保留开发期旧版本兼容层 |
 
 ### 2.2 网络与策略
 
@@ -53,7 +54,8 @@
 | 输入格式 | Base64 URI 列表、Clash YAML、sing-box outbounds JSON |
 | 协议 | VLESS、VMess、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS |
 | 错误处理 | 逐节点诊断；部分节点合法则部分成功，全部失败才拒绝该订阅 |
-| 多订阅 | 支持合并、稳定去重、来源追踪和单源 last-known-good 缓存 |
+| 多订阅 | `single` 显式单源或 `merge` 多源合并；支持公平自动候选池、稳定去重、完整来源追踪和单源 last-known-good 缓存 |
+| 节点选择 | 用户意图分为 `auto` 与稳定 node ID 的 `manual`；请求目标与 core 实际 active terminal 分开表达 |
 | 更新 | 手动更新 + 默认每 24 小时自动更新；失败保留旧缓存 |
 | 配置开放 | 托管配置开始，逐步开放 allowlist override，最终提供受安全约束的专家完整 JSON |
 | 版本检查 | 检查 sing-box 最新稳定版，有更新时提示，不在设备上自动替换核心 |
@@ -337,18 +339,26 @@ nethopctl config get|schema
 nethopctl config validate|apply|mutate --expected-digest DIGEST  # JSON stdin
 nethopctl config reload [--wait]
 nethopctl capability get
-nethopctl hello --manager-version VERSION --protocol-min 1 --protocol-max 1
+nethopctl hello --manager-version VERSION --protocol-min 3 --protocol-max 3
 nethopctl events [--kinds config,runtime,subscription,generation,network] --jsonl
 nethopctl connections close-all
 nethopctl logs get [--limit 1..128]
 nethopctl logs tail [--kinds ...] --jsonl
 nethopctl logs clear
 nethopctl subscription list
+nethopctl subscription mode
+nethopctl subscription mode set single --source <source-id> --expected-digest DIGEST
+nethopctl subscription mode set merge --expected-digest DIGEST
+nethopctl subscription select <source-id> --expected-digest DIGEST
 nethopctl subscription add <name> <https-url> --expected-digest DIGEST
 nethopctl subscription remove|move|enable|disable <source-id> --expected-digest DIGEST
 nethopctl subscription import preview|apply --file <path>|--text --format auto|... --expected-digest DIGEST [--candidate-digest DIGEST]
 nethopctl application list|mode|add-package|remove-package|add-uid|remove-uid ...
 nethopctl network set <field-id> <value> --expected-digest DIGEST
+nethopctl node selection
+nethopctl node select auto
+nethopctl node select manual <node-id>
+nethopctl node test-all
 nethopctl node export <node-id>
 nethopctl node remove <node-id> --expected-digest DIGEST
 ```
@@ -774,7 +784,7 @@ badlinkname,tfogo_checklinkname0
 
 ### 18.3 selector 与测速
 
-顶层 `selector` 包含 `auto` urltest 组和全部手动节点。默认：
+顶层 `nethop-select` selector 包含固定的 `nethop-auto` urltest 组和全部可手选 terminal 节点。默认：
 
 - `interrupt_exist_connections=false`，节点切换只影响新连接，避免主动打断现有会话；
 - urltest 使用可配置的 204 URL、合理 interval 和 tolerance；
@@ -782,7 +792,9 @@ badlinkname,tfogo_checklinkname0
 - 手动批量测速限制并发，默认 8；
 - 订阅刷新后优先按稳定 `node_id` 恢复原选择；原节点不存在才回退 `auto`。
 
-节点切换和 Clash mode 通过 API 执行，不重写配置、不发送 SIGHUP，因此适用小于 1 秒 SLA。
+节点选择意图与实际 active terminal 分开保存和返回。`auto` 下 active terminal 可随 urltest 改变；`manual` 下测速只更新延迟，不改变用户目标。daemon 通过当前 generation registry 将稳定 node ID 映射为内部 tag，并经独立 sing-box 子进程的 loopback-only、随机 secret Clash API 完成测速和切换；WebUI/CLI 不接触内部 tag 或 API secret。节点切换不重写配置、不发送 SIGHUP，因此适用小于 1 秒 SLA。
+
+sing-box `v1.14` 的原生 gRPC API service 不属于当前 `v1.13.15` 发布契约，也不以预留依赖的方式进入实现。评估条件与迁移边界只记录在 [`11-deferred-capabilities-and-future-design.md`](./11-deferred-capabilities-and-future-design.md)。
 
 ### 18.4 配置开放阶段
 

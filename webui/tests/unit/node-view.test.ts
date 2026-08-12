@@ -3,9 +3,9 @@ import { parseNodeSort, sortNodes } from "@/model/node-view";
 import type { NodeDto } from "@/model/dto";
 
 const nodes: NodeDto[] = [
-  { id: "nh1s-0000000000000001", name: "B", protocol: "vless", selected: false, sourceIds: ["a"], latencyMs: 90 },
-  { id: "nh1s-0000000000000002", name: "A", protocol: "trojan", selected: true, sourceIds: ["a"], latencyMs: 120 },
-  { id: "nh1s-0000000000000003", name: "C", protocol: "vmess", selected: false, sourceIds: ["b"] },
+  { id: "nh1s-0000000000000001", name: "B", protocol: "vless", isRequested: false, isActive: false, sourceIds: ["a"], latencyMs: 90 },
+  { id: "nh1s-0000000000000002", name: "A", protocol: "trojan", isRequested: true, isActive: true, sourceIds: ["a"], latencyMs: 120 },
+  { id: "nh1s-0000000000000003", name: "C", protocol: "vmess", isRequested: false, isActive: false, sourceIds: ["b"] },
 ];
 
 describe("node view ordering", () => {

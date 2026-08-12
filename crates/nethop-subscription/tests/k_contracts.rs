@@ -5,11 +5,32 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use nethop_subscription::{
     ContentEncoding, FetchAgentConfig, FetchDiagnosticCode, FetchEndpointKind, FetchPolicy,
-    FetchPolicyError, FetchRequest, ParserLimits, RequestProfile, SourceCache, SourceId,
-    SourceUrlError, UREQ_SECURITY_ADAPTER_VERSION, decode_response_body, is_denied_ssrf_address,
-    next_redirect, validate_peer_address, validate_peer_in_approved_set,
+    FetchPolicyError, FetchRequest, LocalFetchProxy, ParserLimits, RequestProfile, SourceCache,
+    SourceId, SourceUrlError, UREQ_SECURITY_ADAPTER_VERSION, decode_response_body,
+    is_denied_ssrf_address, next_redirect, validate_peer_address, validate_peer_in_approved_set,
     validate_resolved_addresses, validate_response_limits, validate_source_url,
 };
+
+#[test]
+fn local_fetch_proxy_is_loopback_only_and_redacts_credentials() {
+    let proxy = LocalFetchProxy::new(
+        "127.0.0.1:7894".parse().unwrap(),
+        "nethop",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .unwrap();
+    assert_eq!(proxy.endpoint().to_string(), "127.0.0.1:7894");
+    assert!(!format!("{proxy:?}").contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assert!(
+        LocalFetchProxy::new(
+            "0.0.0.0:7894".parse().unwrap(),
+            "nethop",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .is_err()
+    );
+    assert!(LocalFetchProxy::new("127.0.0.1:7894".parse().unwrap(), "nethop", "short").is_err());
+}
 
 #[test]
 fn fetch_accepts_only_https_urls_without_user_info() {

@@ -11,9 +11,10 @@ use thiserror::Error;
 
 use crate::config_model::{EffectiveConfig, UserConfigWire};
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+pub const CONFIG_SCHEMA_VERSION: u32 = 3;
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 pub const MAX_SOURCES: usize = 16;
+pub(crate) const MAX_AUTO_CANDIDATES: u16 = 256;
 const MAX_STABLE_READ_ATTEMPTS: usize = 3;
 const MAX_TEMP_ATTEMPTS: u64 = 16;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -163,6 +164,10 @@ impl ConfigStoreCheckpoint {
     pub(crate) fn digest(&self) -> &str {
         &self.digest
     }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 fn parse_snapshot(bytes: Vec<u8>) -> Result<ConfigSnapshot, ConfigError> {
@@ -217,6 +222,11 @@ impl PreparedConfigWrite {
     #[cfg(feature = "subscription-update")]
     pub(crate) const fn snapshot(&self) -> &ConfigSnapshot {
         &self.snapshot
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -514,6 +524,10 @@ pub enum ConfigError {
     UnsupportedSchema,
     #[error("configuration source count is invalid")]
     InvalidSourceCount,
+    #[error("single subscription mode requires one unique active source")]
+    SingleSourceNotUnique,
+    #[error("configured subscriptions require an active source")]
+    NoActiveSource,
     #[error("configuration source name is invalid")]
     InvalidSourceName,
     #[error("configuration source names are duplicated")]
@@ -567,6 +581,8 @@ impl ConfigError {
             Self::UnsupportedSchema => "UNSUPPORTED-SCHEMA",
             Self::InvalidValue
             | Self::InvalidSourceCount
+            | Self::SingleSourceNotUnique
+            | Self::NoActiveSource
             | Self::InvalidSourceName
             | Self::InvalidCapture
             | Self::InvalidUpdateSchedule

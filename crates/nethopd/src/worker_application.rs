@@ -513,6 +513,10 @@ where
     #[cfg(feature = "subscription-update")]
     config: Option<ConfigRuntime>,
     #[cfg(feature = "subscription-update")]
+    subscription_journal: Option<crate::CommitJournalStore>,
+    #[cfg(feature = "subscription-update")]
+    mutation_coordinator: crate::MutationCoordinator,
+    #[cfg(feature = "subscription-update")]
     config_dirty: Option<Arc<AtomicBool>>,
     #[cfg(feature = "subscription-update")]
     config_watch_healthy: Option<Arc<AtomicBool>>,
@@ -615,6 +619,10 @@ where
             #[cfg(feature = "subscription-update")]
             config: self.config,
             #[cfg(feature = "subscription-update")]
+            subscription_journal: self.subscription_journal,
+            #[cfg(feature = "subscription-update")]
+            mutation_coordinator: self.mutation_coordinator,
+            #[cfg(feature = "subscription-update")]
             config_dirty: self.config_dirty,
             #[cfg(feature = "subscription-update")]
             config_watch_healthy: self.config_watch_healthy,
@@ -712,6 +720,10 @@ where
             #[cfg(feature = "subscription-update")]
             config: None,
             #[cfg(feature = "subscription-update")]
+            subscription_journal: None,
+            #[cfg(feature = "subscription-update")]
+            mutation_coordinator: crate::MutationCoordinator::default(),
+            #[cfg(feature = "subscription-update")]
             config_dirty: None,
             #[cfg(feature = "subscription-update")]
             config_watch_healthy: None,
@@ -737,6 +749,17 @@ where
 
     pub fn with_operational_control(mut self, control: OperationalControl) -> Self {
         self.operational_control = Some(control);
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub fn with_subscription_transactions(
+        mut self,
+        journal: crate::CommitJournalStore,
+        coordinator: crate::MutationCoordinator,
+    ) -> Self {
+        self.subscription_journal = Some(journal);
+        self.mutation_coordinator = coordinator;
         self
     }
 
@@ -1135,7 +1158,6 @@ where
             || sources_changed
             || plan.impact() == crate::ApplyImpact::GenerationActivation
         {
-            self.control.queue_command(ControlCommand::Stop);
             self.control.queue_command(ControlCommand::Update);
         } else if plan.impact() == crate::ApplyImpact::NetworkPlan {
             self.control.queue_command(ControlCommand::Stop);
@@ -2220,7 +2242,9 @@ where
             ControlMethod::NodeList
                 | ControlMethod::NodeTest
                 | ControlMethod::NodeTestAll
-                | ControlMethod::NodeSelect
+                | ControlMethod::NodeSelectionGet
+                | ControlMethod::NodeSelectAuto
+                | ControlMethod::NodeSelectManual
                 | ControlMethod::NodeExport
                 | ControlMethod::ConnectionsGet
                 | ControlMethod::ConnectionClose
@@ -2242,26 +2266,55 @@ where
                     ),
                 );
             };
-            return match control.handle(
-                request.method(),
+            let method = request.method();
+            let outcome = control.handle(
+                method,
                 request.params(),
                 snapshot.state,
                 snapshot.generation,
                 &self.policy,
-            ) {
-                Ok(result) => ControlResponse::success(request_id, generation, result),
-                Err(error) => ControlResponse::failure(
-                    request_id,
-                    generation,
-                    crate::worker_services::unavailable_control_error(
-                        ErrorDomain::Core,
-                        if matches!(error, crate::OperationalControlError::ClashApi(_)) {
-                            "CONTROL-FAILED"
-                        } else {
-                            "CONTROL-INVALID"
-                        },
-                    ),
-                ),
+            );
+            return match outcome {
+                Ok(result) => {
+                    match method {
+                        ControlMethod::NodeSelectAuto | ControlMethod::NodeSelectManual => {
+                            self.event_hub.publish(
+                                EventKind::NodeSelection,
+                                json!({"kind":"node_selection","selection":result}),
+                            );
+                            self.event_hub.publish(
+                                EventKind::NodeActive,
+                                json!({"kind":"node_active","selection":result}),
+                            );
+                        }
+                        ControlMethod::NodeTest => self.event_hub.publish(
+                            EventKind::NodeTest,
+                            json!({"kind":"node_test","result":result}),
+                        ),
+                        ControlMethod::NodeTestAll => {
+                            self.event_hub.publish(
+                                EventKind::NodeTest,
+                                json!({"kind":"node_test","result":result}),
+                            );
+                            if let Some(selection) = result.get("selection") {
+                                self.event_hub.publish(
+                                    EventKind::NodeActive,
+                                    json!({"kind":"node_active","selection":selection}),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                    ControlResponse::success(request_id, generation, result)
+                }
+                Err(error) => {
+                    let (domain, detail) = error.control_diagnostic();
+                    ControlResponse::failure(
+                        request_id,
+                        generation,
+                        crate::worker_services::unavailable_control_error(domain, detail),
+                    )
+                }
             };
         }
         #[cfg(feature = "subscription-update")]
@@ -2686,6 +2739,257 @@ where
                         request.params().document(),
                     ),
                 ),
+            };
+        }
+        #[cfg(feature = "subscription-update")]
+        if self.config.is_some()
+            && matches!(
+                request.method(),
+                ControlMethod::SubscriptionModeGet
+                    | ControlMethod::SubscriptionModeSet
+                    | ControlMethod::SubscriptionSelect
+                    | ControlMethod::SubscriptionSetEnabled
+            )
+        {
+            let request_id = request.request_id().clone();
+            if request.method() == ControlMethod::SubscriptionModeGet {
+                let config = self.config.as_ref().expect("configuration was checked");
+                return ControlResponse::success(
+                    request_id,
+                    self.snapshot().generation.map(GenerationId::get),
+                    json!(config.source_config().active_set_snapshot()),
+                );
+            }
+            let expected = request
+                .params()
+                .expected_config_digest()
+                .unwrap_or_default();
+            let requested_mode = request.params().subscription_mode().map(|mode| match mode {
+                nethop_protocol::SubscriptionMode::Single => crate::SubscriptionMode::Single,
+                nethop_protocol::SubscriptionMode::Merge => crate::SubscriptionMode::Merge,
+            });
+            let preview = {
+                let config = self.config.as_ref().expect("configuration was checked");
+                match request.method() {
+                    ControlMethod::SubscriptionSelect => config.preview_subscription_select(
+                        expected,
+                        request.params().source_id().expect("validated source ID"),
+                    ),
+                    ControlMethod::SubscriptionSetEnabled => config
+                        .preview_subscription_set_enabled(
+                            expected,
+                            request.params().source_id().expect("validated source ID"),
+                            request.params().enabled().expect("validated enabled flag"),
+                        ),
+                    ControlMethod::SubscriptionModeSet => config.preview_subscription_mode_set(
+                        expected,
+                        requested_mode.expect("validated mode"),
+                        request.params().source_id(),
+                    ),
+                    _ => unreachable!(),
+                }
+            };
+            let preview = match preview {
+                Ok(preview) => preview,
+                Err(error) => {
+                    return ControlResponse::failure(
+                        request_id,
+                        self.snapshot().generation.map(GenerationId::get),
+                        config_control_error(self.config.as_ref(), &error),
+                    );
+                }
+            };
+            let checkpoint = match self
+                .config
+                .as_ref()
+                .expect("configuration was checked")
+                .checkpoint()
+            {
+                Ok(checkpoint) => checkpoint,
+                Err(error) => {
+                    return ControlResponse::failure(
+                        request_id,
+                        self.snapshot().generation.map(GenerationId::get),
+                        config_control_error(self.config.as_ref(), &error),
+                    );
+                }
+            };
+            let old_generation = self.snapshot().generation.map(GenerationId::get);
+            let new_generation = old_generation
+                .and_then(|value| value.checked_add(1))
+                .unwrap_or(1);
+            let mut journal = if let Some(store) = self.subscription_journal.as_ref() {
+                let staged_generation = format!(".candidate-{new_generation}-transaction");
+                let staged_config = format!(".candidate-config-{new_generation}");
+                let mut journal = match crate::CommitJournal::new(
+                    checkpoint.digest(),
+                    preview.candidate_digest(),
+                    old_generation,
+                    new_generation,
+                    staged_generation,
+                    staged_config,
+                ) {
+                    Ok(journal) => journal,
+                    Err(_) => {
+                        return ControlResponse::failure(
+                            request_id,
+                            old_generation,
+                            unavailable_control_error(ErrorDomain::Config, "TRANSACTION-FAILED"),
+                        );
+                    }
+                };
+                if store.stage_config(&journal, preview.bytes()).is_err()
+                    || store
+                        .advance_and_write(&mut journal, crate::CommitPhase::Journaled)
+                        .is_err()
+                {
+                    let _ = store.abort(&journal);
+                    return ControlResponse::failure(
+                        request_id,
+                        old_generation,
+                        unavailable_control_error(ErrorDomain::Config, "TRANSACTION-FAILED"),
+                    );
+                }
+                Some(journal)
+            } else {
+                None
+            };
+            let coordinator = self.mutation_coordinator.clone();
+            let _mutation_guard = match coordinator.acquire() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    if let (Some(store), Some(journal)) =
+                        (self.subscription_journal.as_ref(), journal.as_ref())
+                    {
+                        let _ = store.abort(journal);
+                    }
+                    return ControlResponse::failure(
+                        request_id,
+                        old_generation,
+                        unavailable_control_error(ErrorDomain::Config, "TRANSACTION-FAILED"),
+                    );
+                }
+            };
+            let result = {
+                let config = self.config.as_mut().expect("configuration was checked");
+                match request.method() {
+                    ControlMethod::SubscriptionSelect => config.subscription_select(
+                        expected,
+                        request.params().source_id().expect("validated source ID"),
+                    ),
+                    ControlMethod::SubscriptionSetEnabled => config.subscription_set_enabled(
+                        expected,
+                        request.params().source_id().expect("validated source ID"),
+                        request.params().enabled().expect("validated enabled flag"),
+                    ),
+                    ControlMethod::SubscriptionModeSet => config.subscription_mode_set(
+                        expected,
+                        requested_mode.expect("validated mode"),
+                        request.params().source_id(),
+                    ),
+                    _ => unreachable!(),
+                }
+            };
+            if result.is_ok()
+                && let (Some(store), Some(journal)) =
+                    (self.subscription_journal.as_ref(), journal.as_mut())
+                && store
+                    .advance_and_write(journal, crate::CommitPhase::ConfigPublished)
+                    .is_err()
+            {
+                let _ = store.abort(journal);
+                let _ = self.rollback_config_transaction(checkpoint);
+                return ControlResponse::failure(
+                    request_id,
+                    old_generation,
+                    unavailable_control_error(ErrorDomain::Config, "TRANSACTION-FAILED"),
+                );
+            }
+            return match result {
+                Ok(outcome) => {
+                    let changed = matches!(outcome.change(), ConfigChange::Changed { .. });
+                    if changed {
+                        self.apply_config_change(outcome.into_change());
+                    }
+                    let completed = self.handle_commands(self.clock.now()).is_ok();
+                    let generation = self.snapshot().generation.map(GenerationId::get);
+                    if completed {
+                        if let (Some(store), Some(journal)) =
+                            (self.subscription_journal.as_ref(), journal.as_mut())
+                        {
+                            let phase_result = if generation == Some(new_generation) {
+                                store.advance_and_write(
+                                    journal,
+                                    crate::CommitPhase::GenerationPublished,
+                                )
+                            } else {
+                                Ok(())
+                            };
+                            if phase_result.is_err() || store.complete(journal).is_err() {
+                                let _ = self.rollback_config_transaction(checkpoint);
+                                return ControlResponse::failure(
+                                    request_id,
+                                    generation,
+                                    unavailable_control_error(
+                                        ErrorDomain::Config,
+                                        "TRANSACTION-FAILED",
+                                    ),
+                                );
+                            }
+                        }
+                        if request.method() == ControlMethod::SubscriptionModeSet {
+                            self.event_hub.publish(
+                                EventKind::SubscriptionMode,
+                                json!({
+                                    "kind":"subscription_mode",
+                                    "mode":self.config.as_ref().map(|config| config.source_config().mode()),
+                                }),
+                            );
+                        }
+                        self.event_hub.publish(
+                            EventKind::SubscriptionActiveSet,
+                            json!({
+                                "kind":"subscription_active_set",
+                                "active_set":self.config.as_ref().map(|config| config.source_config().active_set_snapshot()),
+                            }),
+                        );
+                        ControlResponse::success(
+                            request_id,
+                            generation,
+                            json!({
+                                "accepted": true,
+                                "changed": changed,
+                                "completed": true,
+                                "active_set": self.config.as_ref().map(|config| config.source_config().active_set_snapshot()),
+                                "observed_config_digest": self.config.as_ref().map(|config| config.current().digest()),
+                            }),
+                        )
+                    } else {
+                        let _ = self.rollback_config_transaction(checkpoint);
+                        if let (Some(store), Some(journal)) =
+                            (self.subscription_journal.as_ref(), journal.as_ref())
+                        {
+                            let _ = store.abort(journal);
+                        }
+                        ControlResponse::failure(
+                            request_id,
+                            generation,
+                            unavailable_control_error(ErrorDomain::Config, "APPLY-ROLLED-BACK"),
+                        )
+                    }
+                }
+                Err(error) => {
+                    if let (Some(store), Some(journal)) =
+                        (self.subscription_journal.as_ref(), journal.as_ref())
+                    {
+                        let _ = store.abort(journal);
+                    }
+                    ControlResponse::failure(
+                        request_id,
+                        self.snapshot().generation.map(GenerationId::get),
+                        config_control_error(self.config.as_ref(), &error),
+                    )
+                }
             };
         }
         #[cfg(feature = "subscription-update")]
@@ -3181,18 +3485,6 @@ fn config_schema_document() -> serde_json::Value {
             "normal",
             2,
             &["rule", "global", "direct"],
-        ),
-        enum_schema_field(
-            "proxy.selector_mode",
-            json!("urltest"),
-            "proxy",
-            31,
-            false,
-            false,
-            "generation_activation",
-            "normal",
-            2,
-            &["urltest", "manual"],
         ),
         ranged_schema_field(
             "proxy.urltest.interval_minutes",

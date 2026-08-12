@@ -25,7 +25,9 @@ fn command_name(command: CliCommand) -> &'static str {
         CliCommand::NodeList => "NodeList",
         CliCommand::NodeTest => "NodeTest",
         CliCommand::NodeTestAll => "NodeTestAll",
-        CliCommand::NodeSelect => "NodeSelect",
+        CliCommand::NodeSelection => "NodeSelection",
+        CliCommand::NodeSelectAuto => "NodeSelectAuto",
+        CliCommand::NodeSelectManual => "NodeSelectManual",
         CliCommand::NodeRemove => "NodeRemove",
         CliCommand::NodeExport => "NodeExport",
         CliCommand::ConnectionsGet => "ConnectionsGet",
@@ -35,6 +37,10 @@ fn command_name(command: CliCommand) -> &'static str {
         CliCommand::LogsTail => "LogsTail",
         CliCommand::LogsClear => "LogsClear",
         CliCommand::SubscriptionList => "SubscriptionList",
+        CliCommand::SubscriptionMode => "SubscriptionMode",
+        CliCommand::SubscriptionModeSetSingle => "SubscriptionModeSetSingle",
+        CliCommand::SubscriptionModeSetMerge => "SubscriptionModeSetMerge",
+        CliCommand::SubscriptionSelect => "SubscriptionSelect",
         CliCommand::SubscriptionAdd => "SubscriptionAdd",
         CliCommand::SubscriptionRemove => "SubscriptionRemove",
         CliCommand::SubscriptionMove => "SubscriptionMove",
@@ -69,7 +75,7 @@ fn command_name(command: CliCommand) -> &'static str {
 fn every_stable_cli_command_has_a_v1_before_golden() {
     let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
     assert_eq!(fixture["protocol_version"], 1);
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 3);
 
     let success: ControlResponse = serde_json::from_value(fixture["success"].clone()).unwrap();
     let failure: ControlResponse = serde_json::from_value(fixture["failure"].clone()).unwrap();
@@ -85,12 +91,30 @@ fn every_stable_cli_command_has_a_v1_before_golden() {
             .iter()
             .map(|value| value.as_str().unwrap())
             .collect::<Vec<_>>();
+        if case["id"] == "NodeSelect" {
+            assert!(parse_command(args).is_err());
+            continue;
+        }
         let command = parse_command(args).unwrap();
         assert_eq!(case["id"], command_name(command));
-        assert_eq!(
-            serde_json::to_value(command.method()).unwrap(),
-            case["method"]
-        );
+        if matches!(
+            case["id"].as_str(),
+            Some("SubscriptionEnable" | "SubscriptionDisable")
+        ) {
+            assert_eq!(
+                serde_json::to_value(command.method()).unwrap(),
+                "subscription.set_enabled"
+            );
+            assert_ne!(
+                serde_json::to_value(command.method()).unwrap(),
+                case["method"]
+            );
+        } else {
+            assert_eq!(
+                serde_json::to_value(command.method()).unwrap(),
+                case["method"]
+            );
+        }
         assert!(observed.insert(command_name(command)));
     }
 
@@ -111,7 +135,6 @@ fn every_stable_cli_command_has_a_v1_before_golden() {
         CliCommand::Events,
         CliCommand::NodeList,
         CliCommand::NodeTest,
-        CliCommand::NodeSelect,
         CliCommand::NodeRemove,
         CliCommand::NodeExport,
         CliCommand::ConnectionsGet,

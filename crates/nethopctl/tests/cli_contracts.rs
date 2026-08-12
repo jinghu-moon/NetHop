@@ -2,8 +2,8 @@ use nethop_protocol::{
     ControlError, ControlRequest, ControlResponse, ErrorCode, ErrorDomain, RequestId,
 };
 use nethopctl::{
-    CliCommand, CliError, ControlTransport, build_request, execute, execute_invocation,
-    parse_command, parse_invocation, render_response, render_status_human,
+    CliCommand, CliError, ControlTransport, build_request, control_timeout, execute,
+    execute_invocation, parse_command, parse_invocation, render_response, render_status_human,
 };
 use serde_json::json;
 
@@ -181,6 +181,16 @@ impl ControlTransport for FakeTransport {
 }
 
 #[test]
+fn control_timeout_is_method_scoped_and_bounded() {
+    assert_eq!(control_timeout(CliCommand::Status, false).as_secs(), 5);
+    assert_eq!(
+        control_timeout(CliCommand::NodeTestAll, false).as_secs(),
+        15
+    );
+    assert_eq!(control_timeout(CliCommand::Update, true).as_secs(), 30);
+}
+
+#[test]
 fn command_parser_is_exact_and_maps_only_minimal_methods() {
     assert_eq!(parse_command(["status"]).unwrap(), CliCommand::Status);
     assert_eq!(parse_command(["start"]).unwrap(), CliCommand::Start);
@@ -212,8 +222,8 @@ fn command_parser_is_exact_and_maps_only_minimal_methods() {
         CliCommand::NodeTestAll
     );
     assert_eq!(
-        parse_command(["node", "select"]).unwrap(),
-        CliCommand::NodeSelect
+        parse_command(["node", "selection"]).unwrap(),
+        CliCommand::NodeSelection
     );
     assert_eq!(
         parse_command(["connections"]).unwrap(),
@@ -299,9 +309,9 @@ fn operational_commands_build_only_bounded_typed_params() {
             "node-a",
         ),
         (
-            vec!["node", "select", "node-b"],
-            nethop_protocol::ControlMethod::NodeSelect,
-            "node-b",
+            vec!["node", "select", "manual", "nh1s-0123456789abcdef"],
+            nethop_protocol::ControlMethod::NodeSelectManual,
+            "nh1s-0123456789abcdef",
         ),
         (
             vec!["connection", "close", "connection-id"],
@@ -396,6 +406,77 @@ fn operational_commands_build_only_bounded_typed_params() {
         Some(nethop_protocol::ConfigMutation::SetScalarField { field_id, value })
             if field_id == "logging.level" && value == &json!("debug")
     ));
+}
+
+#[test]
+fn protocol_v3_subscription_and_selection_commands_are_unambiguous() {
+    let digest = "a".repeat(64);
+    let source = "src_0123456789abcdef0123456789abcdef";
+    let node = "nh1s-0123456789abcdef";
+
+    let cases = [
+        (
+            vec!["subscription", "mode"],
+            nethop_protocol::ControlMethod::SubscriptionModeGet,
+        ),
+        (
+            vec![
+                "subscription",
+                "mode",
+                "set",
+                "single",
+                "--source",
+                source,
+                "--expected-digest",
+                &digest,
+            ],
+            nethop_protocol::ControlMethod::SubscriptionModeSet,
+        ),
+        (
+            vec![
+                "subscription",
+                "select",
+                source,
+                "--expected-digest",
+                &digest,
+            ],
+            nethop_protocol::ControlMethod::SubscriptionSelect,
+        ),
+        (
+            vec![
+                "subscription",
+                "enable",
+                source,
+                "--expected-digest",
+                &digest,
+            ],
+            nethop_protocol::ControlMethod::SubscriptionSetEnabled,
+        ),
+        (
+            vec!["node", "selection"],
+            nethop_protocol::ControlMethod::NodeSelectionGet,
+        ),
+        (
+            vec!["node", "select", "auto"],
+            nethop_protocol::ControlMethod::NodeSelectAuto,
+        ),
+        (
+            vec!["node", "select", "manual", node],
+            nethop_protocol::ControlMethod::NodeSelectManual,
+        ),
+    ];
+    for (index, (arguments, method)) in cases.into_iter().enumerate() {
+        let invocation = parse_invocation(arguments).unwrap();
+        let request = build_request(
+            &invocation,
+            RequestId::new(format!("v3-{index}")).unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(request.method(), method);
+    }
+    assert!(parse_invocation(["node", "select", node]).is_err());
+    assert!(parse_invocation(["subscription", "select", source]).is_err());
 }
 
 #[test]
@@ -503,7 +584,7 @@ fn client_sends_one_typed_request_and_preserves_daemon_response() {
     assert_eq!(transport.observed[0].method(), CliCommand::Status.method());
     assert_eq!(
         render_response(&actual).unwrap(),
-        r#"{"version":2,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
+        r#"{"version":3,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
     );
 }
 

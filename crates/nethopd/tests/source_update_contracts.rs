@@ -73,10 +73,11 @@ impl CandidateChecker for FakeChecker {
 fn write_sources(path: &std::path::Path) -> SourceConfig {
     fs::write(
         path,
-        br#"schema_version = 2
+        br#"schema_version = 3
 [service]
 enabled = true
 [subscriptions]
+mode = "merge"
 [[subscriptions.sources]]
 name = "One"
 url = "https://one.example/s"
@@ -136,7 +137,7 @@ fn surfboard_source_reaches_the_existing_nodes_only_candidate_pipeline() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        br#"schema_version = 2
+        br#"schema_version = 3
 [service]
 enabled = true
 [subscriptions]
@@ -394,7 +395,7 @@ fn source_local_filter_runs_before_candidate_composition() {
     let config_path = directory.path().join("nethop.toml");
     fs::write(
         &config_path,
-        br#"schema_version = 2
+        br#"schema_version = 3
 [service]
 enabled = true
 [subscriptions]

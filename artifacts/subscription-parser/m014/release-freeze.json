@@ -81,15 +81,15 @@
   "artifacts": [
     {
       "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
-      "sha256": "3bee238bb56200afd52f082ae0d03954a2c1803f57ac4a610d78f652ce2b98a6"
+      "sha256": "6be41a59bf0b3724ef16aab820c5212b31b347c21ff3a492eba1d58b36a7aa08"
     },
     {
       "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
-      "sha256": "8a1652920e02ccceba535ff735ec8ee6c2b5d0515408cd280b49e4e732ad25ac"
+      "sha256": "de44c721278c56e79209f17cca31423a914542847eff7f4b69c9ce183f1674e5"
     },
     {
       "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
-      "sha256": "cef0a3f17e3244e7f30a9a7b2f90df6cc510ef16bd31f7b7e45738b6471a2af9"
+      "sha256": "38aa5bd0930df09aa799367721e59a7ba03e5a6513098a10f7314895a2c3d5f7"
     },
     {
       "path": "artifacts/subscription-parser/m010/licenses.json",
@@ -97,7 +97,7 @@
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "168489a47bd62fd9c63f27529c95249c9d36c0302026f886130b1e8d8caf621f"
+      "sha256": "dd44c6b61c2670435602453426be06a21e8e0c54fc30561e9afcd85340df1e70"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
@@ -133,11 +133,11 @@
     },
     {
       "path": "artifacts/subscription-parser/m012/support-matrix.json",
-      "sha256": "a5c8092024cf25389806063d0f8b991af76711fee966f03611779601c896e95b"
+      "sha256": "6a7b71080d11264be0fbf05227f0373103ce6ab8fc14a1890238de225fc7b96a"
     },
     {
       "path": "artifacts/subscription-parser/m012/release-manifest.json",
-      "sha256": "7bcd5f6f858e26f4286c083161f06c87c94188b573e825381143074d0cbfcfd4"
+      "sha256": "17ea69f6e67301d59bd06ac3319f3f2bbf475d42dc1dc9866fc13b863211724d"
     },
     {
       "path": "artifacts/subscription-parser/m013/release-candidate-checklist.json",
@@ -145,19 +145,19 @@
     },
     {
       "path": "artifacts/subscription-parser/m013/artifact-index.json",
-      "sha256": "02f917fc1e338952f06e6b6d1873397f8084252821a82ed3b25476213d553c38"
+      "sha256": "a6f3cef33f26ca439b3d66d78f7d870291e2435a139c4461d76cd6147ea9087f"
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-      "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
+      "sha256": "d11f0497be4c0d731a6ef75a2543b8fc502957bca1712903fbfcf33c4788b1d6"
     },
     {
       "path": "crates/nethop-subscription/tests/fixtures/device/alioth-parser-integration.json",
-      "sha256": "9dbd8d8e99f12a364f90d340a396fb27c5664739c54b676c14d325abe7783cbd"
+      "sha256": "93ebc45d25f281b7538c6ae01d88d6333ff8df59d66a840e642a48d62495079d"
     },
     {
       "path": "crates/nethop-subscription/tests/fixtures/device/cross-environment-compatibility.json",
-      "sha256": "e4e3e2db6de7e640ce391833ad4d8120cbb2956f981cb1b9ef9e14c677da75bb"
+      "sha256": "20480bb2cad8c8a095ff704a90eb244a512361fc16c081b7edeef1c7997ab550"
     },
     {
       "path": "docs/04-subscription-parser-phase0b-performance-report.md",

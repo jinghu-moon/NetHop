@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -25,11 +28,21 @@ const BLOCK_TAG: &str = "block";
 const AUTO_TAG: &str = "nethop-auto";
 const SELECT_TAG: &str = "nethop-select";
 const INBOUND_TAG: &str = "nethop-in";
+const FETCH_INBOUND_TAG: &str = "nethop-fetch";
+pub const MANAGED_FETCH_PROXY_ENDPOINT: &str = "127.0.0.1:7894";
+pub const MANAGED_FETCH_PROXY_USERNAME: &str = "nethop";
 const CN_DOMAIN_RULE_SET_TAG: &str = "nethop-cn-domain";
 const CN_IP_RULE_SET_TAG: &str = "nethop-cn-ip";
 const CN_DOMAIN_RULE_SET_PATH: &str = "/data/adb/nethop/rulesets/cn-domain.srs";
 const CN_IP_RULE_SET_PATH: &str = "/data/adb/nethop/rulesets/cn-ip.srs";
-const RESERVED_TAGS: &[&str] = &[DIRECT_TAG, BLOCK_TAG, AUTO_TAG, SELECT_TAG, INBOUND_TAG];
+const RESERVED_TAGS: &[&str] = &[
+    DIRECT_TAG,
+    BLOCK_TAG,
+    AUTO_TAG,
+    SELECT_TAG,
+    INBOUND_TAG,
+    FETCH_INBOUND_TAG,
+];
 
 const RESERVED_FIELDS: &[&str] = &[
     "inbounds",
@@ -167,12 +180,6 @@ pub enum ManagedOutboundMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedSelectorMode {
-    Urltest,
-    Manual,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedLogLevel {
     Error,
     Warn,
@@ -196,7 +203,6 @@ impl ManagedLogLevel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedOptions {
     outbound_mode: ManagedOutboundMode,
-    selector_mode: ManagedSelectorMode,
     urltest_interval_minutes: u16,
     urltest_tolerance_ms: u16,
     urltest_max_candidates: usize,
@@ -214,7 +220,6 @@ impl Default for ManagedOptions {
     fn default() -> Self {
         Self {
             outbound_mode: ManagedOutboundMode::Rule,
-            selector_mode: ManagedSelectorMode::Urltest,
             urltest_interval_minutes: 10,
             urltest_tolerance_ms: 50,
             urltest_max_candidates: MAX_AUTO_NODES,
@@ -234,7 +239,6 @@ impl ManagedOptions {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         outbound_mode: ManagedOutboundMode,
-        selector_mode: ManagedSelectorMode,
         urltest_interval_minutes: u16,
         urltest_tolerance_ms: u16,
         urltest_max_candidates: usize,
@@ -258,7 +262,6 @@ impl ManagedOptions {
         }
         Ok(Self {
             outbound_mode,
-            selector_mode,
             urltest_interval_minutes,
             urltest_tolerance_ms,
             urltest_max_candidates,
@@ -294,6 +297,10 @@ impl ManagedOptions {
         self.bypass_domains = bypass_domains;
         self.block_domains = block_domains;
         Ok(self)
+    }
+
+    pub const fn urltest_max_candidates(&self) -> usize {
+        self.urltest_max_candidates
     }
 }
 
@@ -359,6 +366,7 @@ impl fmt::Debug for ClashApi {
 pub struct ManagedProfile {
     capture: CapturePolicy,
     outbounds: Vec<TerminalOutbound>,
+    auto_pool: Vec<String>,
     clash_api: ClashApi,
     tun_stack: TunStack,
     options: ManagedOptions,
@@ -368,6 +376,7 @@ impl ManagedProfile {
     pub fn new(
         capture: CapturePolicy,
         outbounds: Vec<TerminalOutbound>,
+        auto_pool: Vec<String>,
         clash_api: ClashApi,
     ) -> Result<Self, ComposerError> {
         if outbounds.len() > MAX_MANAGED_NODES {
@@ -379,18 +388,38 @@ impl ManagedProfile {
         {
             return Err(ComposerError::ReservedTag);
         }
-        Ok(Self {
+        let profile = Self {
             capture,
             outbounds,
+            auto_pool: Vec::new(),
             clash_api,
             tun_stack: TunStack::Gvisor,
             options: ManagedOptions::default(),
-        })
+        };
+        profile.with_auto_pool(auto_pool)
     }
 
     pub fn with_tun_stack(mut self, tun_stack: TunStack) -> Self {
         self.tun_stack = tun_stack;
         self
+    }
+
+    pub fn with_auto_pool(mut self, auto_pool: Vec<String>) -> Result<Self, ComposerError> {
+        let unique = auto_pool.iter().collect::<HashSet<_>>();
+        if auto_pool.len() > MAX_AUTO_NODES
+            || auto_pool.is_empty() && !self.outbounds.is_empty()
+            || auto_pool.iter().any(|tag| {
+                tag.is_empty()
+                    || tag.len() > MAX_TAG_BYTES
+                    || tag.chars().any(char::is_control)
+                    || !self.outbounds.iter().any(|outbound| outbound.tag() == tag)
+            })
+            || unique.len() != auto_pool.len()
+        {
+            return Err(ComposerError::InvalidManagedOptions);
+        }
+        self.auto_pool = auto_pool;
+        Ok(self)
     }
 
     pub fn with_options(mut self, options: ManagedOptions) -> Self {
@@ -435,11 +464,13 @@ impl ManagedConfig {
             .iter()
             .map(|outbound| outbound.tag.clone())
             .collect::<Vec<_>>();
-        let auto_tags = node_tags
+        let auto_tags = &profile.auto_pool;
+        if auto_tags
             .iter()
-            .take(profile.options.urltest_max_candidates)
-            .cloned()
-            .collect::<Vec<_>>();
+            .any(|tag| !node_tags.iter().any(|node_tag| node_tag == tag))
+        {
+            return Err(ComposerError::InvalidManagedOptions);
+        }
         let mut selector_tags = Vec::with_capacity(node_tags.len() + 1);
         selector_tags.push(AUTO_TAG.to_owned());
         selector_tags.extend(node_tags.iter().cloned());
@@ -457,15 +488,11 @@ impl ManagedConfig {
             "idle_timeout": "30m",
             "interrupt_exist_connections": false
         }));
-        let selector_default = match profile.options.selector_mode {
-            ManagedSelectorMode::Urltest => AUTO_TAG,
-            ManagedSelectorMode::Manual => node_tags[0].as_str(),
-        };
         outbounds.push(serde_json::json!({
             "type": "selector",
             "tag": SELECT_TAG,
             "outbounds": selector_tags,
-            "default": selector_default,
+            "default": AUTO_TAG,
             "interrupt_exist_connections": false
         }));
         outbounds.extend(
@@ -488,6 +515,21 @@ impl ManagedConfig {
                     { "port": 53 }
                 ],
                 "action": "hijack-dns"
+            }),
+            serde_json::json!({
+                "inbound": [FETCH_INBOUND_TAG],
+                "action": "resolve",
+                "server": "dns-proxy",
+                "strategy": "prefer_ipv4"
+            }),
+            serde_json::json!({
+                "inbound": [FETCH_INBOUND_TAG],
+                "ip_is_private": true,
+                "outbound": BLOCK_TAG
+            }),
+            serde_json::json!({
+                "inbound": [FETCH_INBOUND_TAG],
+                "outbound": SELECT_TAG
             }),
         ];
         if !profile.options.block_domains.is_empty() {
@@ -697,13 +739,13 @@ fn normalize_outbounds(outbounds: &mut [TerminalOutbound]) -> Result<(), Compose
 }
 
 fn compose_inbounds(profile: &ManagedProfile) -> Vec<Value> {
-    match profile.capture.mode() {
-        CaptureMode::Tproxy => vec![serde_json::json!({
+    let capture = match profile.capture.mode() {
+        CaptureMode::Tproxy => serde_json::json!({
             "type": "tproxy",
             "tag": INBOUND_TAG,
             "listen": "::",
             "listen_port": profile.capture.inbound_port()
-        })],
+        }),
         CaptureMode::Tun => {
             let mut inbound = Map::from_iter([
                 ("type".to_owned(), Value::String("tun".to_owned())),
@@ -735,8 +777,25 @@ fn compose_inbounds(profile: &ManagedProfile) -> Vec<Value> {
                     serde_json::json!(profile.capture.exclude_uids()),
                 );
             }
-            vec![Value::Object(inbound)]
+            Value::Object(inbound)
         }
-        CaptureMode::Direct => Vec::new(),
-    }
+        CaptureMode::Direct => return Vec::new(),
+    };
+    let fetch_port = MANAGED_FETCH_PROXY_ENDPOINT
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .expect("managed fetch proxy endpoint is static and valid");
+    vec![
+        capture,
+        serde_json::json!({
+            "type": "http",
+            "tag": FETCH_INBOUND_TAG,
+            "listen": "127.0.0.1",
+            "listen_port": fetch_port,
+            "users": [{
+                "username": MANAGED_FETCH_PROXY_USERNAME,
+                "password": profile.clash_api.secret
+            }]
+        }),
+    ]
 }

@@ -11,7 +11,7 @@ use nethop_android::{
 };
 use nethop_core::{
     CaptureMode, CapturePolicy, ForwardingPolicy, InterfacePolicy, ManagedLogLevel, ManagedOptions,
-    ManagedOutboundMode, ManagedSelectorMode, TunStack,
+    ManagedOutboundMode, TunStack,
 };
 use nethop_protocol::ApplicationTarget;
 #[cfg(feature = "subscription-update")]
@@ -20,7 +20,7 @@ use nethop_subscription::{NodeFilter, ProxyProtocol, RequestProfile};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::worker_config::{CONFIG_SCHEMA_VERSION, ConfigError, MAX_SOURCES};
+use crate::worker_config::{CONFIG_SCHEMA_VERSION, ConfigError, MAX_AUTO_CANDIDATES, MAX_SOURCES};
 
 const MAX_SOURCE_NAME_BYTES: usize = 128;
 const MAX_SOURCE_NAME_CHARS: usize = 64;
@@ -96,6 +96,8 @@ pub(crate) struct ServiceWire {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubscriptionsWire {
+    #[serde(default)]
+    mode: SubscriptionMode,
     #[serde(default = "default_true")]
     auto_update: bool,
     #[serde(default = "default_update_interval_hours")]
@@ -190,8 +192,6 @@ pub(crate) struct ProxyWire {
     #[serde(default)]
     outbound_mode: OutboundMode,
     #[serde(default)]
-    selector_mode: SelectorMode,
-    #[serde(default)]
     urltest: UrltestWire,
 }
 
@@ -202,14 +202,6 @@ pub enum OutboundMode {
     Rule,
     Global,
     Direct,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SelectorMode {
-    #[default]
-    Urltest,
-    Manual,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -521,8 +513,8 @@ impl EffectiveConfig {
         if wire.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(ConfigError::UnsupportedSchema);
         }
-        let subscriptions = validate_subscription_settings(&wire.subscriptions)?;
         let sources = validate_sources(&wire.subscriptions.sources)?;
+        let subscriptions = validate_subscription_settings(&wire.subscriptions, &sources)?;
         let proxy = validate_proxy(wire.proxy)?;
         let applications = validate_applications(wire.applications)?;
         let network = validate_network(wire.network)?;
@@ -646,10 +638,6 @@ impl EffectiveConfig {
                 OutboundMode::Rule => ManagedOutboundMode::Rule,
                 OutboundMode::Global => ManagedOutboundMode::Global,
                 OutboundMode::Direct => ManagedOutboundMode::Direct,
-            },
-            match self.proxy.selector_mode {
-                SelectorMode::Urltest => ManagedSelectorMode::Urltest,
-                SelectorMode::Manual => ManagedSelectorMode::Manual,
             },
             self.proxy.urltest.interval_minutes,
             self.proxy.urltest.tolerance_ms,
@@ -842,11 +830,16 @@ impl fmt::Debug for EffectiveConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionSettings {
+    mode: SubscriptionMode,
     auto_update: bool,
     update_interval_hours: u16,
 }
 
 impl SubscriptionSettings {
+    pub const fn mode(&self) -> SubscriptionMode {
+        self.mode
+    }
+
     pub const fn auto_update(&self) -> bool {
         self.auto_update
     }
@@ -854,6 +847,14 @@ impl SubscriptionSettings {
     pub const fn update_interval_hours(&self) -> u16 {
         self.update_interval_hours
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionMode {
+    #[default]
+    Single,
+    Merge,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -948,17 +949,12 @@ impl fmt::Debug for SourceName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxySettings {
     outbound_mode: OutboundMode,
-    selector_mode: SelectorMode,
     urltest: UrltestSettings,
 }
 
 impl ProxySettings {
     pub const fn outbound_mode(&self) -> OutboundMode {
         self.outbound_mode
-    }
-
-    pub const fn selector_mode(&self) -> SelectorMode {
-        self.selector_mode
     }
 
     pub const fn urltest(&self) -> &UrltestSettings {
@@ -1267,11 +1263,36 @@ impl AdvancedSettings {
 
 fn validate_subscription_settings(
     wire: &SubscriptionsWire,
+    sources: &[UserSource],
 ) -> Result<SubscriptionSettings, ConfigError> {
     if !(1..=168).contains(&wire.update_interval_hours) {
         return Err(ConfigError::InvalidUpdateSchedule);
     }
+    let configured = sources
+        .iter()
+        .filter(|source| !source.url.is_empty())
+        .count();
+    let enabled = sources.iter().filter(|source| source.enabled).count();
+    let active = sources
+        .iter()
+        .filter(|source| source.enabled && !source.url.is_empty())
+        .count();
+    match wire.mode {
+        SubscriptionMode::Single if configured == 0 && enabled <= 1 => {}
+        SubscriptionMode::Single if enabled > 1 => {
+            return Err(ConfigError::SingleSourceNotUnique);
+        }
+        SubscriptionMode::Single if active != 1 => {
+            return Err(ConfigError::NoActiveSource);
+        }
+        SubscriptionMode::Single => {}
+        SubscriptionMode::Merge if active == 0 => {
+            return Err(ConfigError::NoActiveSource);
+        }
+        SubscriptionMode::Merge => {}
+    }
     Ok(SubscriptionSettings {
+        mode: wire.mode,
         auto_update: wire.auto_update,
         update_interval_hours: wire.update_interval_hours,
     })
@@ -1341,14 +1362,13 @@ fn validate_optional_url(url: &str) -> Result<(), ConfigError> {
 fn validate_proxy(wire: ProxyWire) -> Result<ProxySettings, ConfigError> {
     if !(5..=1440).contains(&wire.urltest.interval_minutes)
         || wire.urltest.tolerance_ms > 1000
-        || !(1..=256).contains(&wire.urltest.max_candidates)
+        || !(1..=MAX_AUTO_CANDIDATES).contains(&wire.urltest.max_candidates)
         || wire.urltest.concurrency != 10
     {
         return Err(ConfigError::InvalidProxy);
     }
     Ok(ProxySettings {
         outbound_mode: wire.outbound_mode,
-        selector_mode: wire.selector_mode,
         urltest: UrltestSettings {
             interval_minutes: wire.urltest.interval_minutes,
             tolerance_ms: wire.urltest.tolerance_ms,

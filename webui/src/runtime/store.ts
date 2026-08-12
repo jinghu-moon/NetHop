@@ -1,7 +1,7 @@
 import { computed, reactive, readonly, shallowRef, type ComputedRef, type Ref } from "vue";
 
 import type { HostCapability } from "@/bridge/host";
-import type { ApplicationDto, ConfigDto, HelloDto, NodeDto, StatusDto, SubscriptionDto } from "@/model/dto";
+import type { ApplicationDto, ConfigDto, HelloDto, NodeDto, NodeListSnapshotDto, NodeSelectionDto, StatusDto, SubscriptionDto, SubscriptionModeDto, SubscriptionSnapshotDto } from "@/model/dto";
 
 export type SessionPhase = "idle" | "connecting" | "live" | "stale" | "incompatible" | "unavailable" | "closed";
 
@@ -38,14 +38,21 @@ export function createSessionStore(): SessionStore {
 export interface RuntimeStore {
   readonly nodesById: Ref<Readonly<Record<string, NodeDto>>>;
   readonly nodeOrder: Ref<readonly string[]>;
+  readonly selection: Ref<NodeSelectionDto | undefined>;
   readonly subscriptionsById: Ref<Readonly<Record<string, SubscriptionDto>>>;
   readonly subscriptionOrder: Ref<readonly string[]>;
+  readonly subscriptionMode: Ref<SubscriptionModeDto | undefined>;
+  readonly activeSourceIds: Ref<readonly string[]>;
+  readonly subscriptionConfigDigest: Ref<string | undefined>;
   readonly applicationsByPackage: Ref<Readonly<Record<string, ApplicationDto>>>;
   readonly applicationOrder: Ref<readonly string[]>;
   readonly replaceNodes: (nodes: readonly NodeDto[]) => void;
+  readonly loadNodeSnapshot: (snapshot: NodeListSnapshotDto) => void;
+  readonly setSelection: (selection: NodeSelectionDto) => void;
   readonly upsertNode: (node: NodeDto) => void;
   readonly removeNode: (id: string) => void;
   readonly replaceSubscriptions: (items: readonly SubscriptionDto[]) => void;
+  readonly loadSubscriptionSnapshot: (snapshot: SubscriptionSnapshotDto) => void;
   readonly upsertSubscription: (item: SubscriptionDto) => void;
   readonly removeSubscription: (id: string) => void;
   readonly replaceApplications: (items: readonly ApplicationDto[]) => void;
@@ -79,16 +86,31 @@ function removeEntity<T>(target: Ref<Readonly<Record<string, T>>>, order: Ref<re
 export function createRuntimeStore(): RuntimeStore {
   const nodesById = shallowRef<Readonly<Record<string, NodeDto>>>({});
   const nodeOrder = shallowRef<readonly string[]>([]);
+  const selection = shallowRef<NodeSelectionDto>();
   const subscriptionsById = shallowRef<Readonly<Record<string, SubscriptionDto>>>({});
   const subscriptionOrder = shallowRef<readonly string[]>([]);
+  const subscriptionMode = shallowRef<SubscriptionModeDto>();
+  const activeSourceIds = shallowRef<readonly string[]>([]);
+  const subscriptionConfigDigest = shallowRef<string>();
   const applicationsByPackage = shallowRef<Readonly<Record<string, ApplicationDto>>>({});
   const applicationOrder = shallowRef<readonly string[]>([]);
   return {
-    nodesById, nodeOrder, subscriptionsById, subscriptionOrder, applicationsByPackage, applicationOrder,
+    nodesById, nodeOrder, selection, subscriptionsById, subscriptionOrder, subscriptionMode, activeSourceIds, subscriptionConfigDigest, applicationsByPackage, applicationOrder,
     replaceNodes: (items) => replaceEntity(nodesById, nodeOrder, items.map((item) => ({ ...item }))),
+    loadNodeSnapshot: (snapshot) => {
+      replaceEntity(nodesById, nodeOrder, snapshot.nodes.map((item) => ({ ...item })));
+      selection.value = snapshot.selection;
+    },
+    setSelection: (value) => { selection.value = value; },
     upsertNode: (item) => upsertEntity(nodesById, nodeOrder, { ...item }),
     removeNode: (id) => removeEntity(nodesById, nodeOrder, id),
     replaceSubscriptions: (items) => replaceEntity(subscriptionsById, subscriptionOrder, items.map((item) => ({ ...item }))),
+    loadSubscriptionSnapshot: (snapshot) => {
+      replaceEntity(subscriptionsById, subscriptionOrder, snapshot.sources.map((item) => ({ ...item })));
+      subscriptionMode.value = snapshot.mode;
+      activeSourceIds.value = snapshot.activeSourceIds;
+      subscriptionConfigDigest.value = snapshot.configDigest;
+    },
     upsertSubscription: (item) => upsertEntity(subscriptionsById, subscriptionOrder, { ...item }),
     removeSubscription: (id) => removeEntity(subscriptionsById, subscriptionOrder, id),
     replaceApplications: (items) => {
@@ -105,7 +127,9 @@ export function createRuntimeStore(): RuntimeStore {
     removeApplication: (packageName) => removeEntity(applicationsByPackage, applicationOrder, packageName),
     reset: () => {
       nodesById.value = {}; nodeOrder.value = [];
+      selection.value = undefined;
       subscriptionsById.value = {}; subscriptionOrder.value = [];
+      subscriptionMode.value = undefined; activeSourceIds.value = []; subscriptionConfigDigest.value = undefined;
       applicationsByPackage.value = {}; applicationOrder.value = [];
     },
   };

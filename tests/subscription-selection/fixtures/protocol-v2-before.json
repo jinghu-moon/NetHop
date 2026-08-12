@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "request_id": "baseline-v2",
+  "method": "config.mutate",
+  "params": {
+    "expected_config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "mutation": {
+      "type": "select_source",
+      "source_id": "src_11111111111111111111111111111111"
+    }
+  }
+}

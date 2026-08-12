@@ -27,13 +27,14 @@ use crate::{
 };
 #[cfg(all(unix, feature = "subscription-update"))]
 use crate::{
-    ApiSecretStore, ClashApiClient, ClashApiLimits, ConfigRuntime, ConfigStore, ConfigWatcher,
-    ConfiguredSourceUpdater, FileLogRetention, HttpCoreReleaseBodyFetcher, HttpRuleSetBodyFetcher,
-    HttpSourceBodyFetcher, JsonCoreVersionStateStore, ManualSourceStore, OperationalControl,
-    OptionalRuntimeUpdateSource, PersistentCoreVersionSchedule, PersistentRuleSetSchedule,
-    PersistentUpdateSchedule, RuleSetLimits, RuleSetProviderManifest, RuleSetStore,
-    RuleSetUpdateService, SelectorStore, SourceRegistry, SourceStatusStore, SourceUpdateService,
-    StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy, WebUiPayloadStore,
+    ApiSecretStore, ClashApiClient, ClashApiLimits, CommitJournalStore, ConfigRuntime, ConfigStore,
+    ConfigWatcher, ConfiguredSourceUpdater, FileLogRetention, HttpCoreReleaseBodyFetcher,
+    HttpRuleSetBodyFetcher, HttpSourceBodyFetcher, JsonCoreVersionStateStore, ManualSourceStore,
+    MutationCoordinator, NodeSelectionStore, OperationalControl, OptionalRuntimeUpdateSource,
+    PersistentCoreVersionSchedule, PersistentRuleSetSchedule, PersistentUpdateSchedule,
+    RuleSetLimits, RuleSetProviderManifest, RuleSetStore, RuleSetUpdateService, SourceRegistry,
+    SourceStatusStore, SourceUpdateService, StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy,
+    WebUiPayloadStore,
 };
 #[cfg(all(unix, feature = "subscription-update"))]
 use nethop_android::{
@@ -43,11 +44,13 @@ use nethop_android::{
     TunHealthVerifier, default_tun_interface,
 };
 #[cfg(all(unix, feature = "subscription-update"))]
-use nethop_core::ClashApi;
-#[cfg(all(unix, feature = "subscription-update"))]
 use nethop_core::GenerationStore;
 #[cfg(all(unix, feature = "subscription-update"))]
-use nethop_subscription::{CapabilityMatrix, PINNED_SING_BOX_VERSION, ParserLimits};
+use nethop_core::{ClashApi, MANAGED_FETCH_PROXY_ENDPOINT, MANAGED_FETCH_PROXY_USERNAME};
+#[cfg(all(unix, feature = "subscription-update"))]
+use nethop_subscription::{
+    CapabilityMatrix, LocalFetchProxy, PINNED_SING_BOX_VERSION, ParserLimits,
+};
 
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -263,15 +266,25 @@ impl WorkerServiceDriver for SystemWorkerServiceDriver {
 pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> {
     report_worker_stage("begin");
     ensure_root()?;
-    let config_store = ConfigStore::new(runtime.root().join("config/nethop.toml"))
+    let store = GenerationStore::new(runtime.root())
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let config_path = runtime.root().join("config/nethop.toml");
+    let journal = CommitJournalStore::new(runtime.root())
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let current_generation = store
+        .current_generation()
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?
+        .map(nethop_core::GenerationId::get);
+    journal
+        .recover(&config_path, current_generation)
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+    let config_store =
+        ConfigStore::new(config_path).map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     let config_snapshot = config_store
         .load()
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     let config = config_snapshot.effective().clone();
     report_worker_stage("config_loaded");
-    let store = GenerationStore::new(runtime.root())
-        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     #[cfg(feature = "subscription-update")]
     let source_registry = SourceRegistry::new(runtime.root().join("state/source-registry.v1.json"))
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
@@ -467,20 +480,29 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
                 ClashApiLimits::default(),
             )
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
-            SelectorStore::new(runtime.root().join("state/selector.v1.json"))
+            NodeSelectionStore::new(runtime.root().join("state/selection.v1.json"))
                 .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
             runtime.root().join("state/diagnostics-latest.json"),
         )
         .and_then(|control| control.with_generation_root(runtime.root().join("generations")))
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
         report_worker_stage("operational_control_ready");
-        let clash_api = ClashApi::new("127.0.0.1:9090", secret_value)
+        let clash_api = ClashApi::new("127.0.0.1:9090", secret_value.clone())
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
         let limits = ParserLimits::default();
         let matrix = CapabilityMatrix::default();
+        let local_fetch_proxy = LocalFetchProxy::new(
+            MANAGED_FETCH_PROXY_ENDPOINT
+                .parse()
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
+            MANAGED_FETCH_PROXY_USERNAME,
+            secret_value.clone(),
+        )
+        .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
         let fetcher = HttpSourceBodyFetcher::new(limits, matrix.clone())
             .with_cache_root(runtime.root().join("subscriptions/cache"))
-            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?
+            .with_local_proxy(local_fetch_proxy);
         let service = SourceUpdateService::new(
             &store,
             fetcher,
@@ -569,6 +591,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         .with_core_version_schedule(core_version_schedule)
         .with_rule_set_update_source(rule_set_updater)
         .with_rule_set_schedule(rule_set_schedule)
+        .with_subscription_transactions(journal, MutationCoordinator::default())
         .with_configuration(config_runtime, restore_current)
         .with_update_schedule(schedule)
         .with_log_retention(

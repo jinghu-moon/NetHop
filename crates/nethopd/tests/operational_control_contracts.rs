@@ -6,9 +6,14 @@ use std::{
     time::Duration,
 };
 
-use nethop_core::{CaptureMode, CapturePolicy, RuntimeState};
+use nethop_core::{
+    CaptureMode, CapturePolicy, GenerationNodeRecord, GenerationNodeRegistry, RuntimeState,
+};
 use nethop_protocol::{ControlMethod, ControlParams};
-use nethopd::{ClashApiClient, ClashApiLimits, OperationalControl, ReplayResult, SelectorStore};
+use nethopd::{
+    ClashApiClient, ClashApiError, ClashApiLimits, NodeSelectionIntent, NodeSelectionStore,
+    OperationalControl, OperationalControlError, ReplayResult, SelectionModelError, StableNodeId,
+};
 use tempfile::tempdir;
 
 const SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -84,20 +89,164 @@ fn selector_document(now: &str, members: &[&str]) -> String {
 }
 
 #[test]
+fn operational_failures_have_stable_node_and_core_diagnostics() {
+    use nethop_protocol::ErrorDomain;
+
+    let cases = [
+        (
+            OperationalControlError::UnknownNode,
+            ErrorDomain::Node,
+            "SELECTION-STALE",
+        ),
+        (
+            OperationalControlError::GenerationUnavailable,
+            ErrorDomain::Node,
+            "ACTIVE-UNRESOLVED",
+        ),
+        (
+            OperationalControlError::Selection(SelectionModelError::InvalidNodeId),
+            ErrorDomain::Node,
+            "INVALID-ID",
+        ),
+        (
+            OperationalControlError::ClashApi(ClashApiError::Unavailable),
+            ErrorDomain::Core,
+            "CONTROL-UNAVAILABLE",
+        ),
+        (
+            OperationalControlError::ClashApi(ClashApiError::Rejected),
+            ErrorDomain::Core,
+            "CONTROL-REJECTED",
+        ),
+        (
+            OperationalControlError::ClashApi(ClashApiError::InvalidResponse),
+            ErrorDomain::Core,
+            "CONTROL-INVALID-RESPONSE",
+        ),
+    ];
+    for (error, expected_domain, expected_detail) in cases {
+        assert_eq!(
+            error.control_diagnostic(),
+            (expected_domain, expected_detail)
+        );
+    }
+}
+
+fn generation_root(root: &std::path::Path, tags: &[&str]) -> std::path::PathBuf {
+    let generations = root.join("generations");
+    fs::create_dir(&generations).unwrap();
+    fs::create_dir(generations.join("7")).unwrap();
+    fs::write(generations.join("current"), "7\n").unwrap();
+    let records = tags
+        .iter()
+        .map(|tag| {
+            GenerationNodeRecord::new(
+                *tag,
+                *tag,
+                format!("Node {tag}"),
+                "vless",
+                vec!["src_0123456789abcdef0123456789abcdef".into()],
+                false,
+            )
+            .unwrap()
+        })
+        .collect();
+    let registry = GenerationNodeRegistry::new(records).unwrap();
+    fs::write(
+        generations.join("7/nodes.json"),
+        serde_json::to_vec(&registry).unwrap(),
+    )
+    .unwrap();
+    generations
+}
+
+#[test]
+fn test_all_exposes_only_stable_ids_from_the_active_generation() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let first = "nh1s-0123456789abcdef";
+    let second = "nh1s-fedcba9876543210";
+    let (address, server) = serve(vec![
+        (
+            200,
+            serde_json::json!({
+                second: 87,
+                "direct": 1,
+                "nh1s-aaaaaaaaaaaaaaaa": 22,
+                first: 42,
+            })
+            .to_string(),
+        ),
+        (
+            200,
+            selector_document("nethop-auto", &["nethop-auto", first, second]),
+        ),
+    ]);
+    let generations = generation_root(&root, &[first, second]);
+    let mut control = OperationalControl::new(
+        api(address),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
+        root.join("diagnostics-latest.json"),
+    )
+    .unwrap()
+    .with_generation_root(generations)
+    .unwrap();
+    let policy = CapturePolicy::new(
+        CaptureMode::Tproxy,
+        true,
+        Some(7893),
+        Some(131_072),
+        Vec::new(),
+        vec![0],
+    )
+    .unwrap();
+
+    let result = control
+        .handle(
+            ControlMethod::NodeTestAll,
+            &ControlParams::default(),
+            RuntimeState::RunningTproxy,
+            None,
+            &policy,
+        )
+        .unwrap();
+    assert_eq!(
+        result["results"],
+        serde_json::json!([
+            {"id": first, "latency_ms": 42},
+            {"id": second, "latency_ms": 87},
+        ])
+    );
+    assert_eq!(result["selection"]["intent"]["mode"], "auto");
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
 fn selector_store_is_strict_bounded_and_replaces_state() {
     let directory = tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let path = root.join("selector.v1.json");
-    let store = SelectorStore::new(&path).unwrap();
-    assert_eq!(store.load().unwrap(), None);
-    store.save("nh1s-a").unwrap();
-    assert_eq!(store.load().unwrap().as_deref(), Some("nh1s-a"));
-    store.save("nh1s-b").unwrap();
-    assert_eq!(store.load().unwrap().as_deref(), Some("nh1s-b"));
+    let path = root.join("selection.v1.json");
+    let store = NodeSelectionStore::new(&path).unwrap();
+    assert_eq!(store.load().unwrap(), (NodeSelectionIntent::Auto, 0));
+    let first = StableNodeId::new("nh1s-0123456789abcdef").unwrap();
+    store
+        .save(
+            &NodeSelectionIntent::Manual {
+                node_id: first.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    assert_eq!(
+        store.load().unwrap(),
+        (NodeSelectionIntent::Manual { node_id: first }, 1)
+    );
+    store.reset_auto(2).unwrap();
+    assert_eq!(store.load().unwrap(), (NodeSelectionIntent::Auto, 2));
 
-    fs::write(&path, r#"{"schema_version":2,"selected_tag":"nh1s-a"}"#).unwrap();
+    fs::write(&path, r#"{"schema_version":3,"selected_tag":"nh1s-a"}"#).unwrap();
     assert!(store.load().is_err());
-    assert!(SelectorStore::new("relative.json").is_err());
+    assert!(NodeSelectionStore::new("relative.json").is_err());
 }
 
 #[test]
@@ -126,14 +275,14 @@ fn manager_operational_status_is_compact_and_secret_free() {
     ]);
     let mut control = OperationalControl::new(
         api(address),
-        SelectorStore::new(root.join("selector.v1.json")).unwrap(),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
         root.join("diagnostics-latest.json"),
     )
     .unwrap();
     let status = control.status_document();
     assert_eq!(status["core_api"], "available");
-    assert_eq!(status["selector"]["selected"], "nh1s-0123456789abcdef");
-    assert_eq!(status["selector"]["candidate_count"], 1);
+    assert!(status["selector"].get("selected").is_none());
+    assert_eq!(status["selector"]["candidate_count"], 0);
     assert_eq!(status["active_connection_count"], 1);
     assert!(!serde_json::to_string(&status).unwrap().contains("never"));
     assert_eq!(server.join().unwrap().len(), 2);
@@ -149,7 +298,7 @@ fn runtime_metrics_use_core_totals_without_external_public_ip_requests() {
     )]);
     let control = OperationalControl::new(
         api(address),
-        SelectorStore::new(root.join("selector.v1.json")).unwrap(),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
         root.join("diagnostics-latest.json"),
     )
     .unwrap();
@@ -172,8 +321,11 @@ fn runtime_metrics_use_core_totals_without_external_public_ip_requests() {
 fn replay_restores_existing_selection() {
     let directory = tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let store = SelectorStore::new(root.join("selector.v1.json")).unwrap();
-    store.save("nh1s-0123456789abcdef").unwrap();
+    let store = NodeSelectionStore::new(root.join("selection.v1.json")).unwrap();
+    let node_id = StableNodeId::new("nh1s-0123456789abcdef").unwrap();
+    store
+        .save(&NodeSelectionIntent::Manual { node_id }, 1)
+        .unwrap();
     let (address, server) = serve(vec![
         (
             200,
@@ -181,8 +333,12 @@ fn replay_restores_existing_selection() {
         ),
         (204, String::new()),
     ]);
+    let generations = generation_root(&root, &["nh1s-0123456789abcdef"]);
     let mut control =
-        OperationalControl::new(api(address), store, root.join("diagnostics-latest.json")).unwrap();
+        OperationalControl::new(api(address), store, root.join("diagnostics-latest.json"))
+            .unwrap()
+            .with_generation_root(generations)
+            .unwrap();
     assert_eq!(control.replay_selection().unwrap(), ReplayResult::Restored);
     let requests = server.join().unwrap();
     assert!(requests[1].ends_with(r#"{"name":"nh1s-0123456789abcdef"}"#));
@@ -192,27 +348,34 @@ fn replay_restores_existing_selection() {
 fn replay_falls_back_to_auto_when_a_node_disappears() {
     let directory = tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let state_path = root.join("selector.v1.json");
-    let store = SelectorStore::new(&state_path).unwrap();
-    store.save("nh1s-gone").unwrap();
+    let state_path = root.join("selection.v1.json");
+    let store = NodeSelectionStore::new(&state_path).unwrap();
+    let gone = StableNodeId::new("nh1s-aaaaaaaaaaaaaaaa").unwrap();
+    store
+        .save(&NodeSelectionIntent::Manual { node_id: gone }, 1)
+        .unwrap();
     let selector = selector_document(
         "nh1s-0123456789abcdef",
         &["nethop-auto", "nh1s-0123456789abcdef"],
     );
     let (address, server) = serve(vec![(200, selector), (204, String::new())]);
+    let generations = generation_root(&root, &["nh1s-0123456789abcdef"]);
     let mut control =
-        OperationalControl::new(api(address), store, root.join("diagnostics-latest.json")).unwrap();
+        OperationalControl::new(api(address), store, root.join("diagnostics-latest.json"))
+            .unwrap()
+            .with_generation_root(generations)
+            .unwrap();
     assert_eq!(
         control.replay_selection().unwrap(),
         ReplayResult::FellBackToAuto
     );
     assert_eq!(
-        SelectorStore::new(state_path)
+        NodeSelectionStore::new(state_path)
             .unwrap()
             .load()
             .unwrap()
-            .as_deref(),
-        Some("nethop-auto")
+            .0,
+        NodeSelectionIntent::Auto
     );
     let requests = server.join().unwrap();
     assert!(requests[1].ends_with(r#"{"name":"nethop-auto"}"#));
@@ -232,7 +395,7 @@ fn diagnostics_bundle_is_compact_persisted_and_secret_free() {
     ]);
     let mut control = OperationalControl::new(
         api(address),
-        SelectorStore::new(root.join("selector.v1.json")).unwrap(),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
         &path,
     )
     .unwrap();
@@ -268,7 +431,7 @@ fn close_all_connections_is_exposed_as_one_typed_operation() {
     let (address, server) = serve(vec![(204, String::new())]);
     let mut control = OperationalControl::new(
         api(address),
-        SelectorStore::new(root.join("selector.v1.json")).unwrap(),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
         root.join("diagnostics-latest.json"),
     )
     .unwrap();
@@ -313,10 +476,27 @@ fn node_export_reads_only_the_active_generation_and_requires_an_exact_tag() {
         .unwrap(),
     )
     .unwrap();
+    let registry = GenerationNodeRegistry::new(vec![
+        GenerationNodeRecord::new(
+            "nh1s-0123456789abcdef",
+            "nh1s-0123456789abcdef",
+            "Export node",
+            "trojan",
+            vec!["src_0123456789abcdef0123456789abcdef".into()],
+            true,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    fs::write(
+        generations.join("7/nodes.json"),
+        serde_json::to_vec(&registry).unwrap(),
+    )
+    .unwrap();
     let (address, server) = serve(Vec::new());
     let mut control = OperationalControl::new(
         api(address),
-        SelectorStore::new(root.join("selector.v1.json")).unwrap(),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
         root.join("diagnostics-latest.json"),
     )
     .unwrap()

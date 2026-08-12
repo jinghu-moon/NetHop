@@ -34,3 +34,7 @@ tempfile = "3"
 [[example]]
 name = "subscription_candidate_probe"
 required-features = ["subscription-update"]
+
+[[example]]
+name = "fair_pool_bench"
+required-features = ["subscription-update"]

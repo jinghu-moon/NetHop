@@ -1,9 +1,9 @@
 import { array, boolean, digest, enumeration, finiteNumber, integer, optionalString, record, safeExtension, string, ValidationError } from "./bounds";
 
 export const RUNTIME_STATES = ["init", "probing", "starting_core", "running_tproxy", "starting_tun", "running_tun", "degraded", "fail_open_direct", "backoff", "circuit_open", "stopping"] as const;
-export const EVENT_KINDS = ["snapshot", "config", "runtime", "subscription", "generation", "network", "traffic", "resync_required", "operation"] as const;
+export const EVENT_KINDS = ["snapshot", "config", "runtime", "subscription", "generation", "network", "traffic", "subscription_mode", "subscription_active_set", "node_selection", "node_active", "node_test", "resync_required", "operation"] as const;
 
-export interface ControlEnvelope<T> { readonly version: 2; readonly requestId: string; readonly generation?: number; readonly result: T }
+export interface ControlEnvelope<T> { readonly version: 3; readonly requestId: string; readonly generation?: number; readonly result: T }
 export interface HelloDto { readonly compatible: boolean; readonly daemonProtocolMin: number; readonly daemonProtocolMax: number; readonly supportedOperations: readonly string[]; readonly supportedFeatures: readonly string[] }
 export interface StatusDto { readonly schemaVersion: number; readonly state: typeof RUNTIME_STATES[number]; readonly generation?: number; readonly lastUpdate: "never" | "succeeded" | "failed"; readonly extension: Readonly<Record<string, unknown>> }
 export interface CapabilityItemDto { readonly key: string; readonly status: "supported" | "unsupported" | "experimental" | "conflict" | "unavailable"; readonly reasonCode: string; readonly applyEffect: string }
@@ -28,8 +28,13 @@ export interface SourceStatusDto {
   readonly diagnosticCode?: string;
 }
 export interface ConfigDto { readonly observedConfigDigest: string; readonly activeConfigDigest: string; readonly candidateSequence: number; readonly document: Readonly<Record<string, unknown>>; readonly sourceStatus: readonly SourceStatusDto[] }
-export interface SubscriptionDto { readonly id: string; readonly name: string; readonly enabled: boolean; readonly state?: string; readonly status?: SourceStatusDto }
-export interface NodeDto { readonly id: string; readonly name: string; readonly protocol: string; readonly latencyMs?: number; readonly selected: boolean; readonly sourceIds: readonly string[] }
+export type SubscriptionModeDto = "single" | "merge";
+export interface SubscriptionDto { readonly id: string; readonly name: string; readonly configured: boolean; readonly active: boolean; readonly nodeCount?: number; readonly autoCandidateCount?: number; readonly state?: string; readonly status?: SourceStatusDto }
+export interface SubscriptionSnapshotDto { readonly mode: SubscriptionModeDto; readonly activeSourceIds: readonly string[]; readonly sources: readonly SubscriptionDto[]; readonly configDigest: string }
+export type NodeSelectionIntentDto = { readonly mode: "auto" } | { readonly mode: "manual"; readonly nodeId: string };
+export interface NodeSelectionDto { readonly version: 1; readonly intent: NodeSelectionIntentDto; readonly activeNodeId?: string; readonly changedAt: number; readonly degradedReason?: string }
+export interface NodeDto { readonly id: string; readonly name: string; readonly protocol: string; readonly latencyMs?: number; readonly alive?: boolean; readonly isRequested: boolean; readonly isActive: boolean; readonly sourceIds: readonly string[] }
+export interface NodeListSnapshotDto { readonly nodes: readonly NodeDto[]; readonly selection: NodeSelectionDto }
 export type LogChannelDto = "service" | "subscription" | "core";
 export interface LogEntryDto { readonly id: string; readonly channel: LogChannelDto; readonly kind: string; readonly message: string; readonly time: string; readonly raw: string }
 export interface RuntimeMetricsDto { readonly runtimeState: string; readonly generation?: number; readonly uptimeSeconds: number; readonly core?: { readonly pid: number; readonly cpuPercent?: number; readonly memoryRssBytes?: number }; readonly uploadBytes?: number; readonly downloadBytes?: number; readonly interface?: string; readonly localAddress?: string; readonly publicIp?: string }
@@ -48,13 +53,13 @@ export interface ErrorDto { readonly code: string; readonly message: string; rea
 
 export function parseControlEnvelope<T>(value: unknown, parseResult: (value: unknown) => T): ControlEnvelope<T> {
   const object = record(value, "$", ["version", "request_id", "ok", "generation", "result", "error"]);
-  if (integer(object.version, "$.version", 2, 2) !== 2) throw new ValidationError("$.version", "unsupported protocol");
+  if (integer(object.version, "$.version", 3, 3) !== 3) throw new ValidationError("$.version", "unsupported protocol");
   const requestId = string(object.request_id, "$.request_id", 96);
   const ok = boolean(object.ok, "$.ok");
   const generation = object.generation === undefined || object.generation === null ? undefined : integer(object.generation, "$.generation", 1);
   if (!ok) throw parseError(object.error);
   if (object.error !== undefined) throw new ValidationError("$.error", "unexpected error");
-  return { version: 2, requestId, ...(generation === undefined ? {} : { generation }), result: parseResult(object.result) };
+  return { version: 3, requestId, ...(generation === undefined ? {} : { generation }), result: parseResult(object.result) };
 }
 
 export function parseError(value: unknown): ValidationError {
@@ -172,41 +177,73 @@ export function parseConfigSchema(value: unknown): ConfigSchemaDto {
 }
 
 export function parseSubscription(value: unknown): SubscriptionDto {
-  const object = record(value, "$.subscription", ["id", "name", "enabled", "state", "url_redacted"]);
+  const object = record(value, "$.subscription", ["id", "name", "configured", "active", "node_count", "auto_candidate_count", "state", "url_redacted"]);
   if (object.url_redacted !== undefined && object.url_redacted !== "[REDACTED]") throw new ValidationError("$.subscription.url_redacted", "URL must be redacted");
-  return { id: string(object.id, "$.subscription.id", 96), name: string(object.name, "$.subscription.name", 256), enabled: boolean(object.enabled, "$.subscription.enabled"), ...(object.state === undefined ? {} : { state: string(object.state, "$.subscription.state", 64) }) };
+  const nodeCount = optionalInteger(object.node_count, "$.subscription.node_count");
+  const autoCandidateCount = optionalInteger(object.auto_candidate_count, "$.subscription.auto_candidate_count");
+  return {
+    id: string(object.id, "$.subscription.id", 96),
+    name: string(object.name, "$.subscription.name", 256),
+    configured: boolean(object.configured, "$.subscription.configured"),
+    active: boolean(object.active, "$.subscription.active"),
+    ...(nodeCount === undefined ? {} : { nodeCount }),
+    ...(autoCandidateCount === undefined ? {} : { autoCandidateCount }),
+    ...(object.state === undefined ? {} : { state: string(object.state, "$.subscription.state", 64) }),
+  };
 }
 
-export function parseSubscriptionList(value: unknown): readonly SubscriptionDto[] {
-  const object = record(value, "$.result", ["subscriptions", "items"]);
-  const items = array(object.subscriptions ?? object.items, "$.result.subscriptions", 256);
-  return items.map(parseSubscription);
+export function parseSubscriptionSnapshot(value: unknown): SubscriptionSnapshotDto {
+  const object = record(value, "$.result", ["mode", "active_source_ids", "sources", "config_digest"]);
+  const sources = array(object.sources, "$.result.sources", 256).map(parseSubscription);
+  const activeSourceIds = array(object.active_source_ids, "$.result.active_source_ids", 256).map((item, index) => string(item, `$.result.active_source_ids[${index}]`, 96));
+  if (new Set(activeSourceIds).size !== activeSourceIds.length || activeSourceIds.some((id) => !sources.some((source) => source.id === id && source.active))) throw new ValidationError("$.result.active_source_ids", "invalid active source set");
+  return { mode: enumeration(object.mode, "$.result.mode", ["single", "merge"] as const), activeSourceIds, sources, configDigest: digest(object.config_digest, "$.result.config_digest") };
 }
 
 export function parseNode(value: unknown): NodeDto {
-  const object = record(value, "$.node", ["id", "name", "protocol", "latency_ms", "selected", "source_ids"]);
+  const object = record(value, "$.node", ["id", "name", "protocol", "latency_ms", "alive", "is_requested", "is_active", "source_ids"]);
+  const alive = object.alive === undefined || object.alive === null ? undefined : boolean(object.alive, "$.node.alive");
   return {
     id: string(object.id, "$.node.id", 128),
     name: string(object.name, "$.node.name", 512),
     protocol: enumeration(object.protocol, "$.node.protocol", ["vless", "vmess", "shadowsocks", "trojan", "hysteria2", "tuic", "anytls", "http", "socks"] as const),
     ...(object.latency_ms === undefined || object.latency_ms === null ? {} : { latencyMs: integer(object.latency_ms, "$.node.latency_ms", 0, 600_000) }),
-    selected: boolean(object.selected, "$.node.selected"),
-    sourceIds: array(object.source_ids, "$.node.source_ids", 256).map((item, index) => string(item, `$.node.source_ids[${index}]`, 96)),
+    ...(alive === undefined ? {} : { alive }),
+    isRequested: boolean(object.is_requested, "$.node.is_requested"),
+    isActive: boolean(object.is_active, "$.node.is_active"),
+    sourceIds: array(object.source_ids, "$.node.source_ids", 16).map((item, index) => string(item, `$.node.source_ids[${index}]`, 96)),
   };
 }
 
-export function parseNodeList(value: unknown): readonly NodeDto[] {
-  const object = record(value, "$.result", ["nodes", "items"]);
-  return array(object.nodes ?? object.items, "$.result.nodes", 10_000).map(parseNode);
+export function parseNodeSelection(value: unknown): NodeSelectionDto {
+  const object = record(value, "$.selection", ["version", "intent", "active_node_id", "changed_at", "degraded_reason"]);
+  integer(object.version, "$.selection.version", 1, 1);
+  const intentObject = record(object.intent, "$.selection.intent", ["mode", "node_id"]);
+  const mode = enumeration(intentObject.mode, "$.selection.intent.mode", ["auto", "manual"] as const);
+  const nodeId = intentObject.node_id === undefined ? undefined : string(intentObject.node_id, "$.selection.intent.node_id", 128);
+  if ((mode === "auto") !== (nodeId === undefined)) throw new ValidationError("$.selection.intent", "invalid selection intent");
+  const activeNodeId = object.active_node_id === undefined || object.active_node_id === null ? undefined : string(object.active_node_id, "$.selection.active_node_id", 128);
+  const degradedReason = object.degraded_reason === undefined || object.degraded_reason === null ? undefined : string(object.degraded_reason, "$.selection.degraded_reason", 96);
+  return { version: 1, intent: mode === "auto" ? { mode } : { mode, nodeId: nodeId! }, ...(activeNodeId === undefined ? {} : { activeNodeId }), changedAt: integer(object.changed_at, "$.selection.changed_at"), ...(degradedReason === undefined ? {} : { degradedReason }) };
+}
+
+export function parseNodeList(value: unknown): NodeListSnapshotDto {
+  const object = record(value, "$.result", ["nodes", "selection"]);
+  return { nodes: array(object.nodes, "$.result.nodes", 10_000).map(parseNode), selection: parseNodeSelection(object.selection) };
 }
 
 export function parseNodeDelayList(value: unknown): readonly NodeDelayDto[] {
-  const object = record(value, "$.result", ["results"]);
-  return array(object.results, "$.result.results", 2_000).map((item, index) => {
-    const entry = record(item, `$.result.results[${index}]`, ["tag", "delay_ms"]);
-    const id = string(entry.tag, `$.result.results[${index}].tag`, 21);
-    if (!/^nh1s-[a-f0-9]{16}$/.test(id)) throw new ValidationError(`$.result.results[${index}].tag`, "invalid node id");
-    return { id, latencyMs: integer(entry.delay_ms, `$.result.results[${index}].delay_ms`, 0, 65_535) };
+  const object = record(value, "$.result", ["id", "latency_ms", "results", "selection"]);
+  if (object.selection !== undefined) parseNodeSelection(object.selection);
+  const hasSingle = object.id !== undefined || object.latency_ms !== undefined;
+  const hasMany = object.results !== undefined;
+  if (hasSingle === hasMany) throw new ValidationError("$.result", "expected one delay result shape");
+  const values = hasSingle ? [{ id: object.id, latency_ms: object.latency_ms }] : array(object.results, "$.result.results", 2_000);
+  return values.map((item, index) => {
+    const entry = record(item, `$.result.results[${index}]`, ["id", "latency_ms"]);
+    const id = string(entry.id, `$.result.results[${index}].id`, 128);
+    if (!/^nh1s-[a-f0-9]{16}$/.test(id)) throw new ValidationError(`$.result.results[${index}].id`, "invalid node id");
+    return { id, latencyMs: integer(entry.latency_ms, `$.result.results[${index}].latency_ms`, 0, 65_535) };
   });
 }
 
@@ -276,7 +313,7 @@ export function parseRuntimeMetrics(value: unknown): RuntimeMetricsDto {
 
 export function parseEventFrame(value: unknown): EventFrameDto {
   const object = record(value, "$", ["version", "request_id", "sequence", "kind", "payload", "error"]);
-  integer(object.version, "$.version", 2, 2);
+  integer(object.version, "$.version", 3, 3);
   const requestId = string(object.request_id, "$.request_id", 96);
   const sequence = integer(object.sequence, "$.sequence", 1);
   const kind = enumeration(object.kind, "$.kind", ["item", "end", "error"] as const);

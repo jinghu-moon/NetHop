@@ -8,9 +8,18 @@ describe("consumer operation allowlist", () => {
   it("maps node operations to fixed typed argv", () => {
     expect(buildCommand({ id: "node.test", nodeId }).args).toEqual(["node", "test", nodeId, "--json"]);
     expect(buildCommand({ id: "node.test-all" }).args).toEqual(["node", "test-all", "--json"]);
-    expect(buildCommand({ id: "node.select", nodeId }).args).toEqual(["node", "select", nodeId, "--json"]);
+    expect(buildCommand({ id: "node.select.auto" }).args).toEqual(["node", "select", "auto", "--json"]);
+    expect(buildCommand({ id: "node.select.manual", nodeId }).args).toEqual(["node", "select", "manual", nodeId, "--json"]);
     expect(buildCommand({ id: "node.remove", nodeId, expectedDigest: digest }).args).toContain("--expected-digest");
     expect(redactCommand(buildCommand({ id: "node.export", nodeId }))).toEqual(["/data/adb/modules/nethop/bin/nethopctl", "[private-payload]"]);
+  });
+
+  it("maps subscription v3 transactions with exact CAS", () => {
+    const sourceId = `src_${"a".repeat(32)}`;
+    expect(buildCommand({ id: "subscription.mode.get" }).args).toEqual(["subscription", "mode", "--json"]);
+    expect(buildCommand({ id: "subscription.mode.set", mode: "merge", expectedDigest: digest }).args).toEqual(["subscription", "mode", "set", "merge", "--json", "--expected-digest", digest]);
+    expect(buildCommand({ id: "subscription.select", sourceId, expectedDigest: digest }).args).toContain(sourceId);
+    expect(buildCommand({ id: "subscription.set-enabled", sourceId, enabled: false, expectedDigest: digest }).args.slice(0, 3)).toEqual(["subscription", "disable", sourceId]);
   });
 
   it("maps operational commands without accepting user paths or shell syntax", () => {

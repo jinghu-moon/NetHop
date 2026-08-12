@@ -1,8 +1,8 @@
 # NetHop TOML 配置重构与 Manager 契约设计
 
-> 状态：Implementation Baseline v0.4
+> 状态：Implementation Baseline v0.5
 >
-> 日期：2026-08-05
+> 日期：2026-08-11
 >
 > 适用范围：当前 Alpha 至 Manager APK 接入
 >
@@ -163,7 +163,7 @@ MagicNet 的受控 CLI、私有 payload staging、保存前校验和敏感信息
 
 ### 5.1 版本与命名
 
-- 顶层 `schema_version` 为正整数。当前开发期配置 ABI 固定为 `2`；从数组式 application UID/package 字段切换到 typed `targets`，并加入 source filter、Wi-Fi scene 与 domain routing 后，wire shape 已不兼容，因此必须升级版本。新增可选字段本身不自动升级。
+- 顶层 `schema_version` 为正整数。当前开发期配置 ABI 固定为 `3`；v3 增加显式 `subscriptions.mode`，删除 `proxy.selector_mode`，并将 source 选择与节点选择收口为 daemon 事务和运行状态。新增可选字段本身不自动升级。
 - section 和 key 使用 `snake_case`。
 - enum 使用小写 `snake_case` 字符串。
 - 时间间隔显式带单位，例如 `update_interval_hours`、`timeout_seconds`。
@@ -180,7 +180,9 @@ protocol_version = nethopctl <-> nethopd framing and methods
 manager_version  = APK release identity，仅用于兼容诊断
 ```
 
-项目首次正式发布前，daemon 的 schema 支持窗口固定为 `min = max = 2`，且只接受本文冻结后的 v2 shape。开发期旧 JSON、v1 TOML 和包含用户 `sources[].id` 的草案全部干净拒绝，不写迁移器。首次公开发布后如需扩大兼容窗口，必须另立 schema 演进 ADR，不能把开发期兼容负担提前带入实现。
+当前开发期 wire 只接受 `protocol_version = 3`。Protocol v3 提供 typed subscription mode/select/set-enabled、node selection/list/test-all 方法和对应事件；旧 `SelectSource`、通用 `NodeSelect { target }` 与 `selected: bool` wire shape 仅保留为测试中的 before fixture，不进入生产协议。
+
+项目首次正式发布前，daemon 的 schema 支持窗口固定为 `min = max = 3`，且只接受本文冻结后的 v3 shape。开发期旧 JSON、v1/v2 TOML 和包含用户 `sources[].id` 的草案全部干净拒绝，不写迁移器。首次公开发布后如需扩大兼容窗口，必须另立 schema 演进 ADR，不能把开发期兼容负担提前带入实现。
 
 ### 5.2 第一阶段默认配置
 
@@ -188,13 +190,14 @@ manager_version  = APK release identity，仅用于兼容诊断
 
 ```toml
 # NetHop user configuration
-schema_version = 2
+schema_version = 3
 
 [service]
 # Persistent proxy switch. The daemon stays available when disabled.
 enabled = true
 
 [subscriptions]
+mode = "single"
 
 [[subscriptions.sources]]
 name = "Primary"
@@ -205,12 +208,13 @@ url = ""
 正常使用只需改为：
 
 ```toml
-schema_version = 2
+schema_version = 3
 
 [service]
 enabled = true
 
 [subscriptions]
+mode = "single"
 
 [[subscriptions.sources]]
 name = "Primary"
@@ -234,12 +238,13 @@ URL 中的 `?`、`&`、`#` 在双引号内都是普通内容。配置不得记�
 第二阶段生成完整注释模板。下面是目标 schema，不代表第一阶段可以提前接受尚未实现的字段：
 
 ```toml
-schema_version = 2
+schema_version = 3
 
 [service]
 enabled = true
 
 [subscriptions]
+mode = "single"
 auto_update = true
 update_interval_hours = 24
 
@@ -263,7 +268,6 @@ filter = { include_names = [], exclude_names = [], excluded_node_ids = [], proto
 
 [proxy]
 outbound_mode = "rule"
-selector_mode = "urltest"
 
 [proxy.urltest]
 interval_minutes = 10
@@ -340,8 +344,9 @@ rule_priority = 12020
 
 | 字段 | 类型/范围 | 默认值 | 生效方式 | 阶段 |
 |---|---|---:|---|---|
-| `schema_version` | `2` | 必填 | reload 前校验 | 2 |
+| `schema_version` | `3` | 必填 | reload 前校验 | 3 |
 | `service.enabled` | bool | `true` | true 启用；false 受控停服并保持 direct | 1 |
+| `subscriptions.mode` | `single/merge` | `single` | source/mode generation 事务 | 3 |
 | `subscriptions.auto_update` | bool | `true` | 调度器重排 | 2 |
 | `subscriptions.update_interval_hours` | `1..168` | `24` | 调度器重排 | 2 |
 | `subscriptions.sources` | `1..16` 个有序数组表 | 一个命名为 `Primary` 的 source | 有序合并事务 | 1 |
@@ -359,6 +364,7 @@ rule_priority = 12020
 
 ```text
 source_count = 1..16（模板默认 1）
+source_mode = single
 source_id = daemon 分配，不属于 UserConfigV1
 source_name = Primary（用户填写，配置内唯一）
 format_hint = auto
@@ -411,13 +417,14 @@ registry 和 `EffectiveConfig`/generation 的提交仍受 `MutationCoordinator` 
 | 字段 | 可选值/范围 | 默认值 | 说明 |
 |---|---|---:|---|
 | `proxy.outbound_mode` | `rule/global/direct` | `rule` | 规则、全局代理、全局直连 |
-| `proxy.selector_mode` | `urltest/manual` | `urltest` | 自动测速或手动稳定 node ID |
 | `proxy.urltest.interval_minutes` | `5..1440` | `10` | 低于 5 分钟会侵蚀电量和空闲 CPU 预算 |
 | `proxy.urltest.tolerance_ms` | `0..1000` | `50` | 防止节点抖动切换 |
 | `proxy.urltest.max_candidates` | `1..256` | `64` | 只限制 auto 集，不删除节点 |
 | `proxy.urltest.concurrency` | 固定为 `10` | `10` | sing-box 1.13.15 内部固定并发；当前版本拒绝伪可配置值 |
 
-当前选中节点、最近延迟和 core instance 不写入用户 TOML。它们是运行状态，通过稳定 `node_id` 存入 state/SQLite 并由 Manager 查询。
+`subscriptions.mode = single` 要求恰好一个已配置 source 启用；`merge` 允许多个已配置 source 同时启用，但不允许关闭最后一个有效 source。模式切换、single source 选择和 merge source enable/disable 都携带 `expected_config_digest`，在同一 mutation lock、generation 与 commit journal 事务中完成；失败时 TOML、active generation 和 source active set 保持不变。
+
+节点的 `auto/manual` 意图不属于 TOML。daemon 私有 selection store 只保存 `Auto` 或稳定 `node_id`，generation node registry 负责稳定 ID 与内部 sing-box tag 的双向映射。状态响应分别返回 requested intent 与 core 实际 active terminal；不得用一个 `selected` 布尔值合并二者，也不得在解析失败时回退列表第一个节点。节点测速和切换由 daemon 通过 loopback-only Clash API 执行，WebUI/Manager 不直连该 API。sing-box 1.14 原生 gRPC API service 仅作为 [`11-deferred-capabilities-and-future-design.md`](./11-deferred-capabilities-and-future-design.md) 的未来候选。
 
 ### 6.4 应用代理
 
@@ -655,7 +662,7 @@ URL 规范化只用于身份计算，不修改实际请求语义。不得排序�
 
 1. 创建 `/data/adb/nethop/config`，owner `root:root`、mode `0700`。
 2. 首次安装复制 `defaults/nethop.toml` 到持久路径并设置 `0600`。
-3. 覆盖安装时保留同为 v2 的 TOML；检测到非 v2 开发期配置时，只保存一次 root-only `nethop.toml.pre-v2` 备份，然后直接安装 v2 默认文件，不在安装器中迁移旧字段。
+3. 覆盖安装时保留同为 v3 的 TOML；检测到非 v3 开发期配置时，只保存一次 root-only `nethop.toml.pre-v3` 备份，然后直接安装 v3 默认文件，不在安装器中迁移旧字段。
 4. 在模块目录创建可发现的 `config/nethop.toml` 受控链接。
 5. 不联网、不验证订阅可达性、不生成代理 generation。
 
@@ -1076,7 +1083,7 @@ NH-CONFIG-URL-NON-HTTPS at subscriptions.sources[0].url: HTTPS is required
 13. 实现 `config.reload --wait` 全量 rescan、单写协调、超时和脱敏结果。
 14. 让 `nethopctl start/stop` 通过 daemon 原子持久更新 `service.enabled`，并验证随后产生的文件事件不重复 apply。
 15. 修改 Action 为强制 reload/update 和状态展示入口，保留明确的 start/stop CLI。
-16. 安装脚本创建持久 TOML、私有 state 目录和模块目录受控链接；升级不覆盖 v2 配置/registry，非 v2 开发配置只备份后重置。
+16. 安装脚本创建持久 TOML、私有 state 目录和模块目录受控链接；升级不覆盖 v3 配置/registry，非 v3 开发配置只备份后重置。
 17. 实现入口 symlink 被编辑器写断后的实时候选校验、导入和恢复测试。
 18. 删除模块包中的 JSON 默认文件和 JSON source 示例，不实现旧配置迁移。
 19. 更新 module contract、Linux host integration、新旧行为对比和 Android 真机 smoke。
@@ -1139,14 +1146,14 @@ NH-CONFIG-URL-NON-HTTPS at subscriptions.sources[0].url: HTTPS is required
 - watcher burst 合并、相同 digest no-op、typed-equal no-op、overflow rescan、watch 丢失重建；
 - reload 与 apply 并发、apply 与自动更新并发、watcher 与 Manager self-write、配置变化后丢弃旧候选；
 - `service.enabled=false` 抢占待提交 source 更新，旧候选不能复活数据面；
-- 开发期 daemon 只接受冻结后的 schema v2；旧 JSON、v1 TOML、旧草案和未知字段均拒绝；Manager 无法无损 round-trip 时只读；
+- 开发期 daemon 只接受冻结后的 schema v3；旧 JSON、v1/v2 TOML、旧草案和未知字段均拒绝；Manager 无法无损 round-trip 时只读；
 - typed mutation 等价于完整 apply；事件丢队列后要求 resync；
 - property test：任意输入不 panic、不输出 secret。
 
 ### 16.2 模块契约
 
 - ZIP 只含 `defaults/nethop.toml`，不含 JSON 用户配置；
-- 首装创建持久文件；覆盖安装保留 v2 digest，非 v2 配置保存一次私有备份后重置；
+- 首装创建持久文件；覆盖安装保留 v3 digest，非 v3 配置保存一次私有备份后重置；
 - module config 入口精确指向持久文件；
 - 编辑器 temp+rename 写断入口后，只在候选校验成功时导入并恢复链接；
 - owner/mode 和非 symlink 持久读取约束正确；

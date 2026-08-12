@@ -32,7 +32,7 @@ export class EventSession {
   constructor(private readonly options: EventSessionOptions) {
     this.clock = options.clock ?? browserRetryClock;
     this.now = options.now ?? (() => Date.now());
-    const persistent: readonly EventKind[] = ["config", "runtime", "subscription", "generation", "network"];
+    const persistent: readonly EventKind[] = ["config", "runtime", "subscription", "generation", "network", "subscription-mode", "subscription-active-set", "node-selection", "node-active", "node-test"];
     this.streamKinds = [...persistent, ...(options.kinds.includes("traffic") ? ["traffic" as const] : [])];
   }
   start(): void {
@@ -58,7 +58,7 @@ export class EventSession {
   private async handshakeAndSubscribe(): Promise<void> {
     try {
       const hello = await validatedQuery(this.options.host, { id: "hello", managerVersion: this.options.managerVersion }, parseHello);
-      if (!hello.compatible || hello.daemonProtocolMin !== 2 || hello.daemonProtocolMax !== 2) {
+      if (!hello.compatible || hello.daemonProtocolMin !== 3 || hello.daemonProtocolMax !== 3) {
         this.active = false;
         this.status = "incompatible";
         this.emit();

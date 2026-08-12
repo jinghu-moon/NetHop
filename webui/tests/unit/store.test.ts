@@ -7,7 +7,7 @@ import { isAllowedUiStorageKey, uiStorageKey } from "@/runtime/storage";
 import { SearchIndex } from "@/runtime/search-index";
 import type { ConfigDto, NodeDto } from "@/model/dto";
 
-const node = (id: string): NodeDto => ({ id, name: `Node ${id}`, protocol: "vless", selected: false, sourceIds: ["source"] });
+const node = (id: string): NodeDto => ({ id, name: `Node ${id}`, protocol: "vless", isRequested: false, isActive: false, sourceIds: ["source"] });
 const config = (document: Readonly<Record<string, unknown>>): ConfigDto => ({
   observedConfigDigest: "a".repeat(64), activeConfigDigest: "b".repeat(64), candidateSequence: 1,
   document, sourceStatus: [],
@@ -28,10 +28,10 @@ describe("runtime stores", () => {
     const store = createRuntimeStore();
     store.replaceNodes([node("one"), node("two")]);
     const firstRoot = store.nodesById.value;
-    store.upsertNode({ ...node("one"), selected: true });
+    store.upsertNode({ ...node("one"), isRequested: true });
     expect(store.nodeOrder.value).toEqual(["one", "two"]);
     expect(store.nodesById.value).not.toBe(firstRoot);
-    expect(store.nodesById.value.one?.selected).toBe(true);
+    expect(store.nodesById.value.one?.isRequested).toBe(true);
     store.removeNode("two");
     expect(store.nodeOrder.value).toEqual(["one"]);
   });

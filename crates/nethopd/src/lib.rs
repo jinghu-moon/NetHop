@@ -5,6 +5,8 @@ pub mod api_secret;
 pub mod application;
 #[cfg(feature = "subscription-update")]
 pub mod auto_update;
+#[cfg(feature = "subscription-update")]
+pub mod candidate_pool;
 pub mod clash_api;
 mod config_model;
 #[cfg(feature = "subscription-update")]
@@ -24,12 +26,14 @@ pub mod ruleset_update;
 pub mod runner;
 pub mod runtime_metrics;
 pub mod scheduler;
+pub mod selection;
 #[cfg(feature = "subscription-update")]
 pub mod source_config;
 #[cfg(feature = "subscription-update")]
 pub mod source_update;
 pub mod stats;
 pub mod storage;
+pub mod subscription_transaction;
 pub mod supervisor;
 pub mod tun_runner;
 pub mod uds;
@@ -62,21 +66,26 @@ pub use auto_update::{
     RuntimeRuleSetSchedule, RuntimeUpdateSchedule, UnavailableCoreVersionSchedule,
     UnavailableRuleSetSchedule, UnavailableUpdateSchedule,
 };
+#[cfg(feature = "subscription-update")]
+pub use candidate_pool::{
+    CandidatePoolError, CandidatePoolNode, CandidatePools, SourceContribution,
+    build_candidate_pools,
+};
 pub use clash_api::{
-    ClashApiClient, ClashApiError, ClashApiLimits, ConnectionSummary, DelayResult, NodeSummary,
-    TrafficSample, TrafficTotals,
+    ClashApiClient, ClashApiError, ClashApiLimits, ClashGroupSnapshot, ClashTerminalState,
+    ConnectionSummary, DelayResult, TrafficSample, TrafficTotals,
 };
 pub use config_model::{
     AdvancedSettings, ApplicationMode, ApplicationSettings, ApplyImpact, CanonicalCidr,
     CaptureIntent, ChangeKind, ChangePlan, DnsMode, EffectiveConfig, Ipv6Mode, LogLevel,
-    LoggingSettings, NetworkSettings, OutboundMode, ProxySettings, RoutingSettings, SelectorMode,
-    SourceFormatHint, SourceName, SubscriptionSettings, TunStackIntent, UrltestSettings,
-    UserSource,
+    LoggingSettings, NetworkSettings, OutboundMode, ProxySettings, RoutingSettings,
+    SourceFormatHint, SourceName, SubscriptionMode, SubscriptionSettings, TunStackIntent,
+    UrltestSettings, UserSource,
 };
 #[cfg(feature = "subscription-update")]
 pub use config_reconciler::{
     ConfigChange, ConfigMutationOutcome, ConfigPreview, ConfigReloadState, ConfigRuntime,
-    ConfigRuntimeCheckpoint, ConfigRuntimeError,
+    ConfigRuntimeCheckpoint, ConfigRuntimeError, PreparedConfigTransaction,
 };
 #[cfg(feature = "subscription-update")]
 pub use config_watch::{ConfigWatchError, ConfigWatcher};
@@ -86,9 +95,7 @@ pub use log_retention::{
 };
 #[cfg(feature = "subscription-update")]
 pub use manual_source::{ManualSource, ManualSourceError, ManualSourceStore};
-pub use operational_control::{
-    OperationalControl, OperationalControlError, ReplayResult, SelectorStore,
-};
+pub use operational_control::{OperationalControl, OperationalControlError, ReplayResult};
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
     ProcessIdentity, RunningCore, StopReport,
@@ -118,9 +125,15 @@ pub use scheduler::{
     InMemoryScheduleStore, ScheduleKey, SchedulePolicy, ScheduleRecord, ScheduleStore,
     SchedulerEngine, SchedulerError,
 };
+pub use selection::{
+    ActiveTerminal, GroupState, NodeListItem, NodeListSnapshot, NodeSelectionIntent,
+    NodeSelectionSnapshot, NodeSelectionStore, SelectionDiagnosticCode, SelectionModelError,
+    StableNodeId, join_node_snapshot, resolve_active_terminal,
+};
 #[cfg(feature = "subscription-update")]
 pub use source_config::{
-    SourceConfig, SourceDefinition, SourceIdEntropy, SourceRegistry, SourceRegistryError,
+    NodeAttribution, SourceActiveSetItem, SourceActiveSetSnapshot, SourceConfig, SourceDefinition,
+    SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceUpdateParticipation,
     SystemSourceIdEntropy,
 };
 #[cfg(feature = "subscription-update")]
@@ -136,6 +149,10 @@ pub use stats::{
 #[cfg(feature = "subscription-update")]
 pub use storage::{SourceHealth, SourceStatus, SourceStatusStore};
 pub use storage::{StatsBucket, StatsStore, StatsStoreError, TrafficTotal};
+pub use subscription_transaction::{
+    CommitJournal, CommitJournalStore, CommitPhase, MutationCoordinator, RecoveryAction,
+    TransactionError,
+};
 pub use supervisor::{
     RestartPolicy, SupervisorError, SupervisorEvent, SupervisorState, SystemWorkerBackend,
     SystemWorkerProcess, WorkerExit, WorkerProcess, WorkerProcessBackend, WorkerSignal,
@@ -180,7 +197,9 @@ pub use worker_service::{
     WorkerControlService, WorkerServiceDriver, WorkerServiceError, WorkerServiceSignal,
     WorkerServiceTasks, run_worker_service,
 };
+#[cfg(feature = "subscription-update")]
+pub use worker_services::{BuildCandidateError, CandidateBuildProfile, build_candidate};
 pub use worker_services::{
-    BuildCandidateError, ControlCommand, ControlSnapshot, EventReconcileError, EventReconcileGate,
-    StatsCollector, StatsCollectorError, UpdateStatus, WorkerControlHandler, build_candidate,
+    ControlCommand, ControlSnapshot, EventReconcileError, EventReconcileGate, StatsCollector,
+    StatsCollectorError, UpdateStatus, WorkerControlHandler,
 };

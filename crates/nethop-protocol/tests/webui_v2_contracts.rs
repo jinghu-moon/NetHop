@@ -7,12 +7,12 @@ use nethop_protocol::{
 use serde_json::{Value, json};
 
 fn request_id() -> RequestId {
-    RequestId::new("webui-v2").unwrap()
+    RequestId::new("webui-v3").unwrap()
 }
 
 #[test]
-fn v2_freezes_traffic_payload_methods_and_stable_errors() {
-    assert_eq!(PROTOCOL_VERSION, 2);
+fn v3_freezes_traffic_payload_methods_and_stable_errors() {
+    assert_eq!(PROTOCOL_VERSION, 3);
     assert_eq!(serde_json::to_value(EventKind::Traffic).unwrap(), "traffic");
     assert_eq!(MAX_WEBUI_STDOUT_BYTES, 1024 * 1024);
     assert_eq!(MAX_WEBUI_STDERR_BYTES, 64 * 1024);
@@ -96,10 +96,10 @@ fn private_payload_config_mutate_is_a_stable_allowlisted_operation() {
 #[test]
 fn payload_wire_rejects_unknown_namespace_traversal_handle_and_oversized_chunk() {
     let invalid_values = [
-        json!({"version":2,"request_id":"webui-v2","method":"webui.payload.create","params":{"payload":{"namespace":"../config"}}}),
-        json!({"version":2,"request_id":"webui-v2","method":"webui.payload.remove","params":{"payload":{"namespace":"config","handle":"../outside"}}}),
-        json!({"version":2,"request_id":"webui-v2","method":"webui.payload.remove","params":{"payload":{"namespace":"config","handle":"p_ABCDEF0123456789abcdef0123456789"}}}),
-        json!({"version":2,"request_id":"webui-v2","method":"webui.payload.append","params":{"payload":{"namespace":"config","handle":format!("p_{}", "a".repeat(32)),"chunk":"A".repeat(16 * 1024 + 1)}}}),
+        json!({"version":PROTOCOL_VERSION,"request_id":"webui-v3","method":"webui.payload.create","params":{"payload":{"namespace":"../config"}}}),
+        json!({"version":PROTOCOL_VERSION,"request_id":"webui-v3","method":"webui.payload.remove","params":{"payload":{"namespace":"config","handle":"../outside"}}}),
+        json!({"version":PROTOCOL_VERSION,"request_id":"webui-v3","method":"webui.payload.remove","params":{"payload":{"namespace":"config","handle":"p_ABCDEF0123456789abcdef0123456789"}}}),
+        json!({"version":PROTOCOL_VERSION,"request_id":"webui-v3","method":"webui.payload.append","params":{"payload":{"namespace":"config","handle":format!("p_{}", "a".repeat(32)),"chunk":"A".repeat(16 * 1024 + 1)}}}),
     ];
     for value in invalid_values {
         let payload = serde_json::to_vec(&value).unwrap();

@@ -1,0 +1,9 @@
+{
+  "auto_pool": ["nh1s-1111111111111111"],
+  "selector": ["nethop-auto", "nh1s-1111111111111111", "nh1s-2222222222222222"],
+  "default": "nethop-auto",
+  "interrupt_exist_connections": false,
+  "registry_auto": ["nh1s-1111111111111111"],
+  "node_count": 2,
+  "source_ids": ["src_11111111111111111111111111111111"]
+}

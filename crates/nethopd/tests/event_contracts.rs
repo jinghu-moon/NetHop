@@ -185,6 +185,26 @@ fn traffic_is_explicit_coalesced_ephemeral_and_does_not_displace_normal_events()
 }
 
 #[test]
+fn node_active_changes_are_coalesced_to_the_latest_stable_id() {
+    let hub = EventHub::new(json!({"kind":"snapshot"}), 4).unwrap();
+    let mut subscription = hub
+        .subscribe(
+            RequestId::new("node-active-events").unwrap(),
+            &[EventKind::NodeActive],
+        )
+        .unwrap();
+    subscription.next_frame().unwrap();
+    for index in 0..100 {
+        hub.publish(
+            EventKind::NodeActive,
+            json!({"kind":"node.active_changed","node_id":format!("nh1s-{index:016x}")}),
+        );
+    }
+    let event = subscription.next_frame().unwrap();
+    assert_eq!(event.payload().unwrap()["node_id"], "nh1s-0000000000000063");
+}
+
+#[test]
 fn wire_sequence_is_contiguous_across_filtered_and_coalesced_internal_events() {
     let hub = EventHub::new(json!({"kind":"snapshot"}), 8).unwrap();
     let mut subscription = hub

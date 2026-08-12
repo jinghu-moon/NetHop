@@ -1,4 +1,5 @@
-import { parseEventFrame, type EventPayloadDto, type TrafficDto } from "@/model/dto";
+import { parseEventFrame, parseNodeDelayList, parseNodeSelection, parseSubscriptionSnapshot, type EventPayloadDto, type TrafficDto } from "@/model/dto";
+import { uiStores, type RuntimeStore } from "./store";
 
 export type StreamPhase = "awaiting_snapshot" | "live" | "resync_required" | "closed";
 export type ApplyResult = "snapshot" | "applied" | "duplicate" | "resync" | "closed";
@@ -75,3 +76,28 @@ export class EventStateMachine {
 }
 
 export function trafficFromPayload(payload: EventPayloadDto): TrafficDto | undefined { return payload.traffic; }
+
+export type RuntimeEventResult = "applied" | "reload" | "ignored";
+
+export function applyRuntimeEvent(payload: EventPayloadDto, store: RuntimeStore = uiStores.runtime): RuntimeEventResult {
+  if (payload.kind === "subscription_active_set") {
+    store.loadSubscriptionSnapshot(parseSubscriptionSnapshot(payload.value.active_set));
+    return "applied";
+  }
+  if (payload.kind === "node_selection" || payload.kind === "node_active") {
+    store.setSelection(parseNodeSelection(payload.value.selection));
+    return "applied";
+  }
+  if (payload.kind === "node_test") {
+    const result = payload.value.result;
+    const delays = parseNodeDelayList(result);
+    for (const delay of delays) {
+      const node = store.nodesById.value[delay.id];
+      if (node) store.upsertNode({ ...node, latencyMs: delay.latencyMs });
+    }
+    if (result && typeof result === "object" && "selection" in result) store.setSelection(parseNodeSelection((result as { selection: unknown }).selection));
+    return "applied";
+  }
+  if (payload.kind === "generation" || payload.kind === "config" || payload.kind === "subscription_mode") return "reload";
+  return "ignored";
+}

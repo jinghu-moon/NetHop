@@ -74,7 +74,7 @@ fn main() {
         .unwrap_or_else(|_| emit_error("fetch", "cache_commit_failed"));
     let conversion = convert_stable_sources(
         vec![SourceInput {
-            source_id,
+            source_id: source_id.clone(),
             format_hint: source.expected_format,
             bytes: outcome.body().to_vec(),
         }],
@@ -99,10 +99,14 @@ fn main() {
     let candidate = build_candidate(
         generation,
         &conversion,
-        capture,
-        clash_api,
-        TunStack::System,
-        ManagedOptions::default(),
+        nethopd::CandidateBuildProfile::new(
+            capture,
+            clash_api,
+            TunStack::System,
+            ManagedOptions::default(),
+        ),
+        nethopd::SubscriptionMode::Single,
+        &[source_id],
     )
     .unwrap_or_else(|_| emit_error("compose", "candidate_failed"));
     fs::create_dir_all(&root).unwrap_or_else(|_| emit_error("store", "root_create_failed"));

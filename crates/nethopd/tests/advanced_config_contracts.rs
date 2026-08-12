@@ -4,17 +4,18 @@ use nethop_core::{CaptureMode, TunStack};
 use nethop_subscription::RequestProfile;
 use nethopd::{
     ApplicationMode, ApplyImpact, CaptureIntent, ChangeKind, ConfigError, ConfigStore, DnsMode,
-    Ipv6Mode, LogLevel, OutboundMode, SelectorMode, SourceFormatHint, TunStackIntent,
+    Ipv6Mode, LogLevel, OutboundMode, SourceFormatHint, TunStackIntent,
 };
 use tempfile::tempdir;
 
 fn complete_config() -> &'static str {
-    r#"schema_version = 2
+    r#"schema_version = 3
 
 [service]
 enabled = true
 
 [subscriptions]
+mode = "single"
 auto_update = true
 update_interval_hours = 24
 
@@ -37,7 +38,6 @@ mirrors = []
 
 [proxy]
 outbound_mode = "rule"
-selector_mode = "urltest"
 
 [proxy.urltest]
 interval_minutes = 10
@@ -110,7 +110,7 @@ fn write_private(path: &std::path::Path, contents: &str) {
 }
 
 #[test]
-fn complete_v2_schema_builds_typed_effective_sections() {
+fn complete_v3_schema_builds_typed_effective_sections() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("nethop.toml");
     write_private(&path, complete_config());
@@ -128,7 +128,6 @@ fn complete_v2_schema_builds_typed_effective_sections() {
     assert_eq!(config.sources()[0].filter().include_names(), ["alpha"]);
     assert_eq!(config.sources()[0].filter().exclude_names(), ["backup"]);
     assert_eq!(config.proxy().outbound_mode(), OutboundMode::Rule);
-    assert_eq!(config.proxy().selector_mode(), SelectorMode::Urltest);
     assert_eq!(config.proxy().urltest().max_candidates(), 64);
     assert_eq!(config.applications().mode(), ApplicationMode::Whitelist);
     assert_eq!(config.applications().targets().len(), 4);
@@ -257,7 +256,7 @@ fn minimal_phase_one_document_receives_frozen_phase_two_defaults() {
     let path = directory.path().join("nethop.toml");
     write_private(
         &path,
-        "schema_version = 2\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
     );
 
     let snapshot = ConfigStore::new(path).unwrap().load().unwrap();

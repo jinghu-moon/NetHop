@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io::{self, Read};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
 use flate2::read::MultiGzDecoder;
@@ -18,6 +18,63 @@ pub const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 pub const MAX_SUBSCRIPTION_USERINFO_BYTES: usize = 1024;
 pub const MAX_SUBSCRIPTION_COUNTER: u64 = 9_007_199_254_740_991;
 pub const UREQ_SECURITY_ADAPTER_VERSION: &str = "3.3.0";
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct LocalFetchProxy {
+    endpoint: SocketAddrV4,
+    username: String,
+    password: String,
+}
+
+impl LocalFetchProxy {
+    pub fn new(
+        endpoint: SocketAddrV4,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Result<Self, FetchPolicyError> {
+        let username = username.into();
+        let password = password.into();
+        if !endpoint.ip().is_loopback()
+            || endpoint.port() == 0
+            || username.is_empty()
+            || username.len() > 64
+            || username.contains(':')
+            || username.chars().any(char::is_control)
+            || !(32..=128).contains(&password.len())
+            || password.chars().any(char::is_control)
+        {
+            return Err(FetchPolicyError::InvalidLocalProxy);
+        }
+        Ok(Self {
+            endpoint,
+            username,
+            password,
+        })
+    }
+
+    pub const fn endpoint(&self) -> SocketAddrV4 {
+        self.endpoint
+    }
+
+    pub(crate) fn username(&self) -> &str {
+        &self.username
+    }
+
+    pub(crate) fn password(&self) -> &str {
+        &self.password
+    }
+}
+
+impl fmt::Debug for LocalFetchProxy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalFetchProxy")
+            .field("endpoint", &self.endpoint)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct SubscriptionUserInfo {
@@ -176,6 +233,8 @@ impl ContentEncoding {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum FetchPolicyError {
+    #[error("local fetch proxy configuration is invalid")]
+    InvalidLocalProxy,
     #[error("subscription URL must use HTTPS")]
     NonHttps,
     #[error("subscription URL cannot contain user info")]
@@ -292,6 +351,7 @@ impl FetchError {
                 FetchPolicyError::CacheMiss => FetchDiagnosticCode::CacheMiss,
                 FetchPolicyError::UserInfo
                 | FetchPolicyError::MissingHost
+                | FetchPolicyError::InvalidLocalProxy
                 | FetchPolicyError::InvalidResponseMetadata
                 | FetchPolicyError::TooManyMirrors => FetchDiagnosticCode::InvalidResponse,
             },
@@ -422,11 +482,21 @@ impl FetchOutcome {
 pub struct FetchClient {
     policy: FetchPolicy,
     limits: ParserLimits,
+    local_proxy: Option<LocalFetchProxy>,
 }
 
 impl FetchClient {
     pub fn new(policy: FetchPolicy, limits: ParserLimits) -> Self {
-        Self { policy, limits }
+        Self {
+            policy,
+            limits,
+            local_proxy: None,
+        }
+    }
+
+    pub fn with_local_proxy(mut self, proxy: LocalFetchProxy) -> Self {
+        self.local_proxy = Some(proxy);
+        self
     }
 
     pub fn fetch<F>(
@@ -441,12 +511,25 @@ impl FetchClient {
         fetch_with_executor(
             request,
             |endpoint| {
+                if let Some(proxy) = self.local_proxy.as_ref()
+                    && let Ok(outcome) = ureq_adapter::fetch_endpoint(
+                        endpoint,
+                        request.profile(),
+                        cache,
+                        &self.policy,
+                        &self.limits,
+                        Some(proxy),
+                    )
+                {
+                    return Ok(outcome);
+                }
                 ureq_adapter::fetch_endpoint(
                     endpoint,
                     request.profile(),
                     cache,
                     &self.policy,
                     &self.limits,
+                    None,
                 )
             },
             &mut inspect,

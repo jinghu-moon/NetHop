@@ -23,7 +23,7 @@ test("production WebUI loads from a hash route without remote requests", async (
 test("daily controls and subscription forms remain typed and mobile-safe", async ({ page }) => {
   await page.goto("/#/overview");
   await expect(page.locator(".service-panel .t-switch")).toBeVisible();
-  await expect(page.locator(".proxy-quality-card")).toHaveAttribute("href", "#/nodes");
+  await expect(page.locator(".proxy-quality-link")).toHaveAttribute("href", "#/nodes");
   await page.goto("/#/subscriptions");
   const addSubscription = page.locator(".subscription-add-fab");
   await expect(page.locator(".subscriptions-page .heading-actions .t-button")).toHaveCount(1);
@@ -73,8 +73,8 @@ test("subscription cards expose real daemon status and move secondary actions in
   await expect(page.locator(".source-selector .t-radio__border")).toHaveCount(0);
   await expect(page.locator(".source-card").first()).toHaveAttribute("data-selected", "true");
   await page.locator(".source-selector.t-radio").nth(1).click();
-  await expect(page.locator(".source-card").nth(1)).toHaveAttribute("data-selected", "true");
   await expect(page.locator(".source-card").first()).toHaveAttribute("data-selected", "false");
+  await expect(page.locator(".source-card").nth(1)).toHaveAttribute("data-selected", "true");
   await expect(page.locator(".source-card").first()).toContainText("128.4 / 200 GB");
   await expect(page.locator(".source-card").first()).toContainText("46 节点");
   await expect(page.locator(".source-card").first().locator(".source-quota-track i")).toHaveCount(1);
@@ -90,6 +90,26 @@ test("subscription cards expose real daemon status and move secondary actions in
   await sheet.getByText("编辑", { exact: true }).click();
   await expect(page.locator(".subscription-editor")).toBeVisible();
   await expect(page.locator(".subscription-editor")).toContainText("编辑订阅");
+});
+
+test("subscription mode transitions require explicit single target and preserve merge selections", async ({ page }) => {
+  await page.goto("/#/subscriptions");
+  const mode = page.locator(".subscription-mode-panel .segmented-control");
+  await mode.getByText("合并", { exact: true }).click();
+  await expect(mode.locator(".segmented-item").filter({ hasText: "合并" })).toHaveAttribute("data-active", "true");
+  await expect(page.locator(".source-selector.t-checkbox")).toHaveCount(2);
+
+  await page.locator(".source-card").nth(1).click();
+  await expect(page.locator(".source-card").nth(0)).toHaveAttribute("data-selected", "true");
+  await expect(page.locator(".source-card").nth(1)).toHaveAttribute("data-selected", "true");
+
+  await mode.getByText("单订阅", { exact: true }).click();
+  const target = page.locator(".single-target-editor");
+  await expect(target).toBeVisible();
+  await target.locator(".single-target-row").filter({ hasText: "Backup" }).click();
+  await expect(page.locator(".source-selector.t-radio")).toHaveCount(2);
+  await expect(page.locator(".source-card").nth(0)).toHaveAttribute("data-selected", "false");
+  await expect(page.locator(".source-card").nth(1)).toHaveAttribute("data-selected", "true");
 });
 
 test("overview presents the compact runtime control hierarchy", async ({ page }) => {
@@ -111,7 +131,7 @@ test("overview presents the compact runtime control hierarchy", async ({ page })
   await expect(capture).toContainText("TUN");
 
   await expect(page.locator(".node-summary")).toBeVisible();
-  await expect(page.locator(".node-summary")).toHaveAttribute("href", "#/nodes");
+  await expect(page.locator(".node-summary .proxy-quality-link")).toHaveAttribute("href", "#/nodes");
   await expect(page.locator(".runtime-card")).toBeVisible();
   await expect(page.locator(".subscription-link")).toHaveCount(0);
   const overviewCardSections = page.locator(".service-control, .overview-mode, .traffic-section, .overview-insight-card");
@@ -168,6 +188,21 @@ test("node page tests every node with one action and renders two equal columns",
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
+test("manual and automatic node intent remain distinct across test-all", async ({ page }) => {
+  await page.goto("/#/nodes");
+  const auto = page.locator(".node-auto-control");
+  const manual = page.locator(".node-card").filter({ hasText: "东京 · 低延迟" });
+  await expect(auto).toHaveAttribute("data-selected", "true");
+  await manual.click();
+  await expect(auto).toHaveAttribute("data-selected", "false");
+  await expect(manual).toHaveAttribute("data-requested", "true");
+  await page.getByTitle("测试全部节点").click();
+  await expect(manual).toHaveAttribute("data-requested", "true");
+  await auto.click();
+  await expect(auto).toHaveAttribute("data-selected", "true");
+  await expect(manual).toHaveAttribute("data-requested", "false");
+});
+
 test("P0-P1 node, application, overlay, cache, log and metrics flows are integrated", async ({ page }) => {
   await page.goto("/#/nodes");
   await expect(page.locator(".node-source-heading")).toHaveCount(2);
@@ -179,7 +214,7 @@ test("P0-P1 node, application, overlay, cache, log and metrics flows are integra
   await expect(page.locator(".node-actions-sheet")).not.toBeVisible();
   await page.getByTitle("更多操作").click();
   await page.getByText("按延迟排序", { exact: true }).click();
-  await expect(page.locator(".node-grid-row").nth(1).locator(".node-card").first()).toContainText("东京 · 低延迟");
+  await expect(page.locator(".node-grid-row").nth(1).locator(".node-card").first()).toContainText("洛杉矶 · 备用");
 
   await page.goto("/#/applications");
   await expect(page.locator(".t-pull-down-refresh")).toHaveCount(1);

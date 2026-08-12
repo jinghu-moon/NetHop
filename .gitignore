@@ -52,6 +52,8 @@ coverage/
 .nyc_output/
 playwright-report/
 blob-report/
+# Local high-DPI visual experiments are not release baselines.
+webui/tests/e2e/release-quality.spec.ts-snapshots/*-scale-200-*.png
 .eslintcache
 .parcel-cache/
 .turbo/

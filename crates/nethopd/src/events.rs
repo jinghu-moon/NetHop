@@ -42,6 +42,7 @@ struct State {
     snapshot: Value,
     events: VecDeque<EventRecord>,
     latest_traffic: Option<EventRecord>,
+    latest_node_active: Option<EventRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,7 @@ impl EventHub {
                     snapshot,
                     events: VecDeque::with_capacity(capacity),
                     latest_traffic: None,
+                    latest_node_active: None,
                 }),
                 changed: Condvar::new(),
                 capacity,
@@ -125,6 +127,15 @@ impl EventHub {
         state.next_sequence = state.next_sequence.saturating_add(1).max(1);
         if kind == EventKind::Traffic {
             state.latest_traffic = Some(EventRecord {
+                sequence,
+                kind,
+                payload,
+            });
+            self.shared.changed.notify_all();
+            return;
+        }
+        if kind == EventKind::NodeActive {
+            state.latest_node_active = Some(EventRecord {
                 sequence,
                 kind,
                 payload,
@@ -196,6 +207,8 @@ impl EventHub {
             cursor,
             traffic_cursor: 0,
             traffic_enabled,
+            node_active_cursor: 0,
+            node_active_enabled: kinds.is_empty() || kinds.contains(&EventKind::NodeActive),
             output_sequence: 1,
             initial_snapshot: Some(snapshot),
         })
@@ -342,8 +355,14 @@ impl FileEventLog {
 
 const fn log_channel_for_event(kind: EventKind) -> Option<LogChannel> {
     match kind {
-        EventKind::Subscription => Some(LogChannel::Subscription),
-        EventKind::Runtime | EventKind::Generation => Some(LogChannel::Core),
+        EventKind::Subscription
+        | EventKind::SubscriptionMode
+        | EventKind::SubscriptionActiveSet => Some(LogChannel::Subscription),
+        EventKind::Runtime
+        | EventKind::Generation
+        | EventKind::NodeSelection
+        | EventKind::NodeActive
+        | EventKind::NodeTest => Some(LogChannel::Core),
         EventKind::Config | EventKind::Network => Some(LogChannel::Service),
         EventKind::Traffic => None,
     }
@@ -444,6 +463,8 @@ pub struct EventSubscription {
     cursor: u64,
     traffic_cursor: u64,
     traffic_enabled: bool,
+    node_active_cursor: u64,
+    node_active_enabled: bool,
     output_sequence: u64,
     initial_snapshot: Option<Value>,
 }
@@ -478,18 +499,37 @@ impl EventSubscription {
                 .flatten()
                 .filter(|event| event.sequence > self.traffic_cursor)
                 .cloned();
+            let node_active = self
+                .node_active_enabled
+                .then(|| state.latest_node_active.as_ref())
+                .flatten()
+                .filter(|event| event.sequence > self.node_active_cursor)
+                .cloned();
+            let ephemeral = match (traffic, node_active) {
+                (Some(traffic), Some(node_active)) if traffic.sequence <= node_active.sequence => {
+                    Some((traffic, true))
+                }
+                (Some(_), Some(node_active)) => Some((node_active, false)),
+                (Some(traffic), None) => Some((traffic, true)),
+                (None, Some(node_active)) => Some((node_active, false)),
+                (None, None) => None,
+            };
             if normal.as_ref().is_some_and(|normal| {
-                traffic
+                ephemeral
                     .as_ref()
-                    .is_none_or(|traffic| normal.sequence < traffic.sequence)
+                    .is_none_or(|(event, _)| normal.sequence < event.sequence)
             }) {
                 let event = normal.expect("normal event was checked");
                 self.cursor = event.sequence.saturating_add(1);
                 drop(state);
                 return Ok(self.item(event.payload));
             }
-            if let Some(event) = traffic {
-                self.traffic_cursor = event.sequence;
+            if let Some((event, is_traffic)) = ephemeral {
+                if is_traffic {
+                    self.traffic_cursor = event.sequence;
+                } else {
+                    self.node_active_cursor = event.sequence;
+                }
                 drop(state);
                 return Ok(self.item(event.payload));
             }

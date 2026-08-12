@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: u8 = 2;
+pub const PROTOCOL_VERSION: u8 = 3;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_WEBUI_STDOUT_BYTES: usize = MAX_FRAME_BYTES;
 pub const MAX_WEBUI_STDERR_BYTES: usize = 64 * 1024;
@@ -76,6 +76,14 @@ pub enum ControlMethod {
     SubscriptionImportPreview,
     #[serde(rename = "subscription.import_apply")]
     SubscriptionImportApply,
+    #[serde(rename = "subscription.mode_get")]
+    SubscriptionModeGet,
+    #[serde(rename = "subscription.mode_set")]
+    SubscriptionModeSet,
+    #[serde(rename = "subscription.select")]
+    SubscriptionSelect,
+    #[serde(rename = "subscription.set_enabled")]
+    SubscriptionSetEnabled,
     #[serde(rename = "config.reload")]
     ConfigReload,
     #[serde(rename = "config.get")]
@@ -106,8 +114,12 @@ pub enum ControlMethod {
     NodeTest,
     #[serde(rename = "node.test_all")]
     NodeTestAll,
-    #[serde(rename = "node.select")]
-    NodeSelect,
+    #[serde(rename = "node.selection_get")]
+    NodeSelectionGet,
+    #[serde(rename = "node.select_auto")]
+    NodeSelectAuto,
+    #[serde(rename = "node.select_manual")]
+    NodeSelectManual,
     #[serde(rename = "node.export")]
     NodeExport,
     #[serde(rename = "connections.get")]
@@ -156,9 +168,6 @@ pub enum ConfigMutation {
         url: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
-    },
-    SelectSource {
-        source_id: String,
     },
     RemoveSource {
         source_id: String,
@@ -225,6 +234,13 @@ pub enum RoutingCidrList {
     Bypass,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionMode {
+    Single,
+    Merge,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -234,6 +250,11 @@ pub enum EventKind {
     Generation,
     Network,
     Traffic,
+    SubscriptionMode,
+    SubscriptionActiveSet,
+    NodeSelection,
+    NodeActive,
+    NodeTest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -309,6 +330,10 @@ pub struct ControlParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    subscription_mode: Option<SubscriptionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     payload: Option<Box<WebUiPayloadParams>>,
 }
 
@@ -330,6 +355,8 @@ impl ControlParams {
             limit: None,
             log_channel: None,
             source_id: None,
+            subscription_mode: None,
+            enabled: None,
             payload: None,
         }
     }
@@ -419,6 +446,40 @@ impl ControlParams {
             wait,
             if_needed,
             source_id,
+            ..Self::default()
+        }
+    }
+
+    pub fn subscription_mode_set(
+        expected_config_digest: String,
+        mode: SubscriptionMode,
+        target_source_id: Option<String>,
+    ) -> Self {
+        Self {
+            expected_config_digest: Some(expected_config_digest),
+            source_id: target_source_id,
+            subscription_mode: Some(mode),
+            ..Self::default()
+        }
+    }
+
+    pub fn subscription_select(expected_config_digest: String, source_id: String) -> Self {
+        Self {
+            expected_config_digest: Some(expected_config_digest),
+            source_id: Some(source_id),
+            ..Self::default()
+        }
+    }
+
+    pub fn subscription_set_enabled(
+        expected_config_digest: String,
+        source_id: String,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            expected_config_digest: Some(expected_config_digest),
+            source_id: Some(source_id),
+            enabled: Some(enabled),
             ..Self::default()
         }
     }
@@ -526,6 +587,14 @@ impl ControlParams {
         self.source_id.as_deref()
     }
 
+    pub const fn subscription_mode(&self) -> Option<SubscriptionMode> {
+        self.subscription_mode
+    }
+
+    pub const fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
     pub fn payload_namespace(&self) -> Option<WebUiPayloadNamespace> {
         self.payload.as_deref().map(|payload| payload.namespace)
     }
@@ -607,12 +676,11 @@ impl ControlRequest {
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
-        if (self.params.source_id.is_some() && self.method != ControlMethod::SubscriptionUpdate)
-            || self
-                .params
-                .source_id
-                .as_ref()
-                .is_some_and(|source_id| !valid_source_id(source_id))
+        if self
+            .params
+            .source_id
+            .as_ref()
+            .is_some_and(|source_id| !valid_source_id(source_id))
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
@@ -626,9 +694,16 @@ impl ControlRequest {
         ) || import_method;
         let candidate_method = self.method == ControlMethod::SubscriptionImportApply;
         let mutation_method = self.method == ControlMethod::ConfigMutate;
+        let subscription_transaction = matches!(
+            self.method,
+            ControlMethod::SubscriptionModeSet
+                | ControlMethod::SubscriptionSelect
+                | ControlMethod::SubscriptionSetEnabled
+        );
         if self.params.document.is_some() != document_method
             || self.params.mutation.is_some() != mutation_method
-            || self.params.expected_config_digest.is_some() != (document_method || mutation_method)
+            || self.params.expected_config_digest.is_some()
+                != (document_method || mutation_method || subscription_transaction)
             || self.params.candidate_digest.is_some() != candidate_method
         {
             return Err(ProtocolError::InvalidEnvelope);
@@ -660,10 +735,37 @@ impl ControlRequest {
         if let Some(mutation) = &self.params.mutation {
             validate_mutation(mutation)?;
         }
+        let mode_method = self.method == ControlMethod::SubscriptionModeSet;
+        let source_presence_valid = match self.method {
+            ControlMethod::SubscriptionUpdate => true,
+            ControlMethod::SubscriptionSelect | ControlMethod::SubscriptionSetEnabled => {
+                self.params.source_id.is_some()
+            }
+            ControlMethod::SubscriptionModeSet => match self.params.subscription_mode {
+                Some(SubscriptionMode::Single) => self.params.source_id.is_some(),
+                Some(SubscriptionMode::Merge) => self.params.source_id.is_none(),
+                None => false,
+            },
+            _ => self.params.source_id.is_none(),
+        };
+        if self.params.subscription_mode.is_some() != mode_method
+            || self.params.enabled.is_some()
+                != (self.method == ControlMethod::SubscriptionSetEnabled)
+            || !source_presence_valid
+            || self.params.source_id.as_ref().is_some_and(|source_id| {
+                source_id.len() != 36
+                    || !source_id.starts_with("src_")
+                    || !source_id[4..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
         let events_method = self.method == ControlMethod::EventsSubscribe;
         if self.params.event_kinds.is_some() != events_method
             || self.params.event_kinds.as_ref().is_some_and(|kinds| {
-                kinds.len() > 6 || {
+                kinds.len() > 11 || {
                     let mut unique = kinds.clone();
                     unique.sort_by_key(|kind| *kind as u8);
                     unique.dedup();
@@ -676,13 +778,24 @@ impl ControlRequest {
         let target_method = matches!(
             self.method,
             ControlMethod::NodeTest
-                | ControlMethod::NodeSelect
+                | ControlMethod::NodeSelectManual
                 | ControlMethod::NodeExport
                 | ControlMethod::ConnectionClose
         );
         if self.params.target.is_some() != target_method
             || self.params.target.as_ref().is_some_and(|target| {
                 target.is_empty() || target.len() > 128 || target.chars().any(char::is_control)
+            })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if self.method == ControlMethod::NodeSelectManual
+            && self.params.target.as_ref().is_none_or(|target| {
+                target.len() != 21
+                    || !target.starts_with("nh1s-")
+                    || !target[5..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             })
         {
             return Err(ProtocolError::InvalidEnvelope);
@@ -813,7 +926,6 @@ fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
                 && name.as_ref().is_none_or(|value| bounded(value, 128))
                 && url.as_ref().is_none_or(|value| value.len() <= 16 * 1024)
         }
-        ConfigMutation::SelectSource { source_id: id } => source_id(id),
         ConfigMutation::RemoveSource { source_id: id } => source_id(id),
         ConfigMutation::MoveSource {
             source_id: id,
@@ -881,6 +993,7 @@ pub enum ErrorDomain {
     Capability,
     Network,
     Core,
+    Node,
     Stats,
     Auth,
 }
@@ -894,6 +1007,7 @@ impl ErrorDomain {
             Self::Capability => "CAP",
             Self::Network => "NET",
             Self::Core => "CORE",
+            Self::Node => "NODE",
             Self::Stats => "STATS",
             Self::Auth => "AUTH",
         }
@@ -937,6 +1051,7 @@ impl ErrorCode {
             "CAP" => ErrorDomain::Capability,
             "NET" => ErrorDomain::Network,
             "CORE" => ErrorDomain::Core,
+            "NODE" => ErrorDomain::Node,
             "STATS" => ErrorDomain::Stats,
             "AUTH" => ErrorDomain::Auth,
             _ => return Err(ProtocolError::InvalidErrorCode),

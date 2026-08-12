@@ -12,10 +12,10 @@ import {
 import {
   ActionSheet as TActionSheet,
   Button as TButton,
+  Checkbox as TCheckbox,
   Input as TInput,
   Popup as TPopup,
   Radio as TRadio,
-  RadioGroup as TRadioGroup,
   Tag as TTag,
   Textarea as TTextarea,
 } from "tdesign-mobile-vue";
@@ -26,8 +26,9 @@ import { uploadPrivatePayload } from "@/bridge/private-payload";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
 import PageState from "@/components/PageState.vue";
+import SegmentedControl from "@/components/SegmentedControl.vue";
 import { validatedQuery } from "@/model/client";
-import { parseConfig, type SubscriptionDto } from "@/model/dto";
+import { parseConfig, parseSubscriptionSnapshot, type SubscriptionDto, type SubscriptionModeDto } from "@/model/dto";
 import { presentSubscription, type SubscriptionPresentation } from "@/model/subscription-presentation";
 import { createOperationStore } from "@/runtime/operation";
 import { uiStores } from "@/runtime/store";
@@ -54,7 +55,8 @@ const importPreview = ref<Readonly<Record<string, unknown>>>();
 const updatingIds = ref<ReadonlySet<string>>(new Set());
 const updateAllPending = ref(false);
 const selectingSourceId = ref<string>();
-const selectedSourceId = ref("");
+const modePending = ref(false);
+const singleTargetOpen = ref(false);
 const clockSeconds = ref(Math.floor(Date.now() / 1_000));
 const feedbackId = ref<string>();
 const operations = createOperationStore();
@@ -70,6 +72,8 @@ useBackDismiss(
 const items = computed(() => uiStores.runtime.subscriptionOrder.value
   .map((id) => uiStores.runtime.subscriptionsById.value[id])
   .filter((item): item is SubscriptionDto => Boolean(item)));
+const mode = computed(() => uiStores.runtime.subscriptionMode.value ?? "single");
+const modeOptions = [{ value: "single", label: "单订阅" }, { value: "merge", label: "合并" }] as const;
 const presentations = computed<Readonly<Record<string, SubscriptionPresentation>>>(() => Object.fromEntries(items.value.map((item) => [item.id, presentSubscription(item, clockSeconds.value)])));
 const currentFeedback = computed(() => feedbackId.value ? operations.byId[feedbackId.value] : undefined);
 const activeIndex = computed(() => activeItem.value ? items.value.findIndex((item) => item.id === activeItem.value?.id) : -1);
@@ -109,22 +113,17 @@ async function load(): Promise<void> {
   loading.value = true;
   loadError.value = false;
   try {
-    const config = await validatedQuery(host, { id: "config.get" }, parseConfig);
+    const [config, snapshot] = await Promise.all([
+      validatedQuery(host, { id: "config.get" }, parseConfig),
+      validatedQuery(host, { id: "subscription.mode.get" }, parseSubscriptionSnapshot),
+    ]);
     uiStores.config.load(config);
-    const subscriptions = config.document.subscriptions;
-    const sourceItems = subscriptions && typeof subscriptions === "object" && Array.isArray((subscriptions as { sources?: unknown }).sources)
-      ? (subscriptions as { sources: readonly unknown[] }).sources
-      : [];
-    const result = sourceItems.flatMap((raw): SubscriptionDto[] => {
-      if (!raw || typeof raw !== "object") return [];
-      const source = raw as Record<string, unknown>;
-      if (typeof source.source_id !== "string" || typeof source.name !== "string" || typeof source.enabled !== "boolean") return [];
-      const status = config.sourceStatus.find((entry) => entry.sourceId === source.source_id);
-      return [{ id: source.source_id, name: source.name, enabled: source.enabled, ...(status ? { state: status.health, status } : {}) }];
+    const result = snapshot.sources.map((source) => {
+      const status = config.sourceStatus.find((entry) => entry.sourceId === source.id);
+      return { ...source, ...(status ? { state: status.health, status } : {}) };
     });
     clockSeconds.value = Math.floor(Date.now() / 1_000);
-    uiStores.runtime.replaceSubscriptions(result);
-    if (!result.some((item) => item.id === selectedSourceId.value)) selectedSourceId.value = result.find((item) => item.enabled)?.id ?? result[0]?.id ?? "";
+    uiStores.runtime.loadSubscriptionSnapshot({ ...snapshot, sources: result });
   } catch (error) {
     loadError.value = true;
     throw error;
@@ -199,45 +198,56 @@ async function update(item?: SubscriptionDto): Promise<void> {
   }
 }
 
-function selectedConfigSnapshot(sourceId: string, digest: string): void {
-  const active = uiStores.config.active.value;
-  const subscriptions = active?.document.subscriptions;
-  if (!active || !subscriptions || typeof subscriptions !== "object") return;
-  const sourceItems = (subscriptions as { sources?: unknown }).sources;
-  if (!Array.isArray(sourceItems)) return;
-  const sources = sourceItems.map((raw) => raw && typeof raw === "object"
-    ? { ...(raw as Record<string, unknown>), enabled: (raw as Record<string, unknown>).source_id === sourceId }
-    : raw);
-  uiStores.config.load({
-    ...active,
-    observedConfigDigest: digest,
-    activeConfigDigest: digest,
-    candidateSequence: active.candidateSequence + 1,
-    document: { ...active.document, subscriptions: { ...(subscriptions as Record<string, unknown>), sources } },
-  });
-}
-
 async function selectSource(item: SubscriptionDto): Promise<void> {
-  if (item.enabled || selectingSourceId.value) return;
-  const previous = selectedSourceId.value;
-  selectedSourceId.value = item.id;
+  if (mode.value !== "single" || item.active || selectingSourceId.value) return;
   selectingSourceId.value = item.id;
   const id = `subscription-select-${item.id}`;
   beginFeedback(id, "subscription-config");
   try {
-    const digest = uiStores.config.baseDigest.value ?? "0".repeat(64);
-    const response = await uploadPrivatePayload(host, "subscription", "config-mutate", JSON.stringify({ expected_config_digest: digest, mutation: { type: "select_source", source_id: item.id } }));
-    const nextDigest = (response as { result?: { observed_config_digest?: unknown } }).result?.observed_config_digest;
-    if (typeof nextDigest !== "string" || !/^[a-f0-9]{64}$/.test(nextDigest)) throw new Error("missing config digest");
-    selectedConfigSnapshot(item.id, nextDigest);
-    uiStores.runtime.replaceSubscriptions(items.value.map((source) => ({ ...source, enabled: source.id === item.id })));
+    await runJson(host, { id: "subscription.select", sourceId: item.id, expectedDigest: uiStores.runtime.subscriptionConfigDigest.value ?? uiStores.config.baseDigest.value ?? "0".repeat(64) });
+    await load();
     finishFeedback(id, true, `已切换到“${item.name}”`);
   } catch {
-    selectedSourceId.value = previous;
     finishFeedback(id, false, "订阅切换失败");
   } finally {
     selectingSourceId.value = undefined;
   }
+}
+
+async function setSourceEnabled(item: SubscriptionDto, enabled: boolean): Promise<void> {
+  if (mode.value !== "merge" || selectingSourceId.value || item.active === enabled) return;
+  selectingSourceId.value = item.id;
+  const id = `subscription-enabled-${item.id}`;
+  beginFeedback(id, "subscription-config");
+  try {
+    await runJson(host, { id: "subscription.set-enabled", sourceId: item.id, enabled, expectedDigest: uiStores.runtime.subscriptionConfigDigest.value ?? "0".repeat(64) });
+    await load();
+    finishFeedback(id, true, enabled ? `已加入“${item.name}”` : `已停用“${item.name}”`);
+  } catch {
+    finishFeedback(id, false, enabled ? "订阅启用失败" : "至少保留一个有效订阅");
+  } finally { selectingSourceId.value = undefined; }
+}
+
+async function commitMode(next: SubscriptionModeDto, sourceId?: string): Promise<void> {
+  modePending.value = true;
+  const id = "subscription-mode";
+  beginFeedback(id, "subscription-mode");
+  try {
+    await runJson(host, { id: "subscription.mode.set", mode: next, ...(sourceId ? { sourceId } : {}), expectedDigest: uiStores.runtime.subscriptionConfigDigest.value ?? "0".repeat(64) });
+    singleTargetOpen.value = false;
+    await load();
+    finishFeedback(id, true, next === "merge" ? "已启用订阅合并" : "已切换为单订阅");
+  } catch { finishFeedback(id, false, "订阅模式切换失败"); }
+  finally { modePending.value = false; }
+}
+
+function changeMode(context: { value: string | number }): void {
+  const next = context.value;
+  if ((next !== "single" && next !== "merge") || next === mode.value || modePending.value) return;
+  if (next === "merge") { void commitMode("merge"); return; }
+  const active = items.value.filter((item) => item.active);
+  if (active.length === 1) void commitMode("single", active[0]!.id);
+  else singleTargetOpen.value = true;
 }
 
 async function remove(item: SubscriptionDto): Promise<void> {
@@ -271,7 +281,6 @@ async function move(item: SubscriptionDto, direction: -1 | 1): Promise<void> {
 }
 
 function openActions(item: SubscriptionDto): void {
-  selectedSourceId.value = item.id;
   activeItem.value = item;
   actionSheetOpen.value = true;
 }
@@ -340,12 +349,18 @@ onActivated(() => { void load().catch(() => undefined); });
 
     <OperationBanner v-if="currentFeedback" :phase="currentFeedback.phase" :message="currentFeedback.message ?? ''" @dismiss="feedbackId && operations.clear(feedbackId)" />
 
+    <section class="subscription-mode-panel">
+      <div><strong>订阅模式</strong><span>{{ mode === "single" ? "只使用一个订阅源" : "合并已启用订阅源的节点" }}</span></div>
+      <SegmentedControl :model-value="mode" :options="modeOptions" :disabled="modePending" @change="changeMode" />
+    </section>
+
     <PageState v-if="loading && items.length === 0" kind="loading" title="正在加载订阅源" />
     <PageState v-else-if="loadError && items.length === 0" kind="error" title="订阅源加载失败" detail="控制服务暂时不可用" action-label="重试" @action="load" />
     <PageState v-else-if="items.length === 0" kind="empty" title="还没有订阅源" detail="点击右下角按钮添加订阅链接" />
-    <TRadioGroup v-else v-model="selectedSourceId" class="source-list" name="subscription-source" icon="dot">
-      <article v-for="item in items" :key="item.id" class="source-card" :data-state="presentation(item).tone" :data-selected="selectedSourceId === item.id" @click="selectSource(item)">
-        <TRadio class="source-selector" :value="item.id" icon="dot" :block="false" borderless :disabled="Boolean(selectingSourceId)" @click.stop="selectSource(item)" />
+    <div v-else class="source-list">
+      <article v-for="item in items" :key="item.id" class="source-card" :data-state="presentation(item).tone" :data-selected="item.active" @click="mode === 'single' ? selectSource(item) : setSourceEnabled(item, !item.active)">
+        <TRadio v-if="mode === 'single'" class="source-selector" :checked="item.active" :value="item.id" icon="dot" :block="false" borderless :disabled="Boolean(selectingSourceId)" @click.stop="selectSource(item)" />
+        <TCheckbox v-else class="source-selector" :checked="item.active" :disabled="Boolean(selectingSourceId) || (!item.configured && !item.active)" @change="(checked) => setSourceEnabled(item, checked === true)" @click.stop />
         <div class="source-main">
           <div class="source-title-row">
             <strong>{{ item.name }}</strong>
@@ -362,7 +377,7 @@ onActivated(() => { void load().catch(() => undefined); });
           </div>
         </div>
       </article>
-    </TRadioGroup>
+    </div>
 
     <TButton class="subscription-add-fab" size="large" shape="circle" theme="primary" title="添加订阅" @click="openEditor()"><IconPlus :size="26" stroke-width="2" /></TButton>
 
@@ -386,6 +401,14 @@ onActivated(() => { void load().catch(() => undefined); });
         <TTextarea v-model="importText" placeholder="粘贴订阅内容" :maxlength="786432" :autosize="{ minRows: 6, maxRows: 12 }" />
         <div v-if="importPreview" class="import-preview"><strong>预览已生成</strong><span>接受 {{ importPreview.accepted ?? "--" }} · 跳过 {{ importPreview.skipped ?? "--" }} · 重复 {{ importPreview.duplicate ?? "--" }}</span></div>
         <div class="editor-actions"><TButton variant="outline" :disabled="!importText.trim()" @click="previewImport">预览</TButton><TButton theme="primary" :disabled="!importPreview" @click="applyImport">确认导入</TButton></div>
+      </div>
+    </TPopup>
+
+    <TPopup v-model="singleTargetOpen" placement="bottom" :duration="160" destroy-on-close>
+      <div class="subscription-editor single-target-editor">
+        <div class="editor-heading"><h3>选择单订阅</h3><span>合并模式中有多个活动来源，请明确保留一个</span></div>
+        <button v-for="item in items.filter((source) => source.active)" :key="item.id" type="button" class="single-target-row" @click="commitMode('single', item.id)"><strong>{{ item.name }}</strong><span>{{ presentation(item).summary }}</span></button>
+        <TButton variant="outline" :disabled="modePending" @click="singleTargetOpen = false">取消</TButton>
       </div>
     </TPopup>
 

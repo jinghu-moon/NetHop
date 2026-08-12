@@ -10,12 +10,13 @@ pub use capture::{
     CaptureMode, CapturePolicy, CapturePolicyError, ForwardingPolicy, InterfacePolicy,
 };
 pub use composer::{
-    ClashApi, ComposerError, ManagedConfig, ManagedLogLevel, ManagedOptions, ManagedOutboundMode,
-    ManagedProfile, ManagedSelectorMode, TerminalOutbound, TunStack,
+    ClashApi, ComposerError, MANAGED_FETCH_PROXY_ENDPOINT, MANAGED_FETCH_PROXY_USERNAME,
+    ManagedConfig, ManagedLogLevel, ManagedOptions, ManagedOutboundMode, ManagedProfile,
+    TerminalOutbound, TunStack,
 };
 pub use diagnostics::{CoreDiagnosticCode, CoreError};
 pub use generation::{
-    Candidate, GenerationId, GenerationManifest, GenerationStore, PreparedCandidate,
-    SealedGeneration,
+    Candidate, GenerationId, GenerationManifest, GenerationNodeRecord, GenerationNodeRegistry,
+    GenerationStore, PreparedCandidate, SealedGeneration,
 };
 pub use state::{RuntimeState, StateTransitionError};

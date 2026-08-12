@@ -1,8 +1,8 @@
 # NetHop WebUI 设计方案
 
-> 状态：Design Baseline v0.3
+> 状态：Design Baseline v0.4
 >
-> 日期：2026-08-07
+> 日期：2026-08-11
 >
 > 适用范围：当前 Alpha、KernelSU/APatch Module WebUI、后续 CLI 能力覆盖
 >
@@ -26,6 +26,7 @@ NetHop WebUI 采用以下已确认决策：
 | 长列表引擎 | `@tanstack/vue-virtual`，节点和应用列表的唯一虚拟化实现 |
 | root bridge | `kernelsu` npm bridge |
 | 后端入口 | 固定路径 `nethopctl --json/--jsonl` |
+| 当前 wire | Protocol v3；schema v3；订阅 `single/merge` 与节点 requested/active 分离 |
 | 实时状态 | 一个长驻 JSONL 事件流，snapshot + 单调序号 + 背压恢复 |
 | 配置写入 | typed mutation 或完整事务 apply，WebUI 不直接改 TOML |
 | 首版范围 | 完整日常闭环，随后覆盖全部稳定 CLI 能力 |
@@ -63,8 +64,8 @@ Vue WebUI -> WebUiBridge -> kernelsu spawn/exec
 - `status.get`、`service.start/stop`；
 - `config.get/validate/apply/reload/schema/mutate`；
 - `capability.get/probe`；
-- `subscription.update/import_preview/import_apply`；
-- `node.list/test/select/remove/export`；
+- `subscription.update/import_preview/import_apply/mode_get/mode_set/select/set_enabled`；
+- `node.list/test/test_all/selection_get/select_auto/select_manual/remove/export`；
 - `connections.get/close/close_all`；
 - `logs.get/clear`、`diagnostics.bundle`；
 - `topology.get`、`traffic.get`；
@@ -72,7 +73,7 @@ Vue WebUI -> WebUiBridge -> kernelsu spawn/exec
 - snapshot、单调 `seq`、有界 ring、`resync_required` 和最多四个订阅者；
 - 配置 watcher、结构化事件日志和敏感信息脱敏。
 
-因此首版不需要新增 HTTP 服务、放宽 UDS 权限或让 WebUI 直连 Clash API。
+因此首版不需要新增 HTTP 服务、放宽 UDS 权限或让 WebUI 直连 Clash API。当前核心是独立 sing-box `v1.13.15` 子进程，只有 daemon 通过 loopback-only、随机 secret Clash API 查询 group、测速和切换；sing-box 1.14 原生 gRPC API service 只作为 [`11-deferred-capabilities-and-future-design.md`](./11-deferred-capabilities-and-future-design.md) 中的未来候选。
 
 ### 2.2 NetProxy-Magisk
 
@@ -563,23 +564,26 @@ backoff
 - 最近成功、最近尝试、last-known-good；
 - 更新、编辑、排序、删除。
 
+列表顶部使用 `single/merge` 分段控制。`single` 只允许一个已配置 source 处于 active set，source 卡片使用圆点单选；`merge` 允许多个 source，卡片使用复选开关。`single -> merge` 保留当前 source，不自动启用其他 source；`merge -> single` 在存在多个 active source 时必须显式选择目标。所有变更等待 daemon 事务结果，不在前端伪造 enabled 快照。
+
 新增 source 只要求名称和 HTTPS URL。ID 由 daemon 生成，UI 不提供 ID 输入框。
 
 删除最后一个有效 source 属于 destructive 操作，必须显示后果并二次确认。更新 source 不阻塞整个页面，列表行显示独立操作状态。
 
 ### 9.3 节点
 
-节点页从订阅页进入，提供：
+节点页从订阅页和概览代理质量卡片进入，提供：
 
 - 搜索；
 - source、协议、可用性筛选；
-- 当前节点固定置顶；
+- 独立“自动优选”控制项；
+- requested manual 目标与实际 active terminal 的独立状态；
 - 延迟测试与结果时间；
-- 节点选择；
+- 以稳定 node ID 执行 manual 选择；
 - 删除/排除；
 - URI 导出。
 
-节点凭据永不进入列表数据。长列表使用 TanStack Virtual，由 `useBoundedVirtualizer` 统一 stable key、estimate size、overscan、空列表、滚动定位、测量缓存和测试契约。节点行默认固定高度并单行省略长名称；只有展示多行诊断或显式展开时才启用动态测量。筛选结果变化不得复用旧 index 作为身份，当前节点置顶也必须通过稳定 node ID 保持选择语义。
+节点凭据和内部 sing-box tag 永不进入列表数据。列表 DTO 使用 `is_requested` 和 `is_active`，不得恢复含混的 `selected` 字段；active terminal 无法从受控 group snapshot 解析时显示 degraded/null，不回退第一个节点。全部测速只更新延迟；manual intent 保持不变，auto intent 下由 sing-box urltest 自行更新 active terminal。长列表使用 TanStack Virtual，由 `useBoundedVirtualizer` 统一 stable key、estimate size、overscan、空列表、滚动定位、测量缓存和测试契约。节点行默认固定高度并单行省略长名称；只有展示多行诊断或显式展开时才启用动态测量。筛选结果变化不得复用旧 index 作为身份，requested/active 状态也必须通过稳定 node ID 保持语义。
 
 ### 9.4 应用
 
@@ -631,6 +635,8 @@ backoff
 | Event state | 按 `seq` 应用的增量 | 事件连接生命周期 |
 | Query cache | 节点、连接、日志等有界查询 | 页面/会话 |
 | Draft | 尚未提交的表单 | 页面 |
+
+subscription state 额外保存 `mode + configured sources + active source set`；selection state 额外保存 `intent + requested_node_id + active_node_id + degraded reason`。两者都以 Protocol v3 snapshot/event 为事实源，不能从卡片选中状态、列表顺序或内部 core tag 反推。
 
 禁止把 draft 直接覆盖 active state。配置页同时显示：
 

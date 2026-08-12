@@ -10,6 +10,17 @@ use nethopd::{ClashApiClient, ClashApiError, ClashApiLimits};
 const SECRET: &str = "0123456789abcdef0123456789abcdef";
 
 fn serve(responses: Vec<(u16, String)>) -> (SocketAddrV4, thread::JoinHandle<Vec<String>>) {
+    serve_delayed(
+        responses
+            .into_iter()
+            .map(|(status, body)| (status, body, Duration::ZERO))
+            .collect(),
+    )
+}
+
+fn serve_delayed(
+    responses: Vec<(u16, String, Duration)>,
+) -> (SocketAddrV4, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = match listener.local_addr().unwrap() {
         std::net::SocketAddr::V4(address) => address,
@@ -17,7 +28,7 @@ fn serve(responses: Vec<(u16, String)>) -> (SocketAddrV4, thread::JoinHandle<Vec
     };
     let handle = thread::spawn(move || {
         let mut requests = Vec::new();
-        for (status, body) in responses {
+        for (status, body, delay) in responses {
             let (mut stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
@@ -47,6 +58,7 @@ fn serve(responses: Vec<(u16, String)>) -> (SocketAddrV4, thread::JoinHandle<Vec
                 }
             }
             requests.push(String::from_utf8(bytes).unwrap());
+            thread::sleep(delay);
             let reason = if status == 200 { "OK" } else { "Error" };
             write!(
                 stream,
@@ -83,30 +95,25 @@ fn client_is_loopback_only_and_redacts_its_secret() {
 }
 
 #[test]
-fn node_listing_uses_secret_and_returns_only_bounded_selector_members() {
+fn group_snapshot_uses_secret_and_never_serializes_proxy_credentials() {
     let body = serde_json::json!({
         "proxies": {
             "nethop-select": {"type":"Selector","now":"nh1s-fedcba9876543210","all":["direct","nh1s-0123456789abcdef","nh1s-fedcba9876543210"]},
             "nh1s-0123456789abcdef": {"type":"VLESS","alive":true,"history":[{"delay":42}]},
             "nh1s-fedcba9876543210": {"type":"Trojan","alive":false,"history":[]},
-            "credential-shaped-field": {"password":"must-not-escape"}
+            "credential-shaped-field": {"type":"VLESS","password":"must-not-escape"}
         }
     })
     .to_string();
     let (address, server) = serve(vec![(200, body)]);
-    let nodes = client(address).nodes(Some("nh1s"), Some(2)).unwrap();
-    assert_eq!(nodes.len(), 2);
-    assert_eq!(nodes[0].tag, "nh1s-0123456789abcdef");
-    assert_eq!(nodes[0].delay_ms, Some(42));
-    assert!(nodes[1].selected);
-    let payload = serde_json::to_value(&nodes).unwrap();
-    assert_eq!(payload[0]["id"], "nh1s-0123456789abcdef");
-    assert_eq!(payload[0]["name"], "nh1s-0123456789abcdef");
-    assert_eq!(payload[0]["protocol"], "vless");
-    assert_eq!(payload[0]["source_ids"], serde_json::json!([]));
-    assert!(payload[0].get("tag").is_none());
-    assert!(payload[0].get("kind").is_none());
-    assert!(payload[0].get("alive").is_none());
+    let snapshot = client(address).group_snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .terminal("nh1s-0123456789abcdef")
+            .unwrap()
+            .latency_ms(),
+        Some(42)
+    );
     let requests = server.join().unwrap();
     assert!(requests[0].starts_with("GET /proxies HTTP/1.1\r\n"));
     assert!(
@@ -114,11 +121,35 @@ fn node_listing_uses_secret_and_returns_only_bounded_selector_members() {
             .to_ascii_lowercase()
             .contains(&format!("authorization: bearer {SECRET}"))
     );
-    assert!(
-        !serde_json::to_string(&nodes)
-            .unwrap()
-            .contains("must-not-escape")
+    assert!(!format!("{snapshot:?}").contains("must-not-escape"));
+}
+
+#[test]
+fn group_snapshot_preserves_only_internal_group_relations_and_observations() {
+    let body = serde_json::json!({
+        "proxies": {
+            "nethop-select": {"type":"Selector","now":"nethop-auto","all":["nethop-auto","internal-node"]},
+            "nethop-auto": {"type":"URLTest","now":"internal-node","all":["internal-node"]},
+            "internal-node": {"type":"VLESS","alive":true,"history":[{"delay":41}]}
+        }
+    })
+    .to_string();
+    let (address, server) = serve(vec![(200, body)]);
+    let snapshot = client(address).group_snapshot().unwrap();
+    assert_eq!(
+        snapshot.groups()["nethop-select"].now(),
+        Some("nethop-auto")
     );
+    assert_eq!(
+        snapshot.groups()["nethop-auto"].all(),
+        &["internal-node".to_owned()]
+    );
+    let terminal = snapshot.terminal("internal-node").unwrap();
+    assert_eq!(terminal.kind(), "VLESS");
+    assert_eq!(terminal.latency_ms(), Some(41));
+    assert_eq!(terminal.alive(), Some(true));
+    assert!(format!("{snapshot:?}").find(SECRET).is_none());
+    assert_eq!(server.join().unwrap().len(), 1);
 }
 
 #[test]
@@ -149,6 +180,23 @@ fn group_delay_tests_all_selector_members_in_one_bounded_request() {
     assert!(requests[0].starts_with(
         "GET /group/nethop-select/delay?timeout=10000&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204 HTTP/1.1\r\n"
     ));
+}
+
+#[test]
+fn group_delay_uses_its_dedicated_timeout_instead_of_the_default_api_timeout() {
+    let (address, server) = serve_delayed(vec![(
+        200,
+        r#"{"nh1s-0123456789abcdef":42}"#.to_owned(),
+        Duration::from_millis(100),
+    )]);
+    let limits = ClashApiLimits::new(Duration::from_millis(25), 1024).unwrap();
+    let client = ClashApiClient::new(address, SECRET, limits).unwrap();
+
+    let delays = client.test_all_nodes().unwrap();
+
+    assert_eq!(delays.len(), 1);
+    assert_eq!(delays[0].delay_ms, 42);
+    assert_eq!(server.join().unwrap().len(), 1);
 }
 
 #[test]
@@ -255,14 +303,14 @@ fn response_size_and_json_shape_are_strictly_bounded() {
     let (address, server) = serve(vec![(200, "x".repeat(1025))]);
     let api = ClashApiClient::new(address, SECRET, limits).unwrap();
     assert!(matches!(
-        api.nodes(None, None),
+        api.group_snapshot(),
         Err(ClashApiError::ResponseTooLarge)
     ));
     server.join().unwrap();
 
     let (address, server) = serve(vec![(200, "{}".to_owned())]);
     assert!(matches!(
-        client(address).nodes(None, None),
+        client(address).group_snapshot(),
         Err(ClashApiError::InvalidResponse)
     ));
     server.join().unwrap();

@@ -1,0 +1,49 @@
+{
+  "schema": "nethop-selection-tdd-baseline-v1",
+  "task_ids": ["A001", "A002", "A003", "A004", "A005", "A006", "A007", "A008"],
+  "behaviors": {
+    "B01": "single_source_download_parse_compose_check_publish_start",
+    "B02": "multi_source_dedupe_and_attribution",
+    "B03": "per_source_last_known_good",
+    "B04": "failed_check_preserves_runtime",
+    "B05": "bounded_test_all",
+    "B06": "manual_node_selection",
+    "B07": "existing_connections_survive_selection",
+    "B08": "secret_canary_redaction",
+    "B09": "service_tun_tproxy_application_and_routing",
+    "B10": "webui_navigation"
+  },
+  "fixtures": [
+    "fixtures/schema-v2-before.toml",
+    "fixtures/protocol-v2-before.json",
+    "fixtures/webui-before.json"
+  ],
+  "evidence_fields": [
+    "task_id",
+    "design_section",
+    "test_path",
+    "command",
+    "exit_code",
+    "fixture_sha256",
+    "worktree_revision",
+    "rust_version",
+    "cargo_version",
+    "node_version",
+    "feature_set",
+    "android_device_summary",
+    "red",
+    "green",
+    "refactor",
+    "verify"
+  ],
+  "forbidden_evidence_fields": [
+    "subscription_url",
+    "token",
+    "password",
+    "uuid",
+    "private_key",
+    "complete_outbound",
+    "api_secret",
+    "complete_package_list"
+  ]
+}

@@ -296,6 +296,194 @@ impl ConfigRuntime {
         self.mutate_with_entropy(expected_digest, mutation, &mut SystemSourceIdEntropy)
     }
 
+    pub fn subscription_select(
+        &mut self,
+        expected_digest: &str,
+        source_id: &str,
+    ) -> Result<ConfigMutationOutcome, ConfigRuntimeError> {
+        let document = self.subscription_select_document(source_id)?;
+        self.commit_subscription_document(expected_digest, &document)
+    }
+
+    pub fn preview_subscription_select(
+        &self,
+        expected_digest: &str,
+        source_id: &str,
+    ) -> Result<PreparedConfigTransaction, ConfigRuntimeError> {
+        let document = self.subscription_select_document(source_id)?;
+        self.preview_subscription_document(expected_digest, &document)
+    }
+
+    fn subscription_select_document(
+        &self,
+        source_id: &str,
+    ) -> Result<serde_json::Value, ConfigRuntimeError> {
+        if self.current_sources.mode() != crate::SubscriptionMode::Single {
+            return Err(ConfigError::InvalidValue.into());
+        }
+        let selected = source_index(&self.current_sources, source_id)?;
+        if self.current_sources.sources()[selected].url().is_empty() {
+            return Err(ConfigError::InvalidValue.into());
+        }
+        let mut document = self.current.document();
+        for (index, source) in array_mut(&mut document, "/subscriptions/sources")?
+            .iter_mut()
+            .enumerate()
+        {
+            source
+                .as_object_mut()
+                .ok_or(ConfigError::InvalidToml)?
+                .insert("enabled".into(), serde_json::json!(index == selected));
+        }
+        Ok(document)
+    }
+
+    pub fn subscription_set_enabled(
+        &mut self,
+        expected_digest: &str,
+        source_id: &str,
+        enabled: bool,
+    ) -> Result<ConfigMutationOutcome, ConfigRuntimeError> {
+        let document = self.subscription_set_enabled_document(source_id, enabled)?;
+        self.commit_subscription_document(expected_digest, &document)
+    }
+
+    pub fn preview_subscription_set_enabled(
+        &self,
+        expected_digest: &str,
+        source_id: &str,
+        enabled: bool,
+    ) -> Result<PreparedConfigTransaction, ConfigRuntimeError> {
+        let document = self.subscription_set_enabled_document(source_id, enabled)?;
+        self.preview_subscription_document(expected_digest, &document)
+    }
+
+    fn subscription_set_enabled_document(
+        &self,
+        source_id: &str,
+        enabled: bool,
+    ) -> Result<serde_json::Value, ConfigRuntimeError> {
+        if self.current_sources.mode() != crate::SubscriptionMode::Merge {
+            return Err(ConfigError::InvalidValue.into());
+        }
+        let selected = source_index(&self.current_sources, source_id)?;
+        let target = &self.current_sources.sources()[selected];
+        if enabled && target.url().is_empty() {
+            return Err(ConfigError::InvalidValue.into());
+        }
+        if !enabled && target.enabled() && self.current_sources.active_sources().count() <= 1 {
+            return Err(ConfigError::NoActiveSource.into());
+        }
+        let mut document = self.current.document();
+        array_mut(&mut document, "/subscriptions/sources")?[selected]
+            .as_object_mut()
+            .ok_or(ConfigError::InvalidToml)?
+            .insert("enabled".into(), serde_json::json!(enabled));
+        Ok(document)
+    }
+
+    pub fn subscription_mode_set(
+        &mut self,
+        expected_digest: &str,
+        mode: crate::SubscriptionMode,
+        target_source_id: Option<&str>,
+    ) -> Result<ConfigMutationOutcome, ConfigRuntimeError> {
+        let document = self.subscription_mode_document(mode, target_source_id)?;
+        self.commit_subscription_document(expected_digest, &document)
+    }
+
+    pub fn preview_subscription_mode_set(
+        &self,
+        expected_digest: &str,
+        mode: crate::SubscriptionMode,
+        target_source_id: Option<&str>,
+    ) -> Result<PreparedConfigTransaction, ConfigRuntimeError> {
+        let document = self.subscription_mode_document(mode, target_source_id)?;
+        self.preview_subscription_document(expected_digest, &document)
+    }
+
+    fn subscription_mode_document(
+        &self,
+        mode: crate::SubscriptionMode,
+        target_source_id: Option<&str>,
+    ) -> Result<serde_json::Value, ConfigRuntimeError> {
+        let mut document = self.current.document();
+        document
+            .pointer_mut("/subscriptions")
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or(ConfigError::InvalidToml)?
+            .insert(
+                "mode".into(),
+                serde_json::json!(match mode {
+                    crate::SubscriptionMode::Single => "single",
+                    crate::SubscriptionMode::Merge => "merge",
+                }),
+            );
+        match mode {
+            crate::SubscriptionMode::Merge => {
+                if target_source_id.is_some() {
+                    return Err(ConfigError::InvalidValue.into());
+                }
+            }
+            crate::SubscriptionMode::Single => {
+                let target = target_source_id.ok_or(ConfigError::SingleSourceNotUnique)?;
+                let selected = source_index(&self.current_sources, target)?;
+                if self.current_sources.sources()[selected].url().is_empty() {
+                    return Err(ConfigError::InvalidValue.into());
+                }
+                for (index, source) in array_mut(&mut document, "/subscriptions/sources")?
+                    .iter_mut()
+                    .enumerate()
+                {
+                    source
+                        .as_object_mut()
+                        .ok_or(ConfigError::InvalidToml)?
+                        .insert("enabled".into(), serde_json::json!(index == selected));
+                }
+            }
+        }
+        Ok(document)
+    }
+
+    fn preview_subscription_document(
+        &self,
+        expected_digest: &str,
+        document: &serde_json::Value,
+    ) -> Result<PreparedConfigTransaction, ConfigRuntimeError> {
+        if expected_digest != self.observed_digest()? || !self.disk_matches_current() {
+            return Err(ConfigError::Conflict.into());
+        }
+        let prepared = self.store.prepare_document(expected_digest, document)?;
+        self.admit(prepared.snapshot())?;
+        Ok(PreparedConfigTransaction {
+            candidate_digest: prepared.snapshot().digest().to_owned(),
+            bytes: prepared.bytes().to_vec(),
+        })
+    }
+
+    fn commit_subscription_document(
+        &mut self,
+        expected_digest: &str,
+        document: &serde_json::Value,
+    ) -> Result<ConfigMutationOutcome, ConfigRuntimeError> {
+        self.begin_candidate();
+        let preferred_ids = self
+            .current_sources
+            .sources()
+            .iter()
+            .map(|source| Some(source.id().clone()))
+            .collect::<Vec<_>>();
+        let mut entropy = SystemSourceIdEntropy;
+        let result = self
+            .apply_document_with_ids(expected_digest, document, &preferred_ids, &mut entropy)
+            .map(|change| ConfigMutationOutcome {
+                change,
+                source_id: None,
+            });
+        self.finish_candidate(&result);
+        result
+    }
+
     pub fn mutate_with_entropy(
         &mut self,
         expected_digest: &str,
@@ -513,6 +701,22 @@ pub struct ConfigRuntimeCheckpoint {
     current_sources: SourceConfig,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedConfigTransaction {
+    candidate_digest: String,
+    bytes: Vec<u8>,
+}
+
+impl PreparedConfigTransaction {
+    pub fn candidate_digest(&self) -> &str {
+        &self.candidate_digest
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigReloadState {
     Accepted,
@@ -535,6 +739,16 @@ impl fmt::Debug for ConfigRuntimeCheckpoint {
             .field("active_digest", &self.current.digest())
             .field("source_count", &self.current_sources.sources().len())
             .finish_non_exhaustive()
+    }
+}
+
+impl ConfigRuntimeCheckpoint {
+    pub fn digest(&self) -> &str {
+        self.store.digest()
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.store.bytes()
     }
 }
 
@@ -589,18 +803,6 @@ fn apply_mutation(
             }
             if let Some(value) = enabled {
                 source.insert("enabled".into(), serde_json::json!(value));
-            }
-        }
-        ConfigMutation::SelectSource { source_id } => {
-            let selected = source_index(sources, source_id)?;
-            for (index, source) in array_mut(document, "/subscriptions/sources")?
-                .iter_mut()
-                .enumerate()
-            {
-                source
-                    .as_object_mut()
-                    .ok_or(ConfigError::InvalidToml)?
-                    .insert("enabled".into(), serde_json::json!(index == selected));
             }
         }
         ConfigMutation::RemoveSource { source_id } => {
@@ -757,7 +959,6 @@ fn scalar_pointer(field_id: &str) -> Option<&'static str> {
         "subscriptions.auto_update" => Some("/subscriptions/auto_update"),
         "subscriptions.update_interval_hours" => Some("/subscriptions/update_interval_hours"),
         "proxy.outbound_mode" => Some("/proxy/outbound_mode"),
-        "proxy.selector_mode" => Some("/proxy/selector_mode"),
         "proxy.urltest.interval_minutes" => Some("/proxy/urltest/interval_minutes"),
         "proxy.urltest.tolerance_ms" => Some("/proxy/urltest/tolerance_ms"),
         "proxy.urltest.max_candidates" => Some("/proxy/urltest/max_candidates"),

@@ -25,6 +25,45 @@ fn uri_host_parameter_is_preserved_for_v2ray_transports() {
 }
 
 #[test]
+fn vmess_v2_websocket_without_tls_is_a_supported_sing_box_shape() {
+    let payload = serde_json::json!({
+        "v": "2",
+        "ps": "vmess-ws-cleartext",
+        "add": "vmess.example",
+        "port": "80",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "aid": "0",
+        "net": "ws",
+        "type": "none",
+        "host": "cdn.example",
+        "path": "/ws",
+        "tls": ""
+    });
+    let uri = format!(
+        "vmess://{}",
+        base64::engine::general_purpose::STANDARD.encode(payload.to_string())
+    );
+    let conversion = convert_stable_sources(
+        vec![SourceInput {
+            source_id: SourceId::new("vmess-ws-cleartext").unwrap(),
+            format_hint: FormatHint::UriList,
+            bytes: uri.into_bytes(),
+        }],
+        &ParserLimits::default(),
+        &CapabilityMatrix::default(),
+    );
+
+    assert_eq!(conversion.report.summary.accepted, 1);
+    assert_eq!(conversion.report.summary.rejected, 0);
+    let outbounds: serde_json::Value = serde_json::from_str(&conversion.outbounds_json).unwrap();
+    assert_eq!(outbounds[0]["type"], "vmess");
+    assert_eq!(outbounds[0]["transport"]["type"], "ws");
+    assert_eq!(outbounds[0]["transport"]["path"], "/ws");
+    assert_eq!(outbounds[0]["transport"]["headers"]["Host"], "cdn.example");
+    assert!(outbounds[0].get("tls").is_none());
+}
+
+#[test]
 fn hysteria2_uri_preserves_bounded_port_hopping_without_conflicting_server_port() {
     let conversion = convert_stable_sources(
         vec![SourceInput {

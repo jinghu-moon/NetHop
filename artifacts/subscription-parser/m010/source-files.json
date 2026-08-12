@@ -19,7 +19,7 @@
     },
     {
       "path": "crates/nethop-core/src/composer.rs",
-      "sha256": "bbc47f08583825fce63b8109771a4a00957e5a8b1224213653be2877880c68d3"
+      "sha256": "09d08eb314200de3cfcd129c588ea713675101c6981642ac19cfdb52358eae56"
     },
     {
       "path": "crates/nethop-core/src/diagnostics.rs",
@@ -27,11 +27,11 @@
     },
     {
       "path": "crates/nethop-core/src/generation.rs",
-      "sha256": "79fcf361ca80004d8596e1270bbaa77e105cc7632e8540c0625294cadbe18123"
+      "sha256": "1e1067c65e22239b6289116d2b25c30bd1ebc6ef811a7a157ec0547a1583c21f"
     },
     {
       "path": "crates/nethop-core/src/lib.rs",
-      "sha256": "591abd2cc05db0fc94e7bf044485516b412d3f11d5083411b44e0ce52b21fb25"
+      "sha256": "f755dbe978c5c01efc5b6eadd50a774150072133ef10ddcf3226983bff6a7b74"
     },
     {
       "path": "crates/nethop-core/src/state.rs",
@@ -43,7 +43,7 @@
     },
     {
       "path": "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json",
-      "sha256": "b070b47c7291c292c837b80ae20ae9fe131b035f65f7e68fe26339b090dbfa84"
+      "sha256": "d11f0497be4c0d731a6ef75a2543b8fc502957bca1712903fbfcf33c4788b1d6"
     },
     {
       "path": "crates/nethop-subscription/src/adapter.rs",
@@ -75,11 +75,11 @@
     },
     {
       "path": "crates/nethop-subscription/src/fetch.rs",
-      "sha256": "14673fb180378de372753e9664af377f1da8cbe8cb750da0d9d724c85587a311"
+      "sha256": "710a36c3395b0d5f9fff9397866f368f9b8c60ac672d361ec3200cecbbe9af69"
     },
     {
       "path": "crates/nethop-subscription/src/fetch/ureq_adapter.rs",
-      "sha256": "ec7d28e6f8da2706db386b799cb2c5501dec5a2be39ac1a8caeab87770a3a31f"
+      "sha256": "5287d81d31f7d4034713b87c848d019161be97c8f8d14864916f743376300967"
     },
     {
       "path": "crates/nethop-subscription/src/ipc.rs",
@@ -87,7 +87,7 @@
     },
     {
       "path": "crates/nethop-subscription/src/lib.rs",
-      "sha256": "a99c7a1bcc6f83869dee814dbbb851d2d71d223908888ba21c4008eb00c3f9eb"
+      "sha256": "dd0f91c6ee7a1cb22e785e0f1895c58d6465e2a5640cd9a95d99479fe77d2b2b"
     },
     {
       "path": "crates/nethop-subscription/src/limits.rs",

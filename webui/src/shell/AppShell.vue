@@ -10,6 +10,7 @@ import { EventSession } from "@/runtime/event-session";
 import { useEventLifecycle } from "@/runtime/use-event-lifecycle";
 import { parseEventFrame, parseStatus } from "@/model/dto";
 import { publishLiveTraffic } from "@/runtime/live-store";
+import { applyRuntimeEvent } from "@/runtime/event-state";
 import { validatedQuery } from "@/model/client";
 import { useTheme } from "./theme";
 import { useBackDispatcher } from "./useBackDispatcher";
@@ -35,6 +36,7 @@ if (appHost.capability.kind !== "browser") {
       const frame = parseEventFrame(raw);
       if (frame.type !== "item") return;
       if (frame.payload.traffic) publishLiveTraffic(frame.payload.traffic);
+      applyRuntimeEvent(frame.payload);
       if (frame.payload.kind === "runtime") void validatedQuery(appHost, { id: "status.get" }, parseStatus).then((status) => uiStores.session.setStatus(status)).catch(() => uiStores.session.setPhase("stale"));
     },
   });
