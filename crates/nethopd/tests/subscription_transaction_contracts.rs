@@ -53,6 +53,7 @@ fn journal_phase_is_monotonic_and_recovery_is_idempotent() {
         store.recovery_action(&value, Some(7), None).unwrap(),
         RecoveryAction::DiscardStaged
     );
+    value.advance(CommitPhase::ConfigPublished).unwrap();
     value.advance(CommitPhase::GenerationPublished).unwrap();
     assert_eq!(
         store
@@ -66,6 +67,33 @@ fn journal_phase_is_monotonic_and_recovery_is_idempotent() {
             .unwrap(),
         RecoveryAction::CompleteConfigPublish
     );
+}
+
+#[test]
+fn journal_order_matches_config_then_generation_publication() {
+    let mut value = journal();
+    value.advance(CommitPhase::Journaled).unwrap();
+    value.advance(CommitPhase::ConfigPublished).unwrap();
+    value.advance(CommitPhase::GenerationPublished).unwrap();
+    assert_eq!(value.phase(), CommitPhase::GenerationPublished);
+}
+
+#[test]
+fn failed_journal_write_does_not_advance_the_in_memory_phase() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let store = CommitJournalStore::new(&root).unwrap();
+    let mut value = journal();
+    value.advance(CommitPhase::Journaled).unwrap();
+    fs::remove_dir(&root).unwrap();
+
+    assert_eq!(
+        store
+            .advance_and_write(&mut value, CommitPhase::ConfigPublished)
+            .unwrap_err(),
+        TransactionError::WriteFailed
+    );
+    assert_eq!(value.phase(), CommitPhase::Journaled);
 }
 
 #[test]

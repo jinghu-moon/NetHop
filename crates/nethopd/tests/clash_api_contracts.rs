@@ -128,8 +128,7 @@ fn group_snapshot_uses_secret_and_never_serializes_proxy_credentials() {
 fn group_snapshot_preserves_only_internal_group_relations_and_observations() {
     let body = serde_json::json!({
         "proxies": {
-            "nethop-select": {"type":"Selector","now":"nethop-auto","all":["nethop-auto","internal-node"]},
-            "nethop-auto": {"type":"URLTest","now":"internal-node","all":["internal-node"]},
+            "nethop-select": {"type":"Selector","now":"internal-node","all":["internal-node"]},
             "internal-node": {"type":"VLESS","alive":true,"history":[{"delay":41}]}
         }
     })
@@ -138,11 +137,7 @@ fn group_snapshot_preserves_only_internal_group_relations_and_observations() {
     let snapshot = client(address).group_snapshot().unwrap();
     assert_eq!(
         snapshot.groups()["nethop-select"].now(),
-        Some("nethop-auto")
-    );
-    assert_eq!(
-        snapshot.groups()["nethop-auto"].all(),
-        &["internal-node".to_owned()]
+        Some("internal-node")
     );
     let terminal = snapshot.terminal("internal-node").unwrap();
     assert_eq!(terminal.kind(), "VLESS");
@@ -161,42 +156,6 @@ fn node_test_percent_encodes_the_path_and_parses_delay() {
     assert!(requests[0].starts_with(
         "GET /proxies/node%20%2F%20one/delay?timeout=5000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204 HTTP/1.1\r\n"
     ));
-}
-
-#[test]
-fn group_delay_tests_all_selector_members_in_one_bounded_request() {
-    let (address, server) = serve(vec![(
-        200,
-        r#"{"nh1s-fedcba9876543210":87,"direct":1,"nh1s-0123456789abcdef":42,"invalid":"slow"}"#
-            .to_owned(),
-    )]);
-    let delays = client(address).test_all_nodes().unwrap();
-    assert_eq!(delays.len(), 2);
-    assert_eq!(delays[0].tag, "nh1s-0123456789abcdef");
-    assert_eq!(delays[0].delay_ms, 42);
-    assert_eq!(delays[1].tag, "nh1s-fedcba9876543210");
-    assert_eq!(delays[1].delay_ms, 87);
-    let requests = server.join().unwrap();
-    assert!(requests[0].starts_with(
-        "GET /group/nethop-select/delay?timeout=10000&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204 HTTP/1.1\r\n"
-    ));
-}
-
-#[test]
-fn group_delay_uses_its_dedicated_timeout_instead_of_the_default_api_timeout() {
-    let (address, server) = serve_delayed(vec![(
-        200,
-        r#"{"nh1s-0123456789abcdef":42}"#.to_owned(),
-        Duration::from_millis(100),
-    )]);
-    let limits = ClashApiLimits::new(Duration::from_millis(25), 1024).unwrap();
-    let client = ClashApiClient::new(address, SECRET, limits).unwrap();
-
-    let delays = client.test_all_nodes().unwrap();
-
-    assert_eq!(delays.len(), 1);
-    assert_eq!(delays[0].delay_ms, 42);
-    assert_eq!(server.join().unwrap().len(), 1);
 }
 
 #[test]

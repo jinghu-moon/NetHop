@@ -94,17 +94,18 @@ fn d004_empty_sources_do_not_block_non_empty_sources() {
 }
 
 #[test]
-fn d005_limits_cover_one_sixteen_sixty_four_and_two_hundred_fifty_six() {
+fn d005_limits_cover_one_sixteen_twenty_seven_and_sixty_four() {
     let active = (1..=16).map(source).collect::<Vec<_>>();
     let nodes = (0..512)
         .map(|index| node(index, &[index % 16 + 1]))
         .collect::<Vec<_>>();
-    for limit in [1, 16, 64, 256] {
+    for limit in [1, 16, 27, 64] {
         let pools = build_candidate_pools(SubscriptionMode::Merge, &active, &nodes, limit).unwrap();
         assert_eq!(pools.auto().len(), limit);
     }
     assert!(build_candidate_pools(SubscriptionMode::Merge, &active, &nodes, 0).is_err());
-    assert!(build_candidate_pools(SubscriptionMode::Merge, &active, &nodes, 257).is_err());
+    assert!(build_candidate_pools(SubscriptionMode::Merge, &active, &nodes, 65).is_err());
+    assert!(build_candidate_pools(SubscriptionMode::Merge, &active, &nodes, 256).is_err());
 }
 
 #[test]

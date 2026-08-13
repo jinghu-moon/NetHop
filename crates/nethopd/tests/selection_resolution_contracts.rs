@@ -42,46 +42,28 @@ fn missing_store_defaults_to_auto_and_old_tag_schema_is_rejected() {
 }
 
 #[test]
-fn active_terminal_resolution_handles_direct_nested_cycle_and_depth() {
+fn active_terminal_resolution_accepts_only_selector_to_terminal_or_builtin() {
     let registry = registry();
-    let mut groups = BTreeMap::from([
-        (
-            "nethop-select".into(),
-            group("nethop-select", "nethop-auto"),
-        ),
-        (
-            "nethop-auto".into(),
-            group("nethop-auto", "internal-terminal"),
-        ),
-    ]);
+    let mut groups = BTreeMap::from([(
+        "nethop-select".into(),
+        group("nethop-select", "internal-terminal"),
+    )]);
     assert_eq!(
         resolve_active_terminal("nethop-select", &groups, &registry),
         ActiveTerminal::Node(StableNodeId::new("nh1s-0123456789abcdef").unwrap())
     );
-    groups.insert("nethop-auto".into(), group("nethop-auto", "direct"));
+    groups.insert("nethop-select".into(), group("nethop-select", "direct"));
     assert_eq!(
         resolve_active_terminal("nethop-select", &groups, &registry),
         ActiveTerminal::Direct
     );
-    groups.insert("nethop-auto".into(), group("nethop-auto", "nethop-select"));
+    groups.insert(
+        "nethop-select".into(),
+        group("nethop-select", "unknown-group"),
+    );
     assert_eq!(
         resolve_active_terminal("nethop-select", &groups, &registry),
-        ActiveTerminal::Unresolved(SelectionDiagnosticCode::NodeGroupCycle)
-    );
-
-    groups.clear();
-    for depth in 0..9 {
-        let current = format!("group-{depth}");
-        let next = if depth == 8 {
-            "internal-terminal".into()
-        } else {
-            format!("group-{}", depth + 1)
-        };
-        groups.insert(current.clone(), group(&current, &next));
-    }
-    assert_eq!(
-        resolve_active_terminal("group-0", &groups, &registry),
-        ActiveTerminal::Unresolved(SelectionDiagnosticCode::NodeGroupDepth)
+        ActiveTerminal::Unresolved(SelectionDiagnosticCode::ActiveNodeUnresolved)
     );
 }
 

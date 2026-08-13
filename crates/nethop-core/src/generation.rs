@@ -14,7 +14,7 @@ use crate::{
 };
 
 const MANIFEST_SCHEMA: &str = "nethop-generation-v1";
-const NODE_REGISTRY_SCHEMA: &str = "nethop-generation-nodes-v1";
+const NODE_REGISTRY_SCHEMA: &str = "nethop-generation-nodes-v2";
 const MAX_GENERATION_NODES: usize = 2_000;
 const MAX_NODE_NAME_BYTES: usize = 128;
 const MAX_TAG_BYTES: usize = 128;
@@ -142,11 +142,24 @@ impl GenerationNodeRecord {
 #[serde(deny_unknown_fields)]
 pub struct GenerationNodeRegistry {
     schema: String,
+    auto_pool: Vec<String>,
     records: Vec<GenerationNodeRecord>,
 }
 
 impl GenerationNodeRegistry {
-    pub fn new(mut records: Vec<GenerationNodeRecord>) -> Result<Self, CoreError> {
+    pub fn new(records: Vec<GenerationNodeRecord>) -> Result<Self, CoreError> {
+        let auto_pool = records
+            .iter()
+            .filter(|record| record.auto_candidate())
+            .map(|record| record.stable_node_id().to_owned())
+            .collect();
+        Self::with_auto_pool(records, auto_pool)
+    }
+
+    pub fn with_auto_pool(
+        mut records: Vec<GenerationNodeRecord>,
+        auto_pool: Vec<String>,
+    ) -> Result<Self, CoreError> {
         if records.is_empty() || records.len() > MAX_GENERATION_NODES {
             return Err(publish_error(
                 "node_registry",
@@ -168,14 +181,41 @@ impl GenerationNodeRegistry {
                 "generation node registry contains duplicate mappings",
             ));
         }
+        let unique_auto = auto_pool.iter().collect::<HashSet<_>>();
+        if auto_pool.is_empty()
+            || auto_pool.len() > 64
+            || unique_auto.len() != auto_pool.len()
+            || auto_pool.iter().any(|node_id| {
+                records
+                    .binary_search_by_key(&node_id.as_str(), |record| record.stable_node_id())
+                    .ok()
+                    .is_none_or(|index| !records[index].auto_candidate())
+            })
+            || records.iter().any(|record| {
+                record.auto_candidate()
+                    != auto_pool
+                        .iter()
+                        .any(|node_id| node_id == record.stable_node_id())
+            })
+        {
+            return Err(publish_error(
+                "node_registry",
+                "generation auto pool is invalid",
+            ));
+        }
         Ok(Self {
             schema: NODE_REGISTRY_SCHEMA.to_owned(),
+            auto_pool,
             records,
         })
     }
 
     pub fn records(&self) -> &[GenerationNodeRecord] {
         &self.records
+    }
+
+    pub fn auto_pool(&self) -> &[String] {
+        &self.auto_pool
     }
 
     pub fn by_stable_id(&self, stable_node_id: &str) -> Option<&GenerationNodeRecord> {

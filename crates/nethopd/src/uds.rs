@@ -3,7 +3,9 @@ use std::time::Duration;
 use nethop_protocol::{ControlRequest, ControlResponse};
 use thiserror::Error;
 
-const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(5);
+// Synchronous source mutations include bounded download and generation
+// activation work before the final response is written.
+const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

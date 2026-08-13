@@ -52,27 +52,11 @@ fn candidate() -> Candidate {
 #[test]
 fn composer_uses_explicit_auto_pool_but_keeps_every_terminal_selectable() {
     let value: serde_json::Value = serde_json::from_slice(managed_config().bytes()).unwrap();
-    let auto = &value["outbounds"][2];
-    assert_eq!(auto["tag"], "nethop-auto");
-    assert_eq!(
-        auto["outbounds"],
-        serde_json::json!(["nh1s-2222222222222222"])
-    );
-    assert_eq!(auto["url"], "https://www.gstatic.com/generate_204");
-    assert_eq!(auto["interval"], "10m");
-    assert_eq!(auto["tolerance"], 50);
-    assert_eq!(auto["idle_timeout"], "30m");
-    assert_eq!(auto["interrupt_exist_connections"], false);
-
-    let selector = &value["outbounds"][3];
-    assert_eq!(selector["default"], "nethop-auto");
+    let selector = &value["outbounds"][2];
+    assert_eq!(selector["default"], "nh1s-2222222222222222");
     assert_eq!(
         selector["outbounds"],
-        serde_json::json!([
-            "nethop-auto",
-            "nh1s-1111111111111111",
-            "nh1s-2222222222222222"
-        ])
+        serde_json::json!(["nh1s-1111111111111111", "nh1s-2222222222222222"])
     );
     assert_eq!(selector["interrupt_exist_connections"], false);
 }
@@ -82,6 +66,7 @@ fn registry_is_bounded_strict_and_has_bidirectional_lookup() {
     let candidate = candidate();
     let registry = candidate.node_registry().unwrap();
     assert_eq!(registry.records().len(), 2);
+    assert_eq!(registry.auto_pool(), ["nh1s-2222222222222222"]);
     assert_eq!(
         registry
             .by_stable_id("nh1s-2222222222222222")

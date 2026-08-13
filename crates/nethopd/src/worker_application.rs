@@ -1,4 +1,10 @@
-use std::time::{Duration, Instant, SystemTime};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        mpsc::Sender,
+    },
+    time::{Duration, Instant, SystemTime},
+};
 
 #[cfg(feature = "subscription-update")]
 use std::time::UNIX_EPOCH;
@@ -22,7 +28,8 @@ use nethop_core::{ManagedOptions, TunStack};
 use nethop_protocol::PROTOCOL_VERSION;
 use nethop_protocol::{
     ControlError, ControlMethod, ControlParams, ControlRequest, ControlResponse, ErrorDomain,
-    EventKind, WebUiErrorKind, WebUiPayloadOperation,
+    EventKind, NodeBenchmarkCompletedPhase, NodeBenchmarkOperationAck, NodeBenchmarkRunningPhase,
+    NodeBenchmarkTerminalReport, WebUiErrorKind, WebUiPayloadOperation,
 };
 use serde_json::json;
 
@@ -34,6 +41,9 @@ use crate::{
     NetworkController, RestartBudget, RestartDecision, RuntimeHealthVerifier, RuntimeTick,
     UpdateStatus, WorkerControlHandler, WorkerRecoveryError, WorkerRuntime, WorkerRuntimeLimits,
     WorkerServiceError, WorkerServiceTasks,
+};
+use crate::{
+    BenchmarkJob, BenchmarkReport, BenchmarkStatus, BenchmarkTrigger, spawn_benchmark_with_wake,
 };
 use crate::{CandidateChecker, CoreLauncher, OperationalControl, WebUiPayloadStore};
 #[cfg(feature = "subscription-update")]
@@ -52,6 +62,22 @@ use crate::{
 use nethop_subscription::FormatHint;
 
 const IDLE_WAKEUP: Duration = Duration::from_secs(1);
+static BENCHMARK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+struct RunningNodeBenchmark {
+    operation_id: String,
+    job: BenchmarkJob,
+    ordered_node_ids: Vec<String>,
+    generation: u64,
+    tolerance_ms: u32,
+    deadline: Instant,
+    trigger: BenchmarkTrigger,
+}
+
+struct CompletedNodeBenchmark {
+    operation_id: String,
+    document: serde_json::Value,
+}
 
 #[cfg(feature = "subscription-update")]
 fn rule_set_wall_seconds() -> Option<i64> {
@@ -137,6 +163,13 @@ pub enum RuntimeUpdateError {
     Discard,
 }
 
+#[cfg(feature = "subscription-update")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenerationBuildAccounting {
+    SubscriptionRefresh,
+    CachedRebuild,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimePolicyError {
     Capability,
@@ -165,6 +198,11 @@ pub trait RuntimeUpdateSource {
         &mut self,
         _source_id: Option<&str>,
     ) -> Result<(), RuntimeUpdateError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_cached_rebuild(&mut self) -> Result<(), RuntimeUpdateError> {
         Ok(())
     }
 
@@ -276,6 +314,14 @@ where
             .as_mut()
             .ok_or(RuntimeUpdateError::Prepare)?
             .request_source_update(source_id)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_cached_rebuild(&mut self) -> Result<(), RuntimeUpdateError> {
+        self.inner
+            .as_mut()
+            .ok_or(RuntimeUpdateError::Prepare)?
+            .request_cached_rebuild()
     }
 
     #[cfg(feature = "subscription-update")]
@@ -531,6 +577,10 @@ where
     #[cfg(feature = "subscription-update")]
     wifi_scene_override: Option<bool>,
     operational_control: Option<OperationalControl>,
+    node_benchmark: Option<RunningNodeBenchmark>,
+    completed_node_benchmark: Option<CompletedNodeBenchmark>,
+    next_node_benchmark: Duration,
+    worker_wake: Option<Sender<()>>,
     core_version_source: Option<Box<dyn RuntimeCoreVersionSource>>,
     core_update_notifier: Option<Box<dyn UpdateNotificationSink>>,
     core_version_state: Option<Box<dyn CoreVersionStateSink>>,
@@ -637,6 +687,10 @@ where
             #[cfg(feature = "subscription-update")]
             wifi_scene_override: self.wifi_scene_override,
             operational_control: self.operational_control,
+            node_benchmark: self.node_benchmark,
+            completed_node_benchmark: self.completed_node_benchmark,
+            next_node_benchmark: self.next_node_benchmark,
+            worker_wake: self.worker_wake,
             core_version_source: self.core_version_source,
             core_update_notifier: self.core_update_notifier,
             core_version_state: self.core_version_state,
@@ -738,6 +792,10 @@ where
             #[cfg(feature = "subscription-update")]
             wifi_scene_override: None,
             operational_control: None,
+            node_benchmark: None,
+            completed_node_benchmark: None,
+            next_node_benchmark: Duration::from_secs(10 * 60),
+            worker_wake: None,
             core_version_source: None,
             core_update_notifier: None,
             core_version_state: None,
@@ -749,6 +807,11 @@ where
 
     pub fn with_operational_control(mut self, control: OperationalControl) -> Self {
         self.operational_control = Some(control);
+        self
+    }
+
+    pub fn with_worker_wake(mut self, wake: Sender<()>) -> Self {
+        self.worker_wake = Some(wake);
         self
     }
 
@@ -1154,20 +1217,20 @@ where
             .set_update_available(self.updater.is_available());
         if !enabled || !self.updater.is_available() {
             self.control.queue_command(ControlCommand::Stop);
-        } else if self.dry_run
-            || sources_changed
-            || plan.impact() == crate::ApplyImpact::GenerationActivation
-        {
+        } else if sources_changed {
             self.control.queue_command(ControlCommand::Update);
-        } else if plan.impact() == crate::ApplyImpact::NetworkPlan {
-            self.control.queue_command(ControlCommand::Stop);
-            self.control.queue_command(ControlCommand::Start);
         } else if service_changed {
             if self.updater.is_needed() {
                 self.control.queue_command(ControlCommand::Update);
             } else {
                 self.control.queue_command(ControlCommand::Start);
             }
+        } else if self.dry_run || plan.impact() == crate::ApplyImpact::GenerationActivation {
+            self.control
+                .queue_command(ControlCommand::RebuildGeneration);
+        } else if plan.impact() == crate::ApplyImpact::NetworkPlan {
+            self.control.queue_command(ControlCommand::Stop);
+            self.control.queue_command(ControlCommand::Start);
         }
     }
 
@@ -1604,7 +1667,7 @@ where
 
     #[cfg(feature = "subscription-update")]
     fn update(&mut self, now: Duration) -> Result<(), WorkerServiceError> {
-        let result = self.update_inner(now);
+        let result = self.update_inner(now, GenerationBuildAccounting::SubscriptionRefresh);
         let succeeded = result.is_ok() && self.snapshot().last_update == UpdateStatus::Succeeded;
         if let Some(report) = self.updater.take_source_update_report()
             && let Some(store) = self.source_status.as_mut()
@@ -1622,17 +1685,30 @@ where
         result
     }
 
+    #[cfg(feature = "subscription-update")]
+    fn rebuild_generation(&mut self, now: Duration) -> Result<(), WorkerServiceError> {
+        let result = self.update_inner(now, GenerationBuildAccounting::CachedRebuild);
+        // A topology rebuild is not a subscription refresh and must not advance
+        // source health, update timestamps, or scheduler backoff state.
+        let _ = self.updater.take_source_update_report();
+        result
+    }
+
     #[cfg(not(feature = "subscription-update"))]
     fn update(&mut self, _now: Duration) -> Result<(), WorkerServiceError> {
         Ok(())
     }
 
     #[cfg(feature = "subscription-update")]
-    fn update_inner(&mut self, now: Duration) -> Result<(), WorkerServiceError> {
+    fn update_inner(
+        &mut self,
+        now: Duration,
+        accounting: GenerationBuildAccounting,
+    ) -> Result<(), WorkerServiceError> {
         let prepared = match self.updater.prepare() {
             Ok(prepared) => prepared,
             Err(_) => {
-                self.publish_update_status(UpdateStatus::Failed);
+                self.publish_generation_build_status(accounting, UpdateStatus::Failed);
                 return Ok(());
             }
         };
@@ -1662,16 +1738,19 @@ where
             .is_some_and(|config| !config.disk_matches_current())
         {
             let _ = self.updater.discard(prepared);
-            self.publish_update_status(UpdateStatus::Failed);
+            self.publish_generation_build_status(accounting, UpdateStatus::Failed);
             return Ok(());
         }
         if self.dry_run {
             let discarded = self.updater.discard(prepared).is_ok();
-            self.publish_update_status(if discarded {
-                UpdateStatus::Succeeded
-            } else {
-                UpdateStatus::Failed
-            });
+            self.publish_generation_build_status(
+                accounting,
+                if discarded {
+                    UpdateStatus::Succeeded
+                } else {
+                    UpdateStatus::Failed
+                },
+            );
             return if discarded {
                 Ok(())
             } else {
@@ -1681,7 +1760,7 @@ where
         let generation = self.updater.generation(&prepared);
         if self.stop().is_err() {
             let _ = self.updater.discard(prepared);
-            self.publish_update_status(UpdateStatus::Failed);
+            self.publish_generation_build_status(accounting, UpdateStatus::Failed);
             return Err(WorkerServiceError::ShutdownFailed);
         }
         let active = match self.recovery.recover_generation(
@@ -1693,7 +1772,7 @@ where
             Ok(Some(active)) => active,
             Ok(None) | Err(_) => {
                 let _ = self.updater.discard(prepared);
-                self.publish_update_status(UpdateStatus::Failed);
+                self.publish_generation_build_status(accounting, UpdateStatus::Failed);
                 self.start(now);
                 return Ok(());
             }
@@ -1706,7 +1785,7 @@ where
         {
             let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
             let _ = self.updater.discard(prepared);
-            self.publish_update_status(UpdateStatus::Failed);
+            self.publish_generation_build_status(accounting, UpdateStatus::Failed);
             if cleanup_failed {
                 return Err(WorkerServiceError::ShutdownFailed);
             }
@@ -1714,7 +1793,7 @@ where
         }
         if self.updater.commit(prepared).is_err() {
             let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
-            self.publish_update_status(UpdateStatus::Failed);
+            self.publish_generation_build_status(accounting, UpdateStatus::Failed);
             if cleanup_failed {
                 return Err(WorkerServiceError::ShutdownFailed);
             }
@@ -1728,7 +1807,7 @@ where
             .is_some_and(|config| !config.disk_matches_current())
         {
             let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
-            self.publish_update_status(UpdateStatus::Failed);
+            self.publish_generation_build_status(accounting, UpdateStatus::Failed);
             if cleanup_failed {
                 return Err(WorkerServiceError::ShutdownFailed);
             }
@@ -1737,10 +1816,21 @@ where
         self.restart_budget.clear();
         let state = active.state();
         self.runtime = Some(WorkerRuntime::new(active, now, self.limits));
-        self.publish_update_status(UpdateStatus::Succeeded);
+        self.publish_generation_build_status(accounting, UpdateStatus::Succeeded);
         self.publish_snapshot(state, Some(generation));
         self.replay_selector();
         Ok(())
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn publish_generation_build_status(
+        &mut self,
+        accounting: GenerationBuildAccounting,
+        status: UpdateStatus,
+    ) {
+        if accounting == GenerationBuildAccounting::SubscriptionRefresh {
+            self.publish_update_status(status);
+        }
     }
 
     fn replay_selector(&mut self) {
@@ -1782,6 +1872,17 @@ where
                         .request_source_update(None)
                         .map_err(|_| WorkerServiceError::TaskFailed)?;
                     self.update(now)?;
+                }
+                ControlCommand::RebuildGeneration => {
+                    #[cfg(feature = "subscription-update")]
+                    {
+                        self.updater
+                            .request_cached_rebuild()
+                            .map_err(|_| WorkerServiceError::TaskFailed)?;
+                        self.rebuild_generation(now)?;
+                    }
+                    #[cfg(not(feature = "subscription-update"))]
+                    return Err(WorkerServiceError::TaskFailed);
                 }
                 ControlCommand::UpdateSource(source_id) => {
                     #[cfg(feature = "subscription-update")]
@@ -1870,6 +1971,248 @@ where
             object.insert("kind".into(), json!("traffic"));
         }
         self.event_hub.publish(EventKind::Traffic, result);
+    }
+
+    fn benchmark_tolerance_ms(&self) -> u32 {
+        #[cfg(feature = "subscription-update")]
+        if let Some(config) = self.config.as_ref() {
+            return u32::from(
+                config
+                    .current()
+                    .effective()
+                    .proxy()
+                    .urltest()
+                    .tolerance_ms(),
+            );
+        }
+        50
+    }
+
+    fn benchmark_interval(&self) -> Duration {
+        #[cfg(feature = "subscription-update")]
+        if let Some(config) = self.config.as_ref() {
+            return Duration::from_secs(
+                u64::from(
+                    config
+                        .current()
+                        .effective()
+                        .proxy()
+                        .urltest()
+                        .interval_minutes(),
+                ) * 60,
+            );
+        }
+        Duration::from_secs(10 * 60)
+    }
+
+    fn start_periodic_node_benchmark_if_due(&mut self, now: Duration) {
+        if now < self.next_node_benchmark {
+            return;
+        }
+        self.next_node_benchmark = now.saturating_add(self.benchmark_interval());
+        let eligible = self.node_benchmark.is_none()
+            && captures_traffic(self.snapshot().state)
+            && self
+                .operational_control
+                .as_ref()
+                .is_some_and(OperationalControl::selection_is_auto);
+        if eligible {
+            let request_id = nethop_protocol::RequestId::new(format!(
+                "periodic-{}",
+                BENCHMARK_SEQUENCE.load(AtomicOrdering::Relaxed)
+            ))
+            .expect("bounded periodic request ID");
+            let _ = self.start_node_benchmark(request_id, BenchmarkTrigger::Periodic);
+        }
+    }
+
+    fn node_benchmark_ack(
+        running: &RunningNodeBenchmark,
+        joined_existing: bool,
+    ) -> serde_json::Value {
+        serde_json::to_value(NodeBenchmarkOperationAck {
+            operation_id: running.operation_id.clone(),
+            phase: NodeBenchmarkRunningPhase::Running,
+            joined_existing,
+            trigger: running.trigger,
+            candidate_count: running.ordered_node_ids.len(),
+            probe_cutoff_ms: nethop_protocol::NODE_BENCHMARK_PROBE_CUTOFF_MS,
+            deadline_ms: nethop_protocol::NODE_BENCHMARK_DEADLINE_MS,
+        })
+        .expect("benchmark ACK is a bounded protocol DTO")
+    }
+
+    fn start_node_benchmark(
+        &mut self,
+        request_id: nethop_protocol::RequestId,
+        trigger: BenchmarkTrigger,
+    ) -> ControlResponse {
+        let generation = self.snapshot().generation.map(GenerationId::get);
+        if let Some(running) = self.node_benchmark.as_ref() {
+            return ControlResponse::success(
+                request_id,
+                generation,
+                Self::node_benchmark_ack(running, true),
+            );
+        }
+        let Some(generation) = generation else {
+            return ControlResponse::failure(
+                request_id,
+                None,
+                crate::worker_services::unavailable_control_error(
+                    ErrorDomain::Node,
+                    "BENCHMARK-UNAVAILABLE",
+                ),
+            );
+        };
+        let plan = match self
+            .operational_control
+            .as_ref()
+            .ok_or(())
+            .and_then(|control| control.benchmark_plan(trigger, generation).map_err(|_| ()))
+        {
+            Ok(plan) => plan,
+            Err(()) => {
+                return ControlResponse::failure(
+                    request_id,
+                    Some(generation),
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Node,
+                        "BENCHMARK-UNAVAILABLE",
+                    ),
+                );
+            }
+        };
+        let job = match spawn_benchmark_with_wake(
+            plan.endpoint,
+            plan.candidates,
+            plan.trigger,
+            plan.generation,
+            self.worker_wake.clone(),
+        ) {
+            Ok(job) => job,
+            Err(_) => {
+                return ControlResponse::failure(
+                    request_id,
+                    Some(generation),
+                    crate::worker_services::unavailable_control_error(
+                        ErrorDomain::Node,
+                        "BENCHMARK-FAILED",
+                    ),
+                );
+            }
+        };
+        let operation_id = format!(
+            "bench_{:029x}",
+            BENCHMARK_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        );
+        self.completed_node_benchmark = None;
+        let deadline = job.deadline();
+        self.node_benchmark = Some(RunningNodeBenchmark {
+            operation_id: operation_id.clone(),
+            job,
+            ordered_node_ids: plan.ordered_node_ids,
+            generation,
+            tolerance_ms: self.benchmark_tolerance_ms(),
+            deadline,
+            trigger,
+        });
+        ControlResponse::success(
+            request_id,
+            Some(generation),
+            Self::node_benchmark_ack(
+                self.node_benchmark
+                    .as_ref()
+                    .expect("benchmark job was just installed"),
+                false,
+            ),
+        )
+    }
+
+    fn query_node_benchmark(
+        &self,
+        request_id: nethop_protocol::RequestId,
+        operation_id: &str,
+    ) -> ControlResponse {
+        let generation = self.snapshot().generation.map(GenerationId::get);
+        if let Some(running) = self
+            .node_benchmark
+            .as_ref()
+            .filter(|running| running.operation_id == operation_id)
+        {
+            return ControlResponse::success(
+                request_id,
+                generation,
+                Self::node_benchmark_ack(running, true),
+            );
+        }
+        if let Some(completed) = self
+            .completed_node_benchmark
+            .as_ref()
+            .filter(|completed| completed.operation_id == operation_id)
+        {
+            return ControlResponse::success(request_id, generation, completed.document.clone());
+        }
+        ControlResponse::failure(
+            request_id,
+            generation,
+            crate::worker_services::unavailable_control_error(
+                ErrorDomain::Node,
+                "BENCHMARK-NOT-FOUND",
+            ),
+        )
+    }
+
+    fn reap_node_benchmark(&mut self) {
+        let Some(report) = self
+            .node_benchmark
+            .as_mut()
+            .and_then(|running| running.job.try_complete())
+        else {
+            return;
+        };
+        let running = self
+            .node_benchmark
+            .take()
+            .expect("completed benchmark remains worker-owned");
+        let current_generation = self.snapshot().generation.map(GenerationId::get);
+        let mut report: BenchmarkReport = report;
+        let selection = if current_generation != Some(running.generation) {
+            report.status = BenchmarkStatus::Superseded;
+            None
+        } else {
+            self.operational_control.as_mut().and_then(|control| {
+                control
+                    .complete_benchmark(
+                        &report,
+                        &running.ordered_node_ids,
+                        running.tolerance_ms,
+                        running.deadline,
+                    )
+                    .ok()
+            })
+        };
+        let document = serde_json::to_value(NodeBenchmarkTerminalReport {
+            operation_id: running.operation_id.clone(),
+            phase: NodeBenchmarkCompletedPhase::Completed,
+            report,
+            selection,
+        })
+        .expect("terminal benchmark report is a bounded protocol DTO");
+        self.event_hub.publish(
+            EventKind::NodeTest,
+            json!({"kind":"node_test","result":document}),
+        );
+        if let Some(selection) = document.get("selection").filter(|value| !value.is_null()) {
+            self.event_hub.publish(
+                EventKind::NodeActive,
+                json!({"kind":"node_active","selection":selection}),
+            );
+        }
+        self.completed_node_benchmark = Some(CompletedNodeBenchmark {
+            operation_id: running.operation_id,
+            document,
+        });
     }
 
     fn handle_webui_payload(&mut self, request: ControlRequest) -> ControlResponse {
@@ -2004,6 +2347,19 @@ where
     U: RuntimeUpdateSource,
 {
     fn handle(&mut self, request: ControlRequest) -> ControlResponse {
+        if request.method() == ControlMethod::NodeTestAll {
+            return self
+                .start_node_benchmark(request.request_id().clone(), BenchmarkTrigger::Manual);
+        }
+        if request.method() == ControlMethod::NodeTestOperationGet {
+            return self.query_node_benchmark(
+                request.request_id().clone(),
+                request
+                    .params()
+                    .target_value()
+                    .expect("protocol validated benchmark operation ID"),
+            );
+        }
         if matches!(
             request.method(),
             ControlMethod::WebUiPayloadCreate
@@ -2241,7 +2597,6 @@ where
             request.method(),
             ControlMethod::NodeList
                 | ControlMethod::NodeTest
-                | ControlMethod::NodeTestAll
                 | ControlMethod::NodeSelectionGet
                 | ControlMethod::NodeSelectAuto
                 | ControlMethod::NodeSelectManual
@@ -2291,18 +2646,6 @@ where
                             EventKind::NodeTest,
                             json!({"kind":"node_test","result":result}),
                         ),
-                        ControlMethod::NodeTestAll => {
-                            self.event_hub.publish(
-                                EventKind::NodeTest,
-                                json!({"kind":"node_test","result":result}),
-                            );
-                            if let Some(selection) = result.get("selection") {
-                                self.event_hub.publish(
-                                    EventKind::NodeActive,
-                                    json!({"kind":"node_active","selection":selection}),
-                                );
-                            }
-                        }
                         _ => {}
                     }
                     ControlResponse::success(request_id, generation, result)
@@ -3528,20 +3871,6 @@ fn config_schema_document() -> serde_json::Value {
             1,
             256,
         ),
-        ranged_schema_field(
-            "proxy.urltest.concurrency",
-            "integer",
-            json!(10),
-            "proxy",
-            35,
-            true,
-            false,
-            "generation_activation",
-            "normal",
-            2,
-            10,
-            10,
-        ),
         enum_schema_field(
             "applications.mode",
             json!("all"),
@@ -4253,6 +4582,16 @@ where
             .webui_payload_store
             .as_ref()
             .map(|_| self.next_payload_cleanup.saturating_sub(now));
+        let benchmark = self
+            .node_benchmark
+            .as_ref()
+            .map(|running| running.job.remaining());
+        let periodic_benchmark = (captures_traffic(self.snapshot().state)
+            && self
+                .operational_control
+                .as_ref()
+                .is_some_and(OperationalControl::selection_is_auto))
+        .then(|| self.next_node_benchmark.saturating_sub(now));
         runtime
             .into_iter()
             .chain(restart)
@@ -4263,11 +4602,14 @@ where
             .chain(wifi_scene)
             .chain(traffic)
             .chain(payload_cleanup)
+            .chain(benchmark)
+            .chain(periodic_benchmark)
             .min()
             .unwrap_or(IDLE_WAKEUP)
     }
 
     fn run_ready(&mut self) -> Result<(), WorkerServiceError> {
+        self.reap_node_benchmark();
         #[cfg(feature = "subscription-update")]
         self.observe_config_watch_health();
         #[cfg(feature = "subscription-update")]
@@ -4281,6 +4623,7 @@ where
             self.control.queue_command(ControlCommand::Update);
         }
         let now = self.clock.now();
+        self.start_periodic_node_benchmark_if_due(now);
         self.sample_traffic_if_due(now);
         if now >= self.next_payload_cleanup {
             if let Some(store) = self.webui_payload_store.as_ref() {
@@ -4314,6 +4657,9 @@ where
     }
 
     fn shutdown(&mut self) -> Result<(), WorkerServiceError> {
+        if let Some(mut running) = self.node_benchmark.take() {
+            running.job.cancel();
+        }
         self.stop()
     }
 }

@@ -444,6 +444,11 @@ impl RuntimeUpdateSource for TestUpdater {
         self.needed
     }
 
+    fn request_cached_rebuild(&mut self) -> Result<(), RuntimeUpdateError> {
+        self.events.borrow_mut().push("cached_rebuild");
+        Ok(())
+    }
+
     fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError> {
         self.events.borrow_mut().push("prepare");
         if self.fail_prepare {
@@ -1451,6 +1456,77 @@ fn source_change_prepare_failure_does_not_stop_the_active_generation() {
         Some(GenerationId::new(1).unwrap())
     );
     assert_eq!(application.snapshot().last_update, UpdateStatus::Failed);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
+fn non_source_generation_change_requests_a_cached_rebuild() {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://example.test/sub\"\n[proxy]\noutbound_mode = \"rule\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = ConfigStore::new(&config_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let digest = snapshot.digest().to_owned();
+    let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let config_runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let updater = TestUpdater {
+        events: Rc::clone(&update_events),
+        fail_prepare: false,
+        needed: false,
+        generation: GenerationId::new(2).unwrap(),
+        current: true,
+    };
+    let mut application = WorkerApplication::new(
+        TestRecovery::default(),
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater)
+    .with_configuration(config_runtime, false);
+    application.run_ready().unwrap();
+    update_events.borrow_mut().clear();
+    let previous_update_status = application.snapshot().last_update;
+    let request = ControlRequest::new(
+        RequestId::new("proxy-mode-apply").unwrap(),
+        ControlMethod::ConfigApply,
+    )
+    .with_params(ControlParams::config_document(
+        digest,
+        json!({
+            "schema_version": 3,
+            "service": {"enabled": true},
+            "subscriptions": {
+                "sources": [{"name": "Primary", "url": "https://example.test/sub"}]
+            },
+            "proxy": {"outbound_mode": "global"}
+        }),
+    ))
+    .unwrap();
+
+    let response = application.handle(request);
+
+    assert!(response.ok(), "{response:?}");
+    assert_eq!(
+        update_events.borrow().as_slice(),
+        ["cached_rebuild", "prepare", "discard"]
+    );
+    assert_eq!(application.snapshot().last_update, previous_update_status);
 }
 
 #[test]

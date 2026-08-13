@@ -7,9 +7,10 @@ use nethop_core::{
 };
 use nethop_subscription::{CapabilityMatrix, FormatHint, ParserLimits};
 use nethopd::{
-    CandidateChecker, ConfigStore, ManualSourceStore, RunnerError, SourceBody, SourceBodyFetcher,
-    SourceBodyOrigin, SourceConfig, SourceDefinition, SourceIdEntropy, SourceRegistry,
-    SourceRegistryError, SourceUpdateError, SourceUpdateService, UpdateRuntimePolicy,
+    CandidateChecker, ConfigStore, ConfiguredSourceUpdater, ManualSourceStore, RunnerError,
+    RuntimeUpdateSource, SourceBody, SourceBodyFetcher, SourceBodyOrigin, SourceConfig,
+    SourceDefinition, SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceUpdateError,
+    SourceUpdateService, UpdateRuntimePolicy,
 };
 use tempfile::tempdir;
 
@@ -56,6 +57,32 @@ impl SourceBodyFetcher for FakeFetcher {
 struct FakeChecker {
     calls: Rc<Cell<usize>>,
     reject: bool,
+}
+
+struct CountingFetcher {
+    bodies: BTreeMap<String, Vec<u8>>,
+    fresh_calls: Rc<Cell<usize>>,
+    cached_calls: Rc<Cell<usize>>,
+}
+
+impl SourceBodyFetcher for CountingFetcher {
+    fn fetch(&mut self, source: &SourceDefinition) -> Result<SourceBody, SourceUpdateError> {
+        self.fresh_calls.set(self.fresh_calls.get() + 1);
+        self.bodies
+            .get(source.id().as_str())
+            .cloned()
+            .map(|bytes| SourceBody::new(bytes, SourceBodyOrigin::Fresh))
+            .ok_or(SourceUpdateError::Fetch)
+    }
+
+    fn cached(&mut self, source: &SourceDefinition) -> Result<SourceBody, SourceUpdateError> {
+        self.cached_calls.set(self.cached_calls.get() + 1);
+        self.bodies
+            .get(source.id().as_str())
+            .cloned()
+            .map(|bytes| SourceBody::new(bytes, SourceBodyOrigin::LastKnownGood))
+            .ok_or(SourceUpdateError::Cache)
+    }
 }
 
 impl CandidateChecker for FakeChecker {
@@ -220,6 +247,39 @@ fn successful_multi_source_update_deduplicates_checks_and_commits_once() {
     );
     assert_eq!(calls.get(), 1);
     assert_eq!(store.current_generation().unwrap(), Some(report.generation));
+}
+
+#[test]
+fn topology_rebuild_uses_only_cached_subscription_bodies() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let fresh_calls = Rc::new(Cell::new(0));
+    let cached_calls = Rc::new(Cell::new(0));
+    let checker = FakeChecker {
+        calls: Rc::new(Cell::new(0)),
+        reject: false,
+    };
+    let service = SourceUpdateService::new(
+        &store,
+        CountingFetcher {
+            bodies: bodies(&config),
+            fresh_calls: Rc::clone(&fresh_calls),
+            cached_calls: Rc::clone(&cached_calls),
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    );
+    let mut updater = ConfiguredSourceUpdater::new(service, config);
+
+    updater.request_cached_rebuild().unwrap();
+    let prepared = updater.prepare().unwrap();
+    assert_eq!(updater.generation(&prepared), GenerationId::new(1).unwrap());
+    assert_eq!(fresh_calls.get(), 0);
+    assert_eq!(cached_calls.get(), 2);
+    updater.discard(prepared).unwrap();
 }
 
 #[test]

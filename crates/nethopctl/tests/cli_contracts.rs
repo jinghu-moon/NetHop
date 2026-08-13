@@ -1,9 +1,12 @@
+use std::collections::VecDeque;
+
 use nethop_protocol::{
-    ControlError, ControlRequest, ControlResponse, ErrorCode, ErrorDomain, RequestId,
+    ControlError, ControlMethod, ControlRequest, ControlResponse, ErrorCode, ErrorDomain, RequestId,
 };
 use nethopctl::{
     CliCommand, CliError, ControlTransport, build_request, control_timeout, execute,
-    execute_invocation, parse_command, parse_invocation, render_response, render_status_human,
+    execute_invocation, execute_with_input, parse_command, parse_invocation, render_response,
+    render_status_human,
 };
 use serde_json::json;
 
@@ -11,6 +14,138 @@ use serde_json::json;
 struct FakeTransport {
     response: Option<ControlResponse>,
     observed: Vec<ControlRequest>,
+}
+
+#[derive(Debug)]
+struct ScriptedTransport {
+    responses: VecDeque<ControlResponse>,
+    observed: Vec<ControlRequest>,
+}
+
+impl ControlTransport for ScriptedTransport {
+    fn exchange(&mut self, request: &ControlRequest) -> Result<ControlResponse, CliError> {
+        self.observed.push(request.clone());
+        self.responses.pop_front().ok_or(CliError::ConnectionFailed)
+    }
+}
+
+fn benchmark_running(request_id: &str, operation_id: &str) -> ControlResponse {
+    ControlResponse::success(
+        RequestId::new(request_id).unwrap(),
+        Some(7),
+        json!({
+            "operation_id": operation_id,
+            "phase": "running",
+            "joined_existing": false,
+            "trigger": "manual",
+            "candidate_count": 2,
+            "probe_cutoff_ms": 4500,
+            "deadline_ms": 4900
+        }),
+    )
+}
+
+fn benchmark_completed(request_id: &str, operation_id: &str) -> ControlResponse {
+    ControlResponse::success(
+        RequestId::new(request_id).unwrap(),
+        Some(7),
+        json!({
+            "operation_id": operation_id,
+            "phase": "completed",
+            "report": {
+                "status": "success",
+                "trigger": "manual",
+                "generation": 7,
+                "bootstrap_ms": 1,
+                "elapsed_ms": 50,
+                "tested": 1,
+                "succeeded": 1,
+                "timed_out": 0,
+                "failed": 0,
+                "nodes": [{"node_id":"nh1s-0123456789abcdef","state":"success","latency_ms":42}]
+            }
+        }),
+    )
+}
+
+#[test]
+fn node_test_all_polls_one_operation_until_the_typed_terminal_report() {
+    let operation_id = format!("bench_{}", "1".repeat(29));
+    let mut transport = ScriptedTransport {
+        responses: VecDeque::from([
+            benchmark_running("node-bench", &operation_id),
+            benchmark_running("node-bench-q0", &operation_id),
+            benchmark_completed("node-bench-q1", &operation_id),
+        ]),
+        observed: Vec::new(),
+    };
+    let invocation = parse_invocation(["node", "test-all"]).unwrap();
+    let response = execute_with_input(
+        &mut transport,
+        &invocation,
+        RequestId::new("node-bench").unwrap(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(response.result().unwrap()["phase"], "completed");
+    assert_eq!(transport.observed.len(), 3);
+    assert_eq!(transport.observed[0].method(), ControlMethod::NodeTestAll);
+    for request in &transport.observed[1..] {
+        assert_eq!(request.method(), ControlMethod::NodeTestOperationGet);
+        assert_eq!(request.params().target_value(), Some(operation_id.as_str()));
+    }
+    assert_eq!(transport.observed[1].request_id().as_str(), "node-bench-q0");
+    assert_eq!(transport.observed[2].request_id().as_str(), "node-bench-q1");
+}
+
+#[test]
+fn node_test_all_preserves_daemon_failure_and_rejects_invalid_ack() {
+    let operation_id = format!("bench_{}", "2".repeat(29));
+    let failure = ControlResponse::failure(
+        RequestId::new("node-fail-q0").unwrap(),
+        Some(7),
+        ControlError::new(
+            ErrorCode::new(ErrorDomain::Node, "BENCHMARK-FAILED").unwrap(),
+            "benchmark failed",
+        )
+        .unwrap(),
+    );
+    let mut failed = ScriptedTransport {
+        responses: VecDeque::from([
+            benchmark_running("node-fail", &operation_id),
+            failure.clone(),
+        ]),
+        observed: Vec::new(),
+    };
+    let invocation = parse_invocation(["node", "test-all"]).unwrap();
+    let response = execute_with_input(
+        &mut failed,
+        &invocation,
+        RequestId::new("node-fail").unwrap(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(response, failure);
+
+    let mut invalid = ScriptedTransport {
+        responses: VecDeque::from([ControlResponse::success(
+            RequestId::new("node-invalid").unwrap(),
+            Some(7),
+            json!({"phase":"running"}),
+        )]),
+        observed: Vec::new(),
+    };
+    assert_eq!(
+        execute_with_input(
+            &mut invalid,
+            &invocation,
+            RequestId::new("node-invalid").unwrap(),
+            None,
+        )
+        .unwrap_err(),
+        CliError::InvalidResponse
+    );
 }
 
 #[test]
@@ -183,9 +318,15 @@ impl ControlTransport for FakeTransport {
 #[test]
 fn control_timeout_is_method_scoped_and_bounded() {
     assert_eq!(control_timeout(CliCommand::Status, false).as_secs(), 5);
+    assert_eq!(control_timeout(CliCommand::NodeTestAll, false).as_secs(), 6);
+    assert_eq!(control_timeout(CliCommand::NetworkSet, false).as_secs(), 10);
     assert_eq!(
-        control_timeout(CliCommand::NodeTestAll, false).as_secs(),
-        15
+        control_timeout(CliCommand::SubscriptionEnable, false).as_secs(),
+        10
+    );
+    assert_eq!(
+        control_timeout(CliCommand::SubscriptionModeSetMerge, false).as_secs(),
+        10
     );
     assert_eq!(control_timeout(CliCommand::Update, true).as_secs(), 30);
 }

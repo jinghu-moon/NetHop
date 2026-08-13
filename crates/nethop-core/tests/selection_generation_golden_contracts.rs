@@ -85,12 +85,10 @@ fn projection(auto_pool: Vec<String>, source_ids: Vec<String>) -> Value {
     )
     .unwrap();
     let outbounds = config["outbounds"].as_array().unwrap();
-    let group = |tag: &str| {
-        outbounds
-            .iter()
-            .find(|outbound| outbound["tag"] == tag)
-            .unwrap()
-    };
+    let selector = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "nethop-select")
+        .unwrap();
     let registry_auto = registry["records"]
         .as_array()
         .unwrap()
@@ -99,10 +97,10 @@ fn projection(auto_pool: Vec<String>, source_ids: Vec<String>) -> Value {
         .map(|record| record["stable_node_id"].clone())
         .collect::<Vec<_>>();
     json!({
-        "auto_pool": group("nethop-auto")["outbounds"],
-        "selector": group("nethop-select")["outbounds"],
-        "default": group("nethop-select")["default"],
-        "interrupt_exist_connections": group("nethop-select")["interrupt_exist_connections"],
+        "auto_pool": registry["auto_pool"],
+        "selector": selector["outbounds"],
+        "default": selector["default"],
+        "interrupt_exist_connections": selector["interrupt_exist_connections"],
         "registry_auto": registry_auto,
         "node_count": manifest["node_count"],
         "source_ids": manifest["source_ids"],

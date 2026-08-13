@@ -16,7 +16,17 @@ pub const fn control_timeout(command: CliCommand, wait: bool) -> Duration {
     if wait {
         Duration::from_secs(30)
     } else if matches!(command, CliCommand::NodeTestAll) {
-        Duration::from_secs(15)
+        Duration::from_secs(6)
+    } else if matches!(
+        command,
+        CliCommand::NetworkSet
+            | CliCommand::SubscriptionEnable
+            | CliCommand::SubscriptionDisable
+            | CliCommand::SubscriptionModeSetSingle
+            | CliCommand::SubscriptionModeSetMerge
+            | CliCommand::SubscriptionSelect
+    ) {
+        Duration::from_secs(10)
     } else {
         Duration::from_secs(5)
     }
@@ -869,9 +879,58 @@ pub fn execute_with_input(
     input: Option<Value>,
 ) -> Result<ControlResponse, CliError> {
     let request = build_request(invocation, request_id.clone(), input)?;
-    let response = transport.exchange(&request)?;
+    let mut response = transport.exchange(&request)?;
     if response.request_id() != &request_id {
         return Err(CliError::ResponseRequestMismatch);
+    }
+    if invocation.command() == CliCommand::NodeTestAll && response.ok() {
+        let ack: nethop_protocol::NodeBenchmarkOperationAck = response
+            .result()
+            .cloned()
+            .and_then(|result| serde_json::from_value(result).ok())
+            .ok_or(CliError::InvalidResponse)?;
+        ack.validate().map_err(|_| CliError::InvalidResponse)?;
+        let operation_id = ack.operation_id;
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        let mut sequence = 0_u32;
+        loop {
+            let query_id = RequestId::new(format!("{}-q{sequence}", request_id.as_str()))
+                .map_err(|_| CliError::RequestFailed)?;
+            let query = ControlRequest::new(query_id.clone(), ControlMethod::NodeTestOperationGet)
+                .with_params(ControlParams::target(operation_id.clone()))
+                .map_err(|_| CliError::RequestFailed)?;
+            response = transport.exchange(&query)?;
+            if response.request_id() != &query_id {
+                return Err(CliError::ResponseRequestMismatch);
+            }
+            if !response.ok() {
+                break;
+            }
+            let result = response
+                .result()
+                .cloned()
+                .ok_or(CliError::InvalidResponse)?;
+            if result.get("phase").and_then(Value::as_str) == Some("completed") {
+                let terminal: nethop_protocol::NodeBenchmarkTerminalReport =
+                    serde_json::from_value(result).map_err(|_| CliError::InvalidResponse)?;
+                terminal.validate().map_err(|_| CliError::InvalidResponse)?;
+                if terminal.operation_id != operation_id {
+                    return Err(CliError::InvalidResponse);
+                }
+                break;
+            }
+            let running: nethop_protocol::NodeBenchmarkOperationAck =
+                serde_json::from_value(result).map_err(|_| CliError::InvalidResponse)?;
+            running.validate().map_err(|_| CliError::InvalidResponse)?;
+            if running.operation_id != operation_id {
+                return Err(CliError::InvalidResponse);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(CliError::RequestFailed);
+            }
+            sequence = sequence.checked_add(1).ok_or(CliError::RequestFailed)?;
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
     Ok(response)
 }

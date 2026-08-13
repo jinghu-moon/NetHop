@@ -1,7 +1,7 @@
 {
   "auto_pool": ["nh1s-1111111111111111", "nh1s-2222222222222222"],
-  "selector": ["nethop-auto", "nh1s-1111111111111111", "nh1s-2222222222222222"],
-  "default": "nethop-auto",
+  "selector": ["nh1s-1111111111111111", "nh1s-2222222222222222"],
+  "default": "nh1s-1111111111111111",
   "interrupt_exist_connections": false,
   "registry_auto": ["nh1s-1111111111111111", "nh1s-2222222222222222"],
   "node_count": 2,

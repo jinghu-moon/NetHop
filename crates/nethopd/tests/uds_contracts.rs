@@ -30,6 +30,14 @@ fn server_timeout_is_bounded() {
     );
 }
 
+#[test]
+fn default_server_timeout_covers_synchronous_generation_activation() {
+    assert_eq!(
+        ControlServerLimits::default().io_timeout(),
+        Duration::from_secs(10)
+    );
+}
+
 #[cfg(unix)]
 mod unix {
     use std::{

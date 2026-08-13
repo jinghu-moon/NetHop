@@ -14,7 +14,7 @@ use crate::config_model::{EffectiveConfig, UserConfigWire};
 pub const CONFIG_SCHEMA_VERSION: u32 = 3;
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 pub const MAX_SOURCES: usize = 16;
-pub(crate) const MAX_AUTO_CANDIDATES: u16 = 256;
+pub(crate) const MAX_AUTO_CANDIDATES: u16 = 64;
 const MAX_STABLE_READ_ATTEMPTS: usize = 3;
 const MAX_TEMP_ATTEMPTS: u64 = 16;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -200,10 +200,6 @@ fn canonical_toml(wire: &UserConfigWire) -> Result<Vec<u8>, ConfigError> {
         .replace(
             "[[subscriptions.sources]]\n",
             "[[subscriptions.sources]]\n# User-visible name and HTTPS subscription URL.\n",
-        )
-        .replace(
-            "concurrency = 10\n",
-            "# sing-box 1.13.15 uses a fixed internal URL-test concurrency of 10.\nconcurrency = 10\n",
         );
     let output = format!(
         "# NetHop user configuration\n\

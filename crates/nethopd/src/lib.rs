@@ -17,6 +17,7 @@ pub mod events;
 pub mod log_retention;
 #[cfg(feature = "subscription-update")]
 pub mod manual_source;
+pub mod node_benchmark;
 pub mod operational_control;
 pub mod process;
 pub mod ruleset;
@@ -95,6 +96,19 @@ pub use log_retention::{
 };
 #[cfg(feature = "subscription-update")]
 pub use manual_source::{ManualSource, ManualSourceError, ManualSourceStore};
+pub use nethop_protocol::{
+    BenchmarkDiagnostic, BenchmarkReport, BenchmarkStatus, BenchmarkTrigger, NodeProbeOutcome,
+    NodeProbeState,
+};
+pub use node_benchmark::{
+    AutoSelectionDecision, BenchmarkCandidate, BenchmarkEndpoint, BenchmarkError, BenchmarkJob,
+    MAX_BENCHMARK_CANDIDATES, OPERATION_DEADLINE, PROBE_CUTOFF, choose_auto_target, run_benchmark,
+    spawn_benchmark, spawn_benchmark_with_wake,
+};
+#[cfg(feature = "benchmark-evidence")]
+pub use node_benchmark::{
+    BenchmarkEngineMetrics, benchmark_engine_metrics, reset_benchmark_engine_metrics,
+};
 pub use operational_control::{OperationalControl, OperationalControlError, ReplayResult};
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,

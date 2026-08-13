@@ -293,11 +293,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         .reconcile(&config_snapshot, &mut SystemSourceIdEntropy)
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     #[cfg(feature = "subscription-update")]
-    let restore_current = store
-        .current_manifest()
-        .map_err(|_| ApplicationError::WorkerInitializationFailed)?
-        .and_then(|manifest| manifest.source_config_digest)
-        .is_some_and(|digest| digest == source_config.source_config_digest());
+    let restore_current = current_generation_matches(&store, source_config.source_config_digest());
     #[cfg(feature = "subscription-update")]
     report_worker_stage("sources_reconciled");
     #[cfg(feature = "subscription-update")]
@@ -451,13 +447,16 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
     );
     report_worker_stage("recovery_ready");
     #[cfg(feature = "subscription-update")]
-    let (watcher, wake_receiver) = {
+    let (worker_wake, wake_receiver) = std::sync::mpsc::channel();
+    #[cfg(feature = "subscription-update")]
+    let watcher = {
         let mut paths = vec![runtime.root().join("config")];
         let module_config = PathBuf::from("/data/adb/modules/nethop/config");
         if module_config.is_dir() && !paths.contains(&module_config) {
             paths.push(module_config);
         }
-        ConfigWatcher::start(&paths).map_err(|_| ApplicationError::WorkerInitializationFailed)?
+        ConfigWatcher::start_with_wake(&paths, worker_wake.clone())
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?
     };
     #[cfg(feature = "subscription-update")]
     let watcher_dirty = watcher.dirty();
@@ -601,6 +600,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         .with_event_log_directory(runtime.root().join("logs"))
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?
         .with_config_wake(watcher_dirty, watcher_healthy)
+        .with_worker_wake(worker_wake)
     };
     report_worker_stage("application_ready");
     #[cfg(not(feature = "subscription-update"))]
@@ -632,6 +632,20 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
 #[cfg(all(unix, feature = "subscription-update"))]
 fn report_worker_stage(stage: &'static str) {
     eprintln!("nethopd worker init stage: {stage}");
+}
+
+#[cfg(feature = "subscription-update")]
+#[cfg_attr(not(unix), allow(dead_code))]
+fn current_generation_matches(
+    store: &nethop_core::GenerationStore,
+    source_config_digest: &str,
+) -> bool {
+    store
+        .current_manifest()
+        .ok()
+        .flatten()
+        .and_then(|manifest| manifest.source_config_digest)
+        .is_some_and(|digest| digest == source_config_digest)
 }
 
 #[cfg(all(unix, not(feature = "subscription-update")))]
@@ -798,4 +812,29 @@ pub enum ApplicationError {
     Worker(#[from] WorkerServiceError),
     #[error("worker supervisor failed")]
     Supervisor(#[from] SupervisorError),
+}
+
+#[cfg(all(test, feature = "subscription-update"))]
+mod tests {
+    use super::current_generation_matches;
+    use nethop_core::GenerationStore;
+
+    #[test]
+    fn invalid_derived_generation_is_rebuilt_instead_of_aborting_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = GenerationStore::new(directory.path()).unwrap();
+        let generations = directory.path().join("generations");
+        std::fs::create_dir(generations.join("1")).unwrap();
+        std::fs::write(generations.join("current"), b"1\n").unwrap();
+
+        assert!(!current_generation_matches(&store, &"a".repeat(64)));
+    }
+
+    #[test]
+    fn missing_generation_requires_a_fresh_subscription_build() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = GenerationStore::new(directory.path()).unwrap();
+
+        assert!(!current_generation_matches(&store, &"a".repeat(64)));
+    }
 }

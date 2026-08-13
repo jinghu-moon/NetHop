@@ -14,7 +14,6 @@ const MAX_NODE_NAME_BYTES: usize = 128;
 const MAX_PROTOCOL_BYTES: usize = 32;
 const MAX_NODE_SOURCES: usize = 16;
 const MAX_SELECTION_STORE_BYTES: u64 = 512;
-const MAX_GROUP_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SelectionModelError {
@@ -226,33 +225,24 @@ pub fn resolve_active_terminal(
     groups: &BTreeMap<String, GroupState>,
     registry: &GenerationNodeRegistry,
 ) -> ActiveTerminal {
-    let mut current = root;
-    let mut visited = HashSet::new();
-    for depth in 0..=MAX_GROUP_DEPTH {
-        if current == "direct" {
-            return ActiveTerminal::Direct;
-        }
-        if current == "block" {
-            return ActiveTerminal::Block;
-        }
-        if let Some(record) = registry.by_internal_tag(current) {
-            return StableNodeId::new(record.stable_node_id()).map_or(
+    let Some(current) = groups.get(root).and_then(GroupState::now) else {
+        return ActiveTerminal::Unresolved(SelectionDiagnosticCode::ActiveNodeUnresolved);
+    };
+    if current == "direct" {
+        return ActiveTerminal::Direct;
+    }
+    if current == "block" {
+        return ActiveTerminal::Block;
+    }
+    registry.by_internal_tag(current).map_or(
+        ActiveTerminal::Unresolved(SelectionDiagnosticCode::ActiveNodeUnresolved),
+        |record| {
+            StableNodeId::new(record.stable_node_id()).map_or(
                 ActiveTerminal::Unresolved(SelectionDiagnosticCode::ActiveNodeUnresolved),
                 ActiveTerminal::Node,
-            );
-        }
-        if depth == MAX_GROUP_DEPTH {
-            return ActiveTerminal::Unresolved(SelectionDiagnosticCode::NodeGroupDepth);
-        }
-        if !visited.insert(current.to_owned()) {
-            return ActiveTerminal::Unresolved(SelectionDiagnosticCode::NodeGroupCycle);
-        }
-        let Some(next) = groups.get(current).and_then(GroupState::now) else {
-            return ActiveTerminal::Unresolved(SelectionDiagnosticCode::ActiveNodeUnresolved);
-        };
-        current = next;
-    }
-    ActiveTerminal::Unresolved(SelectionDiagnosticCode::NodeGroupDepth)
+            )
+        },
+    )
 }
 
 fn valid_internal_tag(value: &str) -> bool {
@@ -487,10 +477,6 @@ pub enum SelectionDiagnosticCode {
     NodeSelectionStale,
     #[serde(rename = "NH-NODE-ACTIVE-UNRESOLVED")]
     ActiveNodeUnresolved,
-    #[serde(rename = "NH-NODE-GROUP-CYCLE")]
-    NodeGroupCycle,
-    #[serde(rename = "NH-NODE-GROUP-DEPTH")]
-    NodeGroupDepth,
     #[serde(rename = "NH-NODE-TEST-PARTIAL")]
     NodeTestPartial,
 }

@@ -962,7 +962,6 @@ fn scalar_pointer(field_id: &str) -> Option<&'static str> {
         "proxy.urltest.interval_minutes" => Some("/proxy/urltest/interval_minutes"),
         "proxy.urltest.tolerance_ms" => Some("/proxy/urltest/tolerance_ms"),
         "proxy.urltest.max_candidates" => Some("/proxy/urltest/max_candidates"),
-        "proxy.urltest.concurrency" => Some("/proxy/urltest/concurrency"),
         "applications.mode" => Some("/applications/mode"),
         "network.capture_mode" => Some("/network/capture_mode"),
         "network.proxy_tcp" => Some("/network/proxy_tcp"),

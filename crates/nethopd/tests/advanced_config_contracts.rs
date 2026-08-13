@@ -43,7 +43,6 @@ outbound_mode = "rule"
 interval_minutes = 10
 tolerance_ms = 50
 max_candidates = 64
-concurrency = 10
 
 [applications]
 mode = "whitelist"
@@ -287,11 +286,6 @@ fn advanced_ranges_and_collections_fail_closed() {
             ConfigError::InvalidProxy,
         ),
         (
-            "concurrency = 10",
-            "concurrency = 17",
-            ConfigError::InvalidProxy,
-        ),
-        (
             "retention_days = 7",
             "retention_days = 31",
             ConfigError::InvalidLogging,
@@ -442,7 +436,7 @@ fn canonical_write_preserves_the_complete_typed_document() {
     }
     assert!(text.contains("# Persistent proxy switch."));
     assert!(text.contains("# User-visible name and HTTPS subscription URL."));
-    assert!(text.contains("# sing-box 1.13.15 uses a fixed internal URL-test concurrency of 10."));
+    assert!(!text.contains("concurrency"));
     assert!(text.find("com.example.alpha").unwrap() < text.find("com.example.beta").unwrap());
     assert!(text.find("10123").unwrap() < text.find("10124").unwrap());
     assert!(text.find("203.0.113.0/24").unwrap() < text.find("203.0.114.0/24").unwrap());

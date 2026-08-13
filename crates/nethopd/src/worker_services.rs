@@ -120,9 +120,14 @@ pub fn build_candidate(
         .map(|node_id| node_id.as_str().to_owned())
         .collect::<Vec<_>>();
     let outbounds = adapt_terminal_outbounds(&conversion.nodes)?;
-    let managed = ManagedProfile::new(profile.capture, outbounds, auto_tags, profile.clash_api)?
-        .with_tun_stack(profile.tun_stack)
-        .with_options(profile.options);
+    let managed = ManagedProfile::new(
+        profile.capture,
+        outbounds,
+        auto_tags.clone(),
+        profile.clash_api,
+    )?
+    .with_tun_stack(profile.tun_stack)
+    .with_options(profile.options);
     let config = ManagedConfig::from_profile(managed)?;
     let auto_ids = pools
         .auto()
@@ -153,7 +158,7 @@ pub fn build_candidate(
         })
         .collect::<Result<Vec<_>, BuildCandidateError>>()?;
     Ok(Candidate::new(generation, config)
-        .with_node_registry(GenerationNodeRegistry::new(records)?)?)
+        .with_node_registry(GenerationNodeRegistry::with_auto_pool(records, auto_tags)?)?)
 }
 
 #[cfg(feature = "subscription-update")]
@@ -264,6 +269,7 @@ pub enum ControlCommand {
     Stop,
     Probe,
     Update,
+    RebuildGeneration,
     UpdateSource(String),
     RuleSetUpdate,
 }
@@ -422,6 +428,7 @@ impl ControlRequestHandler for WorkerControlHandler {
             ControlMethod::NodeList
             | ControlMethod::NodeTest
             | ControlMethod::NodeTestAll
+            | ControlMethod::NodeTestOperationGet
             | ControlMethod::NodeSelectionGet
             | ControlMethod::NodeSelectAuto
             | ControlMethod::NodeSelectManual

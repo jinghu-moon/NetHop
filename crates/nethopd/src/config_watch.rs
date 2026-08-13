@@ -7,7 +7,7 @@ use std::{
 use std::{
     sync::{
         atomic::Ordering,
-        mpsc::{self, Receiver},
+        mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
 };
@@ -38,6 +38,15 @@ pub struct ConfigWatcher {
 impl ConfigWatcher {
     #[cfg(unix)]
     pub fn start(paths: &[PathBuf]) -> Result<(Self, Receiver<()>), ConfigWatchError> {
+        let (sender, receiver) = mpsc::channel();
+        Ok((Self::start_with_wake(paths, sender)?, receiver))
+    }
+
+    #[cfg(unix)]
+    pub fn start_with_wake(
+        paths: &[PathBuf],
+        sender: Sender<()>,
+    ) -> Result<Self, ConfigWatchError> {
         let paths = validate_paths(paths)?;
         let mut stop_pipe = [0; 2];
         // SAFETY: pipe2 fills two valid descriptors.
@@ -46,7 +55,6 @@ impl ConfigWatcher {
         }
         let dirty = Arc::new(AtomicBool::new(false));
         let healthy = Arc::new(AtomicBool::new(false));
-        let (sender, receiver) = mpsc::channel();
         let dirty_thread = Arc::clone(&dirty);
         let healthy_thread = Arc::clone(&healthy);
         let stop_read = stop_pipe[0];
@@ -85,21 +93,26 @@ impl ConfigWatcher {
                 unsafe { libc::close(stop_read) };
             })
             .map_err(|_| ConfigWatchError::Initialize)?;
-        Ok((
-            Self {
-                dirty,
-                healthy,
-                stop_fd: Some(stop_write),
-                thread: Some(thread),
-            },
-            receiver,
-        ))
+        Ok(Self {
+            dirty,
+            healthy,
+            stop_fd: Some(stop_write),
+            thread: Some(thread),
+        })
     }
 
     #[cfg(not(unix))]
     pub fn start(
         _paths: &[PathBuf],
     ) -> Result<(Self, std::sync::mpsc::Receiver<()>), ConfigWatchError> {
+        Err(ConfigWatchError::Unsupported)
+    }
+
+    #[cfg(not(unix))]
+    pub fn start_with_wake(
+        _paths: &[PathBuf],
+        _sender: std::sync::mpsc::Sender<()>,
+    ) -> Result<Self, ConfigWatchError> {
         Err(ConfigWatchError::Unsupported)
     }
 

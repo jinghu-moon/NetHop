@@ -505,14 +505,29 @@ where
         self.prepare_selected(config, Some(source_id))
     }
 
+    pub fn prepare_cached(
+        &mut self,
+        config: &SourceConfig,
+    ) -> Result<PreparedSourceUpdate, SourceUpdateError> {
+        self.prepare_inputs(config, SourcePrepareMode::CachedOnly)
+    }
+
     fn prepare_selected(
         &mut self,
         config: &SourceConfig,
         selected: Option<&SourceId>,
     ) -> Result<PreparedSourceUpdate, SourceUpdateError> {
+        self.prepare_inputs(config, SourcePrepareMode::Refresh(selected))
+    }
+
+    fn prepare_inputs(
+        &mut self,
+        config: &SourceConfig,
+        mode: SourcePrepareMode<'_>,
+    ) -> Result<PreparedSourceUpdate, SourceUpdateError> {
         let generation = self.next_generation()?;
         let active_sources: Vec<_> = config.active_sources().collect();
-        if let Some(source_id) = selected
+        if let SourcePrepareMode::Refresh(Some(source_id)) = mode
             && !active_sources.iter().any(|source| source.id() == source_id)
         {
             return Err(SourceUpdateError::UnknownSource);
@@ -520,10 +535,15 @@ where
         let mut inputs = Vec::with_capacity(active_sources.len());
         let mut details = BTreeMap::new();
         for source in &active_sources {
-            let body = if selected.is_none_or(|source_id| source.id() == source_id) {
-                self.fetcher.fetch(source)
-            } else {
-                self.fetcher.cached(source)
+            let body = match mode {
+                SourcePrepareMode::Refresh(selected)
+                    if selected.is_none_or(|source_id| source.id() == source_id) =>
+                {
+                    self.fetcher.fetch(source)
+                }
+                SourcePrepareMode::Refresh(_) | SourcePrepareMode::CachedOnly => {
+                    self.fetcher.cached(source)
+                }
             };
             match body {
                 Ok(body) => {
@@ -545,7 +565,7 @@ where
                         filter: source.filter().clone(),
                     });
                 }
-                Err(error) if selected.is_none() => {
+                Err(error) if matches!(mode, SourcePrepareMode::Refresh(None)) => {
                     details.insert(
                         source.id().clone(),
                         SourceUpdateDetail::failed(source.id().clone(), error.code()),
@@ -693,12 +713,25 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SourcePrepareMode<'a> {
+    Refresh(Option<&'a SourceId>),
+    CachedOnly,
+}
+
 pub struct ConfiguredSourceUpdater<'a, F, C> {
     service: SourceUpdateService<'a, F, C>,
     config: SourceConfig,
     pending_import: Option<PendingImport>,
-    pending_source: Option<SourceId>,
+    pending_update: Option<PendingUpdate>,
     last_report: Option<SourceUpdateReport>,
+}
+
+#[derive(Debug)]
+enum PendingUpdate {
+    RefreshAll,
+    RefreshSource(SourceId),
+    CachedRebuild,
 }
 
 fn effective_source_digest(config: &SourceConfig, manual_digest: Option<&str>) -> String {
@@ -760,7 +793,7 @@ where
             service,
             config,
             pending_import: None,
-            pending_source: None,
+            pending_update: None,
             last_report: None,
         }
     }
@@ -795,10 +828,21 @@ where
         }) {
             return Err(RuntimeUpdateError::Prepare);
         }
-        if self.pending_source.is_some() {
+        if self.pending_update.is_some() || self.pending_import.is_some() {
             return Err(RuntimeUpdateError::Prepare);
         }
-        self.pending_source = parsed;
+        self.pending_update = Some(match parsed {
+            Some(source_id) => PendingUpdate::RefreshSource(source_id),
+            None => PendingUpdate::RefreshAll,
+        });
+        Ok(())
+    }
+
+    fn request_cached_rebuild(&mut self) -> Result<(), RuntimeUpdateError> {
+        if self.pending_update.is_some() || self.pending_import.is_some() {
+            return Err(RuntimeUpdateError::Prepare);
+        }
+        self.pending_update = Some(PendingUpdate::CachedRebuild);
         Ok(())
     }
 
@@ -831,10 +875,16 @@ where
                 )
                 .map_err(|_| RuntimeUpdateError::Prepare)
         } else {
-            let selected = self.pending_source.take();
-            let prepared = match selected.as_ref() {
-                Some(source_id) => self.service.prepare_source(&self.config, source_id),
-                None => self.service.prepare(&self.config),
+            let requested = self
+                .pending_update
+                .take()
+                .unwrap_or(PendingUpdate::RefreshAll);
+            let prepared = match requested {
+                PendingUpdate::RefreshAll => self.service.prepare(&self.config),
+                PendingUpdate::RefreshSource(source_id) => {
+                    self.service.prepare_source(&self.config, &source_id)
+                }
+                PendingUpdate::CachedRebuild => self.service.prepare_cached(&self.config),
             };
             prepared.map_err(|_| RuntimeUpdateError::Prepare)
         }
@@ -883,7 +933,7 @@ where
         format_hint: FormatHint,
         candidate_digest: String,
     ) -> Result<(), RuntimeUpdateError> {
-        if self.pending_import.is_some() {
+        if self.pending_import.is_some() || self.pending_update.is_some() {
             return Err(RuntimeUpdateError::Prepare);
         }
         self.pending_import = Some(PendingImport {

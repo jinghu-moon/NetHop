@@ -117,8 +117,8 @@ fn managed_composer_generates_tproxy_profile_with_controlled_topology() {
     );
     assert_eq!(value["outbounds"][0]["tag"], "direct");
     assert_eq!(value["outbounds"][1]["tag"], "block");
-    assert_eq!(value["outbounds"][2]["tag"], "nethop-auto");
-    assert_eq!(value["outbounds"][3]["tag"], "nethop-select");
+    assert_eq!(value["outbounds"][2]["tag"], "nethop-select");
+    assert_eq!(value["outbounds"][2]["default"], "node-a");
     assert_eq!(value["dns"]["servers"][0]["type"], "https");
     assert_eq!(value["dns"]["servers"][0]["tag"], "dns-direct");
     assert_eq!(value["dns"]["servers"][0]["server"], "223.5.5.5");
@@ -258,13 +258,11 @@ fn managed_options_control_urltest_logging_and_route_without_raw_json() {
         serde_json::from_slice(ManagedConfig::from_profile(profile).unwrap().bytes()).unwrap();
 
     assert_eq!(value["log"]["level"], "debug");
-    assert_eq!(value["outbounds"][2]["interval"], "15m");
-    assert_eq!(value["outbounds"][2]["tolerance"], 75);
     assert_eq!(
         value["outbounds"][2]["outbounds"].as_array().unwrap().len(),
-        1
+        2
     );
-    assert_eq!(value["outbounds"][3]["default"], "nethop-auto");
+    assert_eq!(value["outbounds"][2]["default"], "node-a");
     assert!(
         value["route"]["rules"]
             .as_array()

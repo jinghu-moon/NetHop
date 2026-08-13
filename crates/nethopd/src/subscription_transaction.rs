@@ -25,8 +25,8 @@ pub enum CommitPhase {
     Checked,
     Sealed,
     Journaled,
-    GenerationPublished,
     ConfigPublished,
+    GenerationPublished,
     Committed,
 }
 
@@ -37,8 +37,8 @@ impl CommitPhase {
             Self::Checked => 1,
             Self::Sealed => 2,
             Self::Journaled => 3,
-            Self::GenerationPublished => 4,
-            Self::ConfigPublished => 5,
+            Self::ConfigPublished => 4,
+            Self::GenerationPublished => 5,
             Self::Committed => 6,
         }
     }
@@ -209,8 +209,11 @@ impl CommitJournalStore {
         journal: &mut CommitJournal,
         phase: CommitPhase,
     ) -> Result<(), TransactionError> {
-        journal.advance(phase)?;
-        self.write(journal)
+        let mut candidate = journal.clone();
+        candidate.advance(phase)?;
+        self.write(&candidate)?;
+        *journal = candidate;
+        Ok(())
     }
 
     pub fn complete(&self, journal: &mut CommitJournal) -> Result<(), TransactionError> {

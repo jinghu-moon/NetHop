@@ -80,10 +80,7 @@ fn selector_document(now: &str, members: &[&str]) -> String {
         serde_json::json!({"type":"Selector","now":now,"all":members}),
     );
     for member in members {
-        proxies.insert(
-            (*member).to_owned(),
-            serde_json::json!({"type": if *member == "nethop-auto" {"URLTest"} else {"VLESS"}}),
-        );
+        proxies.insert((*member).to_owned(), serde_json::json!({"type":"VLESS"}));
     }
     serde_json::json!({"proxies":proxies}).to_string()
 }
@@ -146,7 +143,7 @@ fn generation_root(root: &std::path::Path, tags: &[&str]) -> std::path::PathBuf 
                 format!("Node {tag}"),
                 "vless",
                 vec!["src_0123456789abcdef0123456789abcdef".into()],
-                false,
+                true,
             )
             .unwrap()
         })
@@ -158,67 +155,6 @@ fn generation_root(root: &std::path::Path, tags: &[&str]) -> std::path::PathBuf 
     )
     .unwrap();
     generations
-}
-
-#[test]
-fn test_all_exposes_only_stable_ids_from_the_active_generation() {
-    let directory = tempdir().unwrap();
-    let root = directory.path().canonicalize().unwrap();
-    let first = "nh1s-0123456789abcdef";
-    let second = "nh1s-fedcba9876543210";
-    let (address, server) = serve(vec![
-        (
-            200,
-            serde_json::json!({
-                second: 87,
-                "direct": 1,
-                "nh1s-aaaaaaaaaaaaaaaa": 22,
-                first: 42,
-            })
-            .to_string(),
-        ),
-        (
-            200,
-            selector_document("nethop-auto", &["nethop-auto", first, second]),
-        ),
-    ]);
-    let generations = generation_root(&root, &[first, second]);
-    let mut control = OperationalControl::new(
-        api(address),
-        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
-        root.join("diagnostics-latest.json"),
-    )
-    .unwrap()
-    .with_generation_root(generations)
-    .unwrap();
-    let policy = CapturePolicy::new(
-        CaptureMode::Tproxy,
-        true,
-        Some(7893),
-        Some(131_072),
-        Vec::new(),
-        vec![0],
-    )
-    .unwrap();
-
-    let result = control
-        .handle(
-            ControlMethod::NodeTestAll,
-            &ControlParams::default(),
-            RuntimeState::RunningTproxy,
-            None,
-            &policy,
-        )
-        .unwrap();
-    assert_eq!(
-        result["results"],
-        serde_json::json!([
-            {"id": first, "latency_ms": 42},
-            {"id": second, "latency_ms": 87},
-        ])
-    );
-    assert_eq!(result["selection"]["intent"]["mode"], "auto");
-    assert_eq!(server.join().unwrap().len(), 2);
 }
 
 #[test]
@@ -266,10 +202,7 @@ fn manager_operational_status_is_compact_and_secret_free() {
     let (address, server) = serve(vec![
         (
             200,
-            selector_document(
-                "nh1s-0123456789abcdef",
-                &["nethop-auto", "nh1s-0123456789abcdef"],
-            ),
+            selector_document("nh1s-0123456789abcdef", &["nh1s-0123456789abcdef"]),
         ),
         (200, connections),
     ]);
@@ -329,7 +262,7 @@ fn replay_restores_existing_selection() {
     let (address, server) = serve(vec![
         (
             200,
-            selector_document("nethop-auto", &["nethop-auto", "nh1s-0123456789abcdef"]),
+            selector_document("nh1s-0123456789abcdef", &["nh1s-0123456789abcdef"]),
         ),
         (204, String::new()),
     ]);
@@ -354,11 +287,7 @@ fn replay_falls_back_to_auto_when_a_node_disappears() {
     store
         .save(&NodeSelectionIntent::Manual { node_id: gone }, 1)
         .unwrap();
-    let selector = selector_document(
-        "nh1s-0123456789abcdef",
-        &["nethop-auto", "nh1s-0123456789abcdef"],
-    );
-    let (address, server) = serve(vec![(200, selector), (204, String::new())]);
+    let (address, server) = serve(vec![]);
     let generations = generation_root(&root, &["nh1s-0123456789abcdef"]);
     let mut control =
         OperationalControl::new(api(address), store, root.join("diagnostics-latest.json"))
@@ -377,8 +306,7 @@ fn replay_falls_back_to_auto_when_a_node_disappears() {
             .0,
         NodeSelectionIntent::Auto
     );
-    let requests = server.join().unwrap();
-    assert!(requests[1].ends_with(r#"{"name":"nethop-auto"}"#));
+    assert!(server.join().unwrap().is_empty());
 }
 
 #[test]

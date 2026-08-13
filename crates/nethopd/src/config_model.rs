@@ -213,8 +213,6 @@ pub(crate) struct UrltestWire {
     tolerance_ms: u16,
     #[serde(default = "default_urltest_candidates")]
     max_candidates: u16,
-    #[serde(default = "default_urltest_concurrency")]
-    concurrency: u8,
 }
 
 impl Default for UrltestWire {
@@ -223,7 +221,6 @@ impl Default for UrltestWire {
             interval_minutes: default_urltest_interval(),
             tolerance_ms: default_urltest_tolerance(),
             max_candidates: default_urltest_candidates(),
-            concurrency: default_urltest_concurrency(),
         }
     }
 }
@@ -967,7 +964,6 @@ pub struct UrltestSettings {
     interval_minutes: u16,
     tolerance_ms: u16,
     max_candidates: u16,
-    concurrency: u8,
 }
 
 impl UrltestSettings {
@@ -981,10 +977,6 @@ impl UrltestSettings {
 
     pub const fn max_candidates(&self) -> u16 {
         self.max_candidates
-    }
-
-    pub const fn concurrency(&self) -> u8 {
-        self.concurrency
     }
 }
 
@@ -1363,7 +1355,6 @@ fn validate_proxy(wire: ProxyWire) -> Result<ProxySettings, ConfigError> {
     if !(5..=1440).contains(&wire.urltest.interval_minutes)
         || wire.urltest.tolerance_ms > 1000
         || !(1..=MAX_AUTO_CANDIDATES).contains(&wire.urltest.max_candidates)
-        || wire.urltest.concurrency != 10
     {
         return Err(ConfigError::InvalidProxy);
     }
@@ -1373,7 +1364,6 @@ fn validate_proxy(wire: ProxyWire) -> Result<ProxySettings, ConfigError> {
             interval_minutes: wire.urltest.interval_minutes,
             tolerance_ms: wire.urltest.tolerance_ms,
             max_candidates: wire.urltest.max_candidates,
-            concurrency: wire.urltest.concurrency,
         },
     })
 }
@@ -1721,9 +1711,6 @@ const fn default_urltest_tolerance() -> u16 {
 }
 const fn default_urltest_candidates() -> u16 {
     64
-}
-const fn default_urltest_concurrency() -> u8 {
-    10
 }
 const fn default_retention_days() -> u8 {
     7

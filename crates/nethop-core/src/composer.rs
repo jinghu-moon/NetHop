@@ -25,7 +25,6 @@ const MAX_API_SECRET_BYTES: usize = 128;
 
 const DIRECT_TAG: &str = "direct";
 const BLOCK_TAG: &str = "block";
-const AUTO_TAG: &str = "nethop-auto";
 const SELECT_TAG: &str = "nethop-select";
 const INBOUND_TAG: &str = "nethop-in";
 const FETCH_INBOUND_TAG: &str = "nethop-fetch";
@@ -38,7 +37,6 @@ const CN_IP_RULE_SET_PATH: &str = "/data/adb/nethop/rulesets/cn-ip.srs";
 const RESERVED_TAGS: &[&str] = &[
     DIRECT_TAG,
     BLOCK_TAG,
-    AUTO_TAG,
     SELECT_TAG,
     INBOUND_TAG,
     FETCH_INBOUND_TAG,
@@ -464,35 +462,26 @@ impl ManagedConfig {
             .iter()
             .map(|outbound| outbound.tag.clone())
             .collect::<Vec<_>>();
-        let auto_tags = &profile.auto_pool;
-        if auto_tags
+        if profile
+            .auto_pool
             .iter()
             .any(|tag| !node_tags.iter().any(|node_tag| node_tag == tag))
         {
             return Err(ComposerError::InvalidManagedOptions);
         }
-        let mut selector_tags = Vec::with_capacity(node_tags.len() + 1);
-        selector_tags.push(AUTO_TAG.to_owned());
-        selector_tags.extend(node_tags.iter().cloned());
+        let default_tag = profile
+            .auto_pool
+            .first()
+            .ok_or(ComposerError::InvalidManagedOptions)?;
 
-        let mut outbounds = Vec::with_capacity(profile.outbounds.len() + 4);
+        let mut outbounds = Vec::with_capacity(profile.outbounds.len() + 3);
         outbounds.push(serde_json::json!({ "type": "direct", "tag": DIRECT_TAG }));
         outbounds.push(serde_json::json!({ "type": "block", "tag": BLOCK_TAG }));
         outbounds.push(serde_json::json!({
-            "type": "urltest",
-            "tag": AUTO_TAG,
-            "outbounds": auto_tags,
-            "url": "https://www.gstatic.com/generate_204",
-            "interval": format!("{}m", profile.options.urltest_interval_minutes),
-            "tolerance": profile.options.urltest_tolerance_ms,
-            "idle_timeout": "30m",
-            "interrupt_exist_connections": false
-        }));
-        outbounds.push(serde_json::json!({
             "type": "selector",
             "tag": SELECT_TAG,
-            "outbounds": selector_tags,
-            "default": AUTO_TAG,
+            "outbounds": node_tags,
+            "default": default_tag,
             "interrupt_exist_connections": false
         }));
         outbounds.extend(

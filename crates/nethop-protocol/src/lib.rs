@@ -114,6 +114,8 @@ pub enum ControlMethod {
     NodeTest,
     #[serde(rename = "node.test_all")]
     NodeTestAll,
+    #[serde(rename = "node.test_operation_get")]
+    NodeTestOperationGet,
     #[serde(rename = "node.selection_get")]
     NodeSelectionGet,
     #[serde(rename = "node.select_auto")]
@@ -282,6 +284,276 @@ pub enum WebUiPayloadOperation {
     SubscriptionImportPreview,
     SubscriptionImportApply,
     BackupRestore,
+}
+
+pub const MAX_NODE_BENCHMARK_CANDIDATES: usize = 64;
+pub const NODE_BENCHMARK_PROBE_CUTOFF_MS: u32 = 4_500;
+pub const NODE_BENCHMARK_DEADLINE_MS: u32 = 4_900;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkTrigger {
+    Manual,
+    Periodic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeProbeState {
+    Success,
+    Timeout,
+    Unavailable,
+    ProtocolError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkDiagnostic {
+    Unauthorized,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkStatus {
+    Success,
+    Partial,
+    Failed,
+    InternalError,
+    Superseded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeProbeOutcome {
+    pub node_id: String,
+    pub state: NodeProbeState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u32>,
+}
+
+impl NodeProbeOutcome {
+    pub fn success(node_id: impl Into<String>, latency_ms: u32) -> Result<Self, ProtocolError> {
+        let outcome = Self {
+            node_id: node_id.into(),
+            state: NodeProbeState::Success,
+            latency_ms: Some(latency_ms),
+        };
+        outcome.validate()?;
+        Ok(outcome)
+    }
+
+    pub fn failed(
+        node_id: impl Into<String>,
+        state: NodeProbeState,
+    ) -> Result<Self, ProtocolError> {
+        let outcome = Self {
+            node_id: node_id.into(),
+            state,
+            latency_ms: None,
+        };
+        outcome.validate()?;
+        Ok(outcome)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !valid_stable_node_id(&self.node_id)
+            || (self.state == NodeProbeState::Success) != self.latency_ms.is_some()
+            || self
+                .latency_ms
+                .is_some_and(|delay| delay == 0 || delay > u32::from(u16::MAX))
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkReport {
+    pub status: BenchmarkStatus,
+    pub trigger: BenchmarkTrigger,
+    pub generation: u64,
+    pub bootstrap_ms: u32,
+    pub elapsed_ms: u32,
+    pub tested: usize,
+    pub succeeded: usize,
+    pub timed_out: usize,
+    pub failed: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<BenchmarkDiagnostic>,
+    pub nodes: Vec<NodeProbeOutcome>,
+}
+
+impl BenchmarkReport {
+    pub fn from_outcomes(
+        trigger: BenchmarkTrigger,
+        generation: u64,
+        bootstrap_ms: u32,
+        elapsed_ms: u32,
+        nodes: Vec<NodeProbeOutcome>,
+    ) -> Result<Self, ProtocolError> {
+        let succeeded = nodes
+            .iter()
+            .filter(|outcome| outcome.state == NodeProbeState::Success)
+            .count();
+        let timed_out = nodes
+            .iter()
+            .filter(|outcome| outcome.state == NodeProbeState::Timeout)
+            .count();
+        let failed = nodes.len().saturating_sub(succeeded + timed_out);
+        let status = if succeeded == nodes.len() {
+            BenchmarkStatus::Success
+        } else if succeeded > 0 {
+            BenchmarkStatus::Partial
+        } else {
+            BenchmarkStatus::Failed
+        };
+        let report = Self {
+            status,
+            trigger,
+            generation,
+            bootstrap_ms,
+            elapsed_ms,
+            tested: nodes.len(),
+            succeeded,
+            timed_out,
+            failed,
+            diagnostic: None,
+            nodes,
+        };
+        report.validate()?;
+        Ok(report)
+    }
+
+    pub fn internal_error(trigger: BenchmarkTrigger, generation: u64, elapsed_ms: u32) -> Self {
+        Self {
+            status: BenchmarkStatus::InternalError,
+            trigger,
+            generation,
+            bootstrap_ms: 0,
+            elapsed_ms: elapsed_ms.min(NODE_BENCHMARK_DEADLINE_MS),
+            tested: 0,
+            succeeded: 0,
+            timed_out: 0,
+            failed: 0,
+            diagnostic: None,
+            nodes: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.generation == 0
+            || self.elapsed_ms > NODE_BENCHMARK_DEADLINE_MS
+            || self.bootstrap_ms > self.elapsed_ms
+            || self.nodes.len() > MAX_NODE_BENCHMARK_CANDIDATES
+            || self.tested != self.nodes.len()
+            || self.succeeded + self.timed_out + self.failed != self.tested
+            || self.nodes.iter().any(|outcome| outcome.validate().is_err())
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let unique = self
+            .nodes
+            .iter()
+            .map(|outcome| outcome.node_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let succeeded = self
+            .nodes
+            .iter()
+            .filter(|outcome| outcome.state == NodeProbeState::Success)
+            .count();
+        let timed_out = self
+            .nodes
+            .iter()
+            .filter(|outcome| outcome.state == NodeProbeState::Timeout)
+            .count();
+        if unique.len() != self.nodes.len()
+            || succeeded != self.succeeded
+            || timed_out != self.timed_out
+            || self.nodes.len().saturating_sub(succeeded + timed_out) != self.failed
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeBenchmarkRunningPhase {
+    Running,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeBenchmarkCompletedPhase {
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeBenchmarkTerminalReport {
+    pub operation_id: String,
+    pub phase: NodeBenchmarkCompletedPhase,
+    pub report: BenchmarkReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Value>,
+}
+
+impl NodeBenchmarkTerminalReport {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !valid_benchmark_operation_id(&self.operation_id) {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        self.report.validate()?;
+        if let Some(selection) = &self.selection {
+            validate_webui_value(selection, 0)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeBenchmarkOperationAck {
+    pub operation_id: String,
+    pub phase: NodeBenchmarkRunningPhase,
+    pub joined_existing: bool,
+    pub trigger: BenchmarkTrigger,
+    pub candidate_count: usize,
+    pub probe_cutoff_ms: u32,
+    pub deadline_ms: u32,
+}
+
+impl NodeBenchmarkOperationAck {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !valid_benchmark_operation_id(&self.operation_id)
+            || self.candidate_count == 0
+            || self.candidate_count > MAX_NODE_BENCHMARK_CANDIDATES
+            || self.probe_cutoff_ms != NODE_BENCHMARK_PROBE_CUTOFF_MS
+            || self.deadline_ms != NODE_BENCHMARK_DEADLINE_MS
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+fn valid_stable_node_id(value: &str) -> bool {
+    value.len() == 21
+        && value.starts_with("nh1s-")
+        && value[5..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+pub fn valid_benchmark_operation_id(value: &str) -> bool {
+    value.len() == 35
+        && value.starts_with("bench_")
+        && value[6..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -778,6 +1050,7 @@ impl ControlRequest {
         let target_method = matches!(
             self.method,
             ControlMethod::NodeTest
+                | ControlMethod::NodeTestOperationGet
                 | ControlMethod::NodeSelectManual
                 | ControlMethod::NodeExport
                 | ControlMethod::ConnectionClose
@@ -794,6 +1067,17 @@ impl ControlRequest {
                 target.len() != 21
                     || !target.starts_with("nh1s-")
                     || !target[5..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if self.method == ControlMethod::NodeTestOperationGet
+            && self.params.target.as_ref().is_none_or(|target| {
+                target.len() != 35
+                    || !target.starts_with("bench_")
+                    || !target[6..]
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             })

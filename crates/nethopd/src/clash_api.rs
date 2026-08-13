@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -13,11 +13,7 @@ use crate::GroupState;
 use ureq::Agent;
 
 const SELECTOR_TAG: &str = "nethop-select";
-const AUTO_SELECTOR_TAG: &str = "nethop-auto";
 const DEFAULT_LIMIT: u8 = 64;
-const GROUP_DELAY_TIMEOUT_MILLIS: u64 = 10_000;
-const GROUP_DELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
-const MAX_GROUP_DELAY_RESULTS: usize = 2_000;
 const MAX_PROXY_ENTRIES: usize = 2_004;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +49,7 @@ impl Default for ClashApiLimits {
 #[derive(Clone)]
 pub struct ClashApiClient {
     endpoint: SocketAddrV4,
-    authorization: String,
+    secret: String,
     limits: ClashApiLimits,
     agent: Agent,
 }
@@ -63,7 +59,7 @@ impl std::fmt::Debug for ClashApiClient {
         formatter
             .debug_struct("ClashApiClient")
             .field("endpoint", &self.endpoint)
-            .field("authorization", &"[REDACTED]")
+            .field("secret", &"[REDACTED]")
             .field("limits", &self.limits)
             .finish()
     }
@@ -100,14 +96,21 @@ impl ClashApiClient {
             .into();
         Ok(Self {
             endpoint,
-            authorization: format!("Bearer {secret}"),
+            secret,
             limits,
             agent,
         })
     }
 
     pub fn group_snapshot(&self) -> Result<ClashGroupSnapshot, ClashApiError> {
-        let document = self.request(ApiMethod::Get, "/proxies", None)?;
+        self.group_snapshot_with_timeout(self.limits.timeout)
+    }
+
+    pub(crate) fn group_snapshot_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<ClashGroupSnapshot, ClashApiError> {
+        let document = self.request_with_timeout(ApiMethod::Get, "/proxies", None, timeout)?;
         let proxies = document
             .get("proxies")
             .and_then(Value::as_object)
@@ -184,37 +187,19 @@ impl ClashApiClient {
         })
     }
 
-    pub fn test_all_nodes(&self) -> Result<Vec<DelayResult>, ClashApiError> {
-        let path = format!(
-            "/group/nethop-select/delay?timeout={GROUP_DELAY_TIMEOUT_MILLIS}&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
-        );
-        let response =
-            self.request_with_timeout(ApiMethod::Get, &path, None, GROUP_DELAY_REQUEST_TIMEOUT)?;
-        let entries = response
-            .as_object()
-            .filter(|entries| entries.len() <= MAX_GROUP_DELAY_RESULTS)
-            .ok_or(ClashApiError::InvalidResponse)?;
-        let mut results = entries
-            .iter()
-            .filter_map(|(tag, delay)| {
-                let delay_ms = delay.as_u64()?;
-                (valid_stable_node_tag(tag) && delay_ms <= u64::from(u16::MAX)).then(|| {
-                    DelayResult {
-                        tag: tag.clone(),
-                        delay_ms,
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        results.sort_unstable_by(|left, right| left.tag.cmp(&right.tag));
-        Ok(results)
+    pub fn select_node(&self, tag: &str) -> Result<(), ClashApiError> {
+        self.select_node_with_timeout(tag, self.limits.timeout)
     }
 
-    pub fn select_node(&self, tag: &str) -> Result<(), ClashApiError> {
-        if tag != AUTO_SELECTOR_TAG && !valid_stable_node_tag(tag) {
+    pub(crate) fn select_node_with_timeout(
+        &self,
+        tag: &str,
+        timeout: Duration,
+    ) -> Result<(), ClashApiError> {
+        if !valid_stable_node_tag(tag) {
             return Err(ClashApiError::UnknownTarget);
         }
-        let document = self.request(ApiMethod::Get, "/proxies", None)?;
+        let document = self.request_with_timeout(ApiMethod::Get, "/proxies", None, timeout)?;
         let is_member = document
             .get("proxies")
             .and_then(Value::as_object)
@@ -226,16 +211,43 @@ impl ClashApiClient {
         if !is_member {
             return Err(ClashApiError::UnknownTarget);
         }
-        self.request(
+        self.request_with_timeout(
             ApiMethod::Put,
             &format!("/proxies/{}", encode_path_segment(SELECTOR_TAG)),
             Some(&json!({"name":tag})),
+            timeout,
         )?;
         Ok(())
     }
 
-    pub fn select_auto(&self) -> Result<(), ClashApiError> {
-        self.select_node(AUTO_SELECTOR_TAG)
+    pub(crate) fn select_node_before(
+        &self,
+        tag: &str,
+        deadline: Instant,
+    ) -> Result<(), ClashApiError> {
+        if !valid_stable_node_tag(tag) {
+            return Err(ClashApiError::UnknownTarget);
+        }
+        let document =
+            self.request_with_timeout(ApiMethod::Get, "/proxies", None, remaining(deadline)?)?;
+        let is_member = document
+            .get("proxies")
+            .and_then(Value::as_object)
+            .and_then(|proxies| proxies.get(SELECTOR_TAG))
+            .and_then(Value::as_object)
+            .and_then(|selector| selector.get("all"))
+            .and_then(Value::as_array)
+            .is_some_and(|members| members.iter().any(|member| member.as_str() == Some(tag)));
+        if !is_member {
+            return Err(ClashApiError::UnknownTarget);
+        }
+        self.request_with_timeout(
+            ApiMethod::Put,
+            &format!("/proxies/{}", encode_path_segment(SELECTOR_TAG)),
+            Some(&json!({"name":tag})),
+            remaining(deadline)?,
+        )?;
+        Ok(())
     }
 
     pub fn select_manual_tag(&self, tag: &str) -> Result<(), ClashApiError> {
@@ -362,7 +374,7 @@ impl ClashApiClient {
         write!(
             stream,
             "GET /traffic HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-            self.endpoint, self.authorization
+            self.endpoint, self.authorization()
         )
         .and_then(|()| stream.flush())
         .map_err(|_| ClashApiError::Unavailable)?;
@@ -447,7 +459,7 @@ impl ClashApiClient {
             ApiMethod::Get => self
                 .agent
                 .get(&url)
-                .header("Authorization", &self.authorization)
+                .header("Authorization", self.authorization())
                 .header("Accept", "application/json")
                 .config()
                 .timeout_global(Some(timeout))
@@ -459,7 +471,7 @@ impl ClashApiClient {
             ApiMethod::Put => self
                 .agent
                 .put(&url)
-                .header("Authorization", &self.authorization)
+                .header("Authorization", self.authorization())
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
                 .send(serde_json::to_vec(
@@ -468,7 +480,7 @@ impl ClashApiClient {
             ApiMethod::Delete => self
                 .agent
                 .delete(&url)
-                .header("Authorization", &self.authorization)
+                .header("Authorization", self.authorization())
                 .header("Accept", "application/json")
                 .call(),
         }
@@ -499,6 +511,16 @@ impl ClashApiClient {
             return Ok(Value::Null);
         }
         serde_json::from_slice(&bytes).map_err(ClashApiError::from)
+    }
+
+    pub(crate) fn benchmark_endpoint(
+        &self,
+    ) -> Result<crate::BenchmarkEndpoint, crate::BenchmarkError> {
+        crate::BenchmarkEndpoint::new(self.endpoint, &self.secret)
+    }
+
+    fn authorization(&self) -> String {
+        format!("Bearer {}", self.secret)
     }
 }
 
@@ -638,6 +660,13 @@ fn encode_path_segment(value: &str) -> String {
 
 fn valid_tag(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, ClashApiError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (!remaining.is_zero())
+        .then_some(remaining)
+        .ok_or(ClashApiError::Unavailable)
 }
 
 #[derive(Debug, Error)]

@@ -229,7 +229,7 @@ fn schema_v3_rejects_selector_and_daemon_owned_identity_fields() {
         ),
         valid_config().replace(
             "name = \"Primary\"",
-            "internal_tag = \"nethop-auto\"\nname = \"Primary\"",
+            "internal_tag = \"daemon-private\"\nname = \"Primary\"",
         ),
     ] {
         write_private(&path, &contents);

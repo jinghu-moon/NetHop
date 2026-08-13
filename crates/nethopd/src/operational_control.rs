@@ -3,7 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU32, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use nethop_core::{CapturePolicy, GenerationId, GenerationNodeRegistry, RuntimeState};
@@ -13,13 +13,23 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
-    ClashApiClient, ClashApiError, ClashGroupSnapshot, NodeListSnapshot, NodeSelectionIntent,
-    NodeSelectionStore, ProcessIdentity, SelectionModelError, StableNodeId, collect_outbound_route,
-    collect_process_metrics, join_node_snapshot, resolve_active_terminal,
+    AutoSelectionDecision, BenchmarkCandidate, BenchmarkEndpoint, BenchmarkError, BenchmarkReport,
+    BenchmarkTrigger, ClashApiClient, ClashApiError, ClashGroupSnapshot, NodeListSnapshot,
+    NodeSelectionIntent, NodeSelectionStore, ProcessIdentity, SelectionModelError, StableNodeId,
+    choose_auto_target, collect_outbound_route, collect_process_metrics, join_node_snapshot,
+    resolve_active_terminal,
 };
 
-const AUTO_SELECTOR_TAG: &str = "nethop-auto";
 static TEMP_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Debug)]
+pub(crate) struct BenchmarkPlan {
+    pub endpoint: BenchmarkEndpoint,
+    pub candidates: Vec<BenchmarkCandidate>,
+    pub ordered_node_ids: Vec<String>,
+    pub trigger: BenchmarkTrigger,
+    pub generation: u64,
+}
 
 pub struct OperationalControl {
     api: ClashApiClient,
@@ -29,6 +39,12 @@ pub struct OperationalControl {
 }
 
 impl OperationalControl {
+    pub(crate) fn selection_is_auto(&self) -> bool {
+        self.selection_store
+            .load()
+            .is_ok_and(|(intent, _)| matches!(intent, NodeSelectionIntent::Auto))
+    }
+
     pub fn new(
         api: ClashApiClient,
         selection_store: NodeSelectionStore,
@@ -81,23 +97,8 @@ impl OperationalControl {
                 let result = self.api.test_node(record.internal_tag())?;
                 Ok(json!({"id":node_id,"latency_ms":result.delay_ms}))
             }
-            ControlMethod::NodeTestAll => {
-                let registry = self.current_registry()?;
-                let results = self
-                    .api
-                    .test_all_nodes()?
-                    .into_iter()
-                    .filter_map(|result| {
-                        registry.by_internal_tag(&result.tag).map(|record| {
-                            json!({
-                                "id": record.stable_node_id(),
-                                "latency_ms": result.delay_ms,
-                            })
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let selection = self.node_snapshot()?.selection().clone();
-                Ok(json!({"results":results,"selection":selection}))
+            ControlMethod::NodeTestAll | ControlMethod::NodeTestOperationGet => {
+                Err(OperationalControlError::UnsupportedMethod)
             }
             ControlMethod::NodeSelectManual => {
                 let node_id = StableNodeId::new(
@@ -122,7 +123,6 @@ impl OperationalControl {
                 Ok(serde_json::to_value(self.node_snapshot()?.selection())?)
             }
             ControlMethod::NodeSelectAuto => {
-                self.api.select_auto()?;
                 self.selection_store
                     .save(&NodeSelectionIntent::Auto, unix_seconds())?;
                 Ok(serde_json::to_value(self.node_snapshot()?.selection())?)
@@ -267,21 +267,16 @@ impl OperationalControl {
     pub fn replay_selection(&mut self) -> Result<ReplayResult, OperationalControlError> {
         let (intent, _) = self.selection_store.load()?;
         match intent {
-            NodeSelectionIntent::Auto => {
-                self.api.select_node(AUTO_SELECTOR_TAG)?;
-                Ok(ReplayResult::Restored)
-            }
+            NodeSelectionIntent::Auto => Ok(ReplayResult::Restored),
             NodeSelectionIntent::Manual { node_id } => {
                 let registry = self.current_registry()?;
                 let Some(record) = registry.by_stable_id(node_id.as_str()) else {
-                    self.api.select_auto()?;
                     self.selection_store.reset_auto(unix_seconds())?;
                     return Ok(ReplayResult::FellBackToAuto);
                 };
                 match self.api.select_manual_tag(record.internal_tag()) {
                     Ok(()) => Ok(ReplayResult::Restored),
                     Err(ClashApiError::UnknownTarget) => {
-                        self.api.select_auto()?;
                         self.selection_store.reset_auto(unix_seconds())?;
                         Ok(ReplayResult::FellBackToAuto)
                     }
@@ -289,6 +284,85 @@ impl OperationalControl {
                 }
             }
         }
+    }
+
+    pub(crate) fn benchmark_plan(
+        &self,
+        trigger: BenchmarkTrigger,
+        generation: u64,
+    ) -> Result<BenchmarkPlan, OperationalControlError> {
+        let registry = self.current_registry()?;
+        let ordered_node_ids = registry.auto_pool().to_vec();
+        let candidates = ordered_node_ids
+            .iter()
+            .map(|node_id| {
+                let record = registry
+                    .by_stable_id(node_id)
+                    .ok_or(OperationalControlError::GenerationUnavailable)?;
+                BenchmarkCandidate::new(node_id.clone(), record.internal_tag())
+                    .map_err(OperationalControlError::Benchmark)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(BenchmarkPlan {
+            endpoint: self.api.benchmark_endpoint()?,
+            candidates,
+            ordered_node_ids,
+            trigger,
+            generation,
+        })
+    }
+
+    pub(crate) fn complete_benchmark(
+        &mut self,
+        report: &BenchmarkReport,
+        ordered_node_ids: &[String],
+        tolerance_ms: u32,
+        deadline: Instant,
+    ) -> Result<Value, OperationalControlError> {
+        if deadline <= Instant::now() {
+            return Err(OperationalControlError::BenchmarkDeadline);
+        }
+        let (intent, _) = self.selection_store.load()?;
+        if report.trigger == BenchmarkTrigger::Periodic
+            && matches!(intent, NodeSelectionIntent::Auto)
+        {
+            let current = self
+                .node_snapshot()
+                .ok()
+                .and_then(|snapshot| snapshot.selection().active_node_id().cloned());
+            if let AutoSelectionDecision::Switch { node_id } = choose_auto_target(
+                ordered_node_ids,
+                &report.nodes,
+                current.as_ref().map(StableNodeId::as_str),
+                tolerance_ms,
+            ) {
+                let registry = self.current_registry()?;
+                let record = registry
+                    .by_stable_id(&node_id)
+                    .ok_or(OperationalControlError::UnknownNode)?;
+                self.api
+                    .select_node_before(record.internal_tag(), deadline)?;
+            }
+        }
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        if timeout.is_zero() {
+            return Err(OperationalControlError::BenchmarkDeadline);
+        }
+        let core = self.api.group_snapshot_with_timeout(timeout)?;
+        Ok(serde_json::to_value(
+            self.node_snapshot_from_core(&core)?.selection(),
+        )?)
+    }
+
+    #[cfg(feature = "benchmark-evidence")]
+    pub fn complete_benchmark_for_evidence(
+        &mut self,
+        report: &BenchmarkReport,
+        ordered_node_ids: &[String],
+        tolerance_ms: u32,
+        deadline: Instant,
+    ) -> Result<Value, OperationalControlError> {
+        self.complete_benchmark(report, ordered_node_ids, tolerance_ms, deadline)
     }
 
     fn node_snapshot(&self) -> Result<NodeListSnapshot, OperationalControlError> {
@@ -503,6 +577,10 @@ pub enum OperationalControlError {
     ClashApi(#[from] ClashApiError),
     #[error("node selection model operation failed")]
     Selection(#[from] SelectionModelError),
+    #[error("node benchmark model operation failed")]
+    Benchmark(#[from] BenchmarkError),
+    #[error("node benchmark operation deadline expired")]
+    BenchmarkDeadline,
     #[error("operational response serialization failed")]
     Json(#[from] serde_json::Error),
 }
@@ -518,6 +596,8 @@ impl OperationalControlError {
                 (ErrorDomain::Node, "INVALID-ID")
             }
             Self::Selection(_) => (ErrorDomain::Node, "SELECTION-STATE"),
+            Self::Benchmark(_) => (ErrorDomain::Node, "BENCHMARK-INVALID"),
+            Self::BenchmarkDeadline => (ErrorDomain::Node, "BENCHMARK-DEADLINE"),
             Self::ClashApi(ClashApiError::Unavailable) => {
                 (ErrorDomain::Core, "CONTROL-UNAVAILABLE")
             }
@@ -537,5 +617,274 @@ impl OperationalControlError {
             | Self::Json(_) => (ErrorDomain::Core, "CONTROL-INVALID"),
             Self::Write => (ErrorDomain::Core, "CONTROL-WRITE-FAILED"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::{Ipv4Addr, SocketAddrV4, TcpListener},
+        thread,
+    };
+
+    use crate::{
+        BenchmarkTrigger, ClashApiLimits, NodeProbeOutcome, NodeSelectionIntent, NodeSelectionStore,
+    };
+    use nethop_core::{GenerationNodeRecord, GenerationNodeRegistry};
+    use tempfile::tempdir;
+
+    const TEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
+    const FIRST: &str = "nh1s-0000000000000001";
+    const SECOND: &str = "nh1s-0000000000000002";
+
+    fn serve(responses: Vec<(u16, String)>) -> (SocketAddrV4, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = match listener.local_addr().unwrap() {
+            std::net::SocketAddr::V4(address) => address,
+            _ => unreachable!(),
+        };
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 2048];
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end + 4]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                requests.push(String::from_utf8(bytes).unwrap());
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            requests
+        });
+        (address, handle)
+    }
+
+    fn selector_document(now: &str) -> String {
+        json!({
+            "proxies": {
+                "nethop-select": {"type":"Selector","now":now,"all":[FIRST,SECOND]},
+                FIRST: {"type":"VLESS"},
+                SECOND: {"type":"VLESS"}
+            }
+        })
+        .to_string()
+    }
+
+    fn generation_root(root: &Path) -> PathBuf {
+        let generations = root.join("generations");
+        fs::create_dir(&generations).unwrap();
+        fs::create_dir(generations.join("7")).unwrap();
+        fs::write(generations.join("current"), "7\n").unwrap();
+        let records = [FIRST, SECOND]
+            .into_iter()
+            .map(|tag| {
+                GenerationNodeRecord::new(
+                    tag,
+                    tag,
+                    tag,
+                    "vless",
+                    vec!["src_0123456789abcdef0123456789abcdef".into()],
+                    true,
+                )
+                .unwrap()
+            })
+            .collect();
+        let registry = GenerationNodeRegistry::new(records).unwrap();
+        fs::write(
+            generations.join("7/nodes.json"),
+            serde_json::to_vec(&registry).unwrap(),
+        )
+        .unwrap();
+        generations
+    }
+
+    fn control(
+        root: &Path,
+        address: SocketAddrV4,
+        intent: NodeSelectionIntent,
+    ) -> OperationalControl {
+        let store = NodeSelectionStore::new(root.join("selection.v1.json")).unwrap();
+        store.save(&intent, 1).unwrap();
+        let api = ClashApiClient::new(address, TEST_SECRET, ClashApiLimits::default()).unwrap();
+        OperationalControl::new(api, store, root.join("diagnostics-latest.json"))
+            .unwrap()
+            .with_generation_root(generation_root(root))
+            .unwrap()
+    }
+
+    fn report(trigger: BenchmarkTrigger, first: u32, second: u32) -> BenchmarkReport {
+        BenchmarkReport::from_outcomes(
+            trigger,
+            7,
+            1,
+            20,
+            vec![
+                NodeProbeOutcome::success(FIRST, first).unwrap(),
+                NodeProbeOutcome::success(SECOND, second).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn manual_benchmark_updates_observations_without_selecting_a_node() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let (address, server) = serve(vec![(200, selector_document(FIRST))]);
+        let mut control = control(
+            &root,
+            address,
+            NodeSelectionIntent::Manual {
+                node_id: StableNodeId::new(FIRST).unwrap(),
+            },
+        );
+
+        let selection = control
+            .complete_benchmark(
+                &report(BenchmarkTrigger::Manual, 200, 40),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        assert_eq!(selection["intent"]["mode"], "manual");
+        assert_eq!(selection["active_node_id"], FIRST);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /proxies "));
+    }
+
+    #[test]
+    fn manually_triggered_benchmark_never_auto_selects_even_with_auto_intent() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let (address, server) = serve(vec![(200, selector_document(FIRST))]);
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+
+        let selection = control
+            .complete_benchmark(
+                &report(BenchmarkTrigger::Manual, 200, 40),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        assert_eq!(selection["intent"]["mode"], "auto");
+        assert_eq!(selection["active_node_id"], FIRST);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /proxies "));
+    }
+
+    #[test]
+    fn automatic_benchmark_honors_tolerance_without_selector_put() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let snapshot = selector_document(FIRST);
+        let (address, server) = serve(vec![(200, snapshot.clone()), (200, snapshot)]);
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+
+        let selection = control
+            .complete_benchmark(
+                &report(BenchmarkTrigger::Periodic, 150, 100),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        assert_eq!(selection["active_node_id"], FIRST);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with("GET /proxies "))
+        );
+    }
+
+    #[test]
+    fn automatic_benchmark_switches_once_and_reads_the_final_snapshot() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let before = selector_document(FIRST);
+        let (address, server) = serve(vec![
+            (200, before.clone()),
+            (200, before),
+            (204, String::new()),
+            (200, selector_document(SECOND)),
+        ]);
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+
+        let selection = control
+            .complete_benchmark(
+                &report(BenchmarkTrigger::Periodic, 200, 40),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        assert_eq!(selection["active_node_id"], SECOND);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("PUT /proxies/nethop-select "))
+                .count(),
+            1
+        );
+        assert!(requests[2].ends_with(&format!(r#"{{"name":"{SECOND}"}}"#)));
+        assert!(requests[3].starts_with("GET /proxies "));
+    }
+
+    #[test]
+    fn expired_benchmark_deadline_performs_no_control_request() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let (address, server) = serve(Vec::new());
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+
+        let error = control
+            .complete_benchmark(
+                &report(BenchmarkTrigger::Periodic, 40, 80),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, OperationalControlError::BenchmarkDeadline));
+        assert!(server.join().unwrap().is_empty());
     }
 }

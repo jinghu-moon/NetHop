@@ -11,6 +11,7 @@ publish = false
 [features]
 default = ["subscription-update"]
 subscription-update = ["nethop-subscription/fetch", "nethop-subscription/format-surfboard"]
+benchmark-evidence = []
 
 [dependencies]
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
@@ -25,6 +26,10 @@ serde = { version = "1", default-features = false, features = ["derive", "std"] 
 serde_json = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"
 toml = { version = "1.1.4", default-features = false, features = ["std", "serde", "parse", "display"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros"] }
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = { version = "0.1", default-features = false }
 ureq = { version = "=3.3.0", default-features = false }
 url = { version = "2", default-features = false, features = ["std"] }
 
@@ -38,3 +43,11 @@ required-features = ["subscription-update"]
 [[example]]
 name = "fair_pool_bench"
 required-features = ["subscription-update"]
+
+[[example]]
+name = "node_benchmark_evidence"
+required-features = ["benchmark-evidence"]
+
+[[example]]
+name = "node_benchmark_postprocess_evidence"
+required-features = ["benchmark-evidence"]

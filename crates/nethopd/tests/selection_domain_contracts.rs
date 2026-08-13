@@ -16,7 +16,7 @@ fn stable_node_id_accepts_only_parser_display_fingerprint_shape() {
     );
     for invalid in [
         "",
-        "nethop-auto",
+        "daemon-private",
         "nh1s-0123456789ABCDEf",
         "nh1s-0123456789abcde",
         "nh1s-0123456789abcdef0",
@@ -96,15 +96,13 @@ fn selection_diagnostic_codes_are_complete_and_stable() {
         SelectionDiagnosticCode::ModeTargetRequired,
         SelectionDiagnosticCode::NodeSelectionStale,
         SelectionDiagnosticCode::ActiveNodeUnresolved,
-        SelectionDiagnosticCode::NodeGroupCycle,
-        SelectionDiagnosticCode::NodeGroupDepth,
         SelectionDiagnosticCode::NodeTestPartial,
     ];
     let encoded = codes
         .iter()
         .map(|code| serde_json::to_value(code).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(encoded.len(), 11);
+    assert_eq!(encoded.len(), 9);
     assert_eq!(encoded[0], "NH-SUB-MODE-MISMATCH");
-    assert_eq!(encoded[10], "NH-NODE-TEST-PARTIAL");
+    assert_eq!(encoded[8], "NH-NODE-TEST-PARTIAL");
 }

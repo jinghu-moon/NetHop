@@ -58,7 +58,19 @@ where
     server.prepare()?;
     loop {
         let iteration = (|| {
-            while server.serve_ready(application)? {}
+            loop {
+                match server.serve_ready(application) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(
+                        ControlServerError::PeerCredentialFailed
+                        | ControlServerError::AuthorizationDenied
+                        | ControlServerError::InvalidRequest
+                        | ControlServerError::ResponseFailed,
+                    ) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
             application.run_ready()
         })();
         if let Err(error) = iteration {
