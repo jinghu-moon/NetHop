@@ -1,5 +1,7 @@
 # NetHop 订阅选择与节点优选前后端重构设计
 
+> 当前状态：本文保留 sing-box URLTest 两阶段方案作为历史分析与取舍记录；实际实施已由 D13/D14 破坏性替代。当前生产链路删除 `nethop-auto` 和 `urltest.concurrency`，composer 只生成单一 `nethop-select` 与 terminal outbounds，Rust benchmark engine 负责批量 delay、共同 cutoff、tolerance 选优和 selector 事务。后续实现或验收不得按本文旧的 group delay 请求序列判定失败。
+
 > 状态：开发期设计冻结候选
 > 适用范围：`nethop-subscription`、`nethop-core`、`nethopd`、`nethop-protocol`、`nethopctl`、WebUI、模块默认配置
 > 配置 ABI：破坏性升级为 `schema_version = 3`
@@ -51,7 +53,7 @@ sing-box 内核不负责：
 
 ### 2.2 当前后端行为
 
-当前链路为：
+历史链路为：
 
 ```text
 所有 enabled source
@@ -62,6 +64,8 @@ sing-box 内核不负责：
   -> 单一 ManagedProfile
   -> 单一 nethop-auto urltest
   -> 单一 nethop-select selector
+
+当前链路为：`all enabled source -> parser/merge/fair pool -> terminal outbounds -> nethop-select selector`；Rust engine 并发调用每个 terminal 的 Clash delay API，daemon auto intent 决定是否切换。
 ```
 
 当多个 source 同时 enabled 时，自动选择可以跨来源；只有一个 source enabled 时，自动选择自然退化为订阅内选择。后端不是在“切换订阅”，而是在合并后的节点池内切换终端节点。
@@ -468,13 +472,16 @@ while pool 未达到 max_candidates 且仍有未消费节点：
 
 `NodeTestAll`：
 
-- 由 daemon 通过 core group delay API 一次执行；
+- 由 daemon 先请求外层 selector group delay，一次并发探测全部 terminal 并写入 sing-box 共享 URLTest history；
+- 紧接着请求内层 URLTest group delay。新鲜 history 使该请求不重复网络探测，但必须由 sing-box 自身执行 `performUpdateCheck()`，按 `tolerance` 刷新 active child；
 - WebUI 不逐节点并发发命令；
 - 返回有界结果和每个节点稳定 ID；
 - 更新延迟缓存与 `last_test_at`；
 - manual 模式绝不因测试结果自动改选节点；
 - auto 模式允许 sing-box 根据自身 urltest 规则更新 active child，前端随后重新查询 selection；
 - 失败节点清除陈旧的本次结果，但不得删除节点。
+
+该两阶段调用是 sing-box `v1.13.15` Clash API 的必要适配，不是 NetHop 自行实现选优。外层 selector 的通用 group delay 分支只更新共享 history；只有内层 `adapter.URLTestGroup` 分支会在测速返回前调用 URLTest group 的 `performUpdateCheck()`。任一阶段失败时 `NodeTestAll` 均不得报告成功，避免“延迟已更新但自动选举未刷新”的半成功状态。
 
 ### 9.3 选择 auto
 

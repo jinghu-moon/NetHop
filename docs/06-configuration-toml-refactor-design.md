@@ -273,7 +273,6 @@ outbound_mode = "rule"
 interval_minutes = 10
 tolerance_ms = 50
 max_candidates = 64
-concurrency = 10
 
 [applications]
 mode = "all"
@@ -419,8 +418,9 @@ registry 和 `EffectiveConfig`/generation 的提交仍受 `MutationCoordinator` 
 | `proxy.outbound_mode` | `rule/global/direct` | `rule` | 规则、全局代理、全局直连 |
 | `proxy.urltest.interval_minutes` | `5..1440` | `10` | 低于 5 分钟会侵蚀电量和空闲 CPU 预算 |
 | `proxy.urltest.tolerance_ms` | `0..1000` | `50` | 防止节点抖动切换 |
-| `proxy.urltest.max_candidates` | `1..256` | `64` | 只限制 auto 集，不删除节点 |
-| `proxy.urltest.concurrency` | 固定为 `10` | `10` | sing-box 1.13.15 内部固定并发；当前版本拒绝伪可配置值 |
+| `proxy.urltest.max_candidates` | `1..64` | `64` | 只限制 auto 集，不删除节点；64 是 NetHop Rust benchmark 的固定硬上限 |
+
+> 当前实现：`proxy.urltest.concurrency` 已破坏性删除。节点测速由 D13/D14 定义的 Rust current-thread + Hyper HTTP/1 引擎统一并发最多 64 个 terminal probe；该并发度不是用户配置项。`interval_minutes` 仍控制 daemon 周期任务，手动测速不受周期等待影响。
 
 `subscriptions.mode = single` 要求恰好一个已配置 source 启用；`merge` 允许多个已配置 source 同时启用，但不允许关闭最后一个有效 source。模式切换、single source 选择和 merge source enable/disable 都携带 `expected_config_digest`，在同一 mutation lock、generation 与 commit journal 事务中完成；失败时 TOML、active generation 和 source active set 保持不变。
 

@@ -1,5 +1,7 @@
 # NetHop 订阅选择与节点优选 TDD 开发任务清单
 
+> 测速实施状态：本清单中的多订阅合并、稳定 ID、来源公平池、generation/LKG、manual/auto 用户语义仍是有效输入；其中旧的 sing-box URLTest/group delay、`nethop-auto` 递归解析和 25/30 秒批量测速任务已由 D13/D14 替代。D14 主机阶段的结果不回填为本清单旧 URLTest 证据；真机节点测速/功耗项目必须按 D14 M 阶段重新执行。
+
 > 状态：Implementation in progress（主机阶段完成，真机阶段部分完成）
 >
 > 上位设计：`docs/10-subscription-selection-and-node-optimization-refactor-design.md`
@@ -39,7 +41,7 @@
 - `protocol/group/urltest.go` 自己维护当前候选和测速历史，NetHop 不复制 tolerance 选择算法。
 - Clash API `/proxies` 与 group delay endpoint 能覆盖当前查询、测速和切换需求。
 - `interrupt_exist_connections = false` 只保证节点切换不主动中断已有入站连接；测试必须区分旧连接和新连接。
-- `v1.14 services.api` gRPC 不进入本清单实现范围，只增加依赖禁入和边界回归测试。
+- `v1.14 services.api` gRPC 不进入本清单实现范围，只作为未来候选登记；当前实现固定为 v1.13.15 独立 sing-box + loopback Clash HTTP API。
 
 ### 2.3 本地参考项目取舍
 
@@ -804,7 +806,7 @@ flowchart LR
 
 - [x] **H012 - 统一批量测速的 core、HTTP 与 CLI 超时预算**
   - `depends_on`: H003,H008；`parallel_with`: H009,H010
-  - `scope`: sing-box group delay 10 秒、Clash HTTP 请求 12 秒、`NodeTestAll` CLI/UDS 15 秒；普通 CLI 请求仍保持 5 秒，显式 `--wait` 保持 30 秒。
+  - `scope`: sing-box group delay 单阶段 10 秒、Clash HTTP 请求单阶段 12 秒；`NodeTestAll` 需要覆盖 selector 批量探测与 urltest 选举刷新两个阶段，因此 CLI 为 25 秒、WebUI bridge 为 30 秒。普通 CLI 请求仍保持 5 秒，显式 `--wait` 与 UDS 上限保持 30 秒。
   - `RED/GREEN`: 真机批量测速在约 3 秒返回 `NH-CORE-CONTROL-UNAVAILABLE`；增加 delayed Clash API 与 CLI command-class timeout 回归测试，再按操作类型分配预算。
   - `REFACTOR/VERIFY`: 只给批量测速放宽端到端预算，不扩大普通控制命令或取消全局资源上限。
   - `done`: `cargo test -p nethopd --test clash_api_contracts`、`cargo test -p nethopctl` 通过；真机 27 候选批量测速在 8.6 秒内完成并返回 26 个本轮成功结果，允许核心省略超时节点，不再被控制层 3/5 秒边界截断。
@@ -1333,6 +1335,8 @@ flowchart LR
   - `REFACTOR/VERIFY`: 记录 pool 证据但不记录敏感节点字段。
   - `done`: 真机结果与主机 benchmark/fixture 一致。
 
+  - `2026-08-13 partial evidence`: D14 M013 已在 TPROXY 运行态完成真实多源事务与公平池验证。Primary-only generation 33 为 27 candidates；启用 Backup 后 generation 35 为 45 个唯一 candidates，两个稳定 source ID 分别贡献 27/18，auto pool 前 36 个候选按来源严格交替，Primary 的 27 个 stable node ID 在合并前后全部保持。禁用 Backup 后 generation 36 恢复 27 candidates，Backup LKG cache 保留，journal/staged 文件清理，Google/YouTube 均返回 HTTP 204。事务阶段顺序导致的 `PhaseRegression` 已从根因修复，enable/disable ACK 分别为 6397ms/9139ms。该证据不包含 URL、节点名称或凭据；由于本节点按 D12 仍依赖尚未勾选的 N005/N006，故不提前标记完成，最终签核还需把同一公平池行为置于 D12 要求的 TPROXY/TUN 完整 single 基线上复核。
+
 - [ ] **N008 - 真机验证失败切换回滚**
   - `depends_on`: N005,N006；`parallel_with`: N007,N009
   - `scope`: 不可达 source、非法正文、sing-box check 失败和健康超时。
@@ -1354,7 +1358,11 @@ flowchart LR
   - `REFACTOR/VERIFY`: 测试窗口和设备状态固定，结果写入证据报告。
   - `done`: 10 分钟策略满足移动端预算且不影响可用性。
 
-  - `2026-08-12 observation`: 手工 `test-all` 后 selector 仍指向 `nethop-auto`，但 URLTest active child 未立即切到本轮最低延迟节点；这是待验证的上游周期/tolerance 语义，不能用一次手工测速替代完整 10 分钟窗口和功耗测试。
+  - `2026-08-12 root cause`: sing-box `v1.13.15` 对外层 selector 的 group delay 走通用分支，只把终端结果写入共享 URLTest history，不调用内层 URLTest group 的 `performUpdateCheck()`；因此旧实现虽完成批量测速，却不会立即刷新 `nethop-auto` 的 active child。
+  - `2026-08-12 implementation evidence`: `node test-all` 先通过 `nethop-select` 一次性测试全部终端，再调用 `nethop-auto` group delay。第二步复用刚写入的共享 history、跳过新鲜节点的重复探测，并由 sing-box 自己按 `tolerance` 执行选举；控制层随后重新读取 `/proxies`，不在 NetHop 内复制或推断 URLTest 算法。Clash API 与 operational control 回归测试已覆盖两阶段请求、刷新失败、active core snapshot 和完整 `nethopd` 套件。
+  - `2026-08-12 device evidence`: 覆盖安装并重启后的 generation 8 真机上，`node test-all --json` 在 13.99 秒内返回合法 envelope，active 在同次响应中由 `nh1s-5def...` 更新为本轮 152ms 的 `nh1s-8647...`。本轮最低结果为 128ms，两者相差 24ms，小于 `tolerance = 50ms`，因此保留 152ms 节点符合 sing-box 的抗抖动语义；随后 `status` 返回相同 active，Google/YouTube 返回 HTTP 204，Bilibili 返回 HTTP 200，daemon 与 core 保持健康。设备上的 `nethopctl`、`nethopd` SHA-256 与本地最新 Android 产物一致。
+  - `timeout evidence`: 旧 CLI 15 秒预算曾在约 15.15 秒截断合法的两阶段操作并表现为 `control protocol response is invalid`；现在仅将 `NodeTestAll` CLI 放宽为 25 秒、WebUI bridge 放宽为 30 秒，两个 Clash API 阶段仍各自受 12 秒约束，其他命令预算不变。真机复测未再发生客户端截断。
+  - `remaining`: 即时选举刷新和联网可用性已经通过；仍需完成固定 10 分钟窗口的唤醒、流量和功耗测试，因此 N010 保持未勾选。
 
 - [ ] **N011 - 真机验证更新后 manual 保留/消失**
   - `depends_on`: N007；`parallel_with`: N010,N012

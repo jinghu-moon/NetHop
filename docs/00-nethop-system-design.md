@@ -1,5 +1,7 @@
 # NetHop 系统设计
 
+> 当前实现边界（D14）：活动配置只生成 `nethop-select -> terminal` 单层 selector。daemon 通过 loopback-only Clash API 读取 selector 成员和最终快照，并由 Rust 节点测速引擎在同一 4.5 秒 probe cutoff 内并发探测最多 64 个 terminal；auto intent 在 daemon 内按 tolerance 计算是否 PUT selector，manual intent 只更新观测不切换。本文早期 `nethop-auto`/URLTest 嵌套图示属于历史设计证据，实施细节以 [`13-rust-node-benchmark-engine-design.md`](./13-rust-node-benchmark-engine-design.md) 和 [`14-rust-node-benchmark-engine-tdd-task-list.md`](./14-rust-node-benchmark-engine-tdd-task-list.md) 为准。
+
 > 状态：Draft v0.6，作为 Phase 0-A 至首版实现基线
 >
 > 文档版本：0.6
@@ -759,11 +761,11 @@ badlinkname,tfogo_checklinkname0
 
 `badlinkname` 与 `tfogo_checklinkname0` 以及上游 `release/LDFLAGS` 是 `v1.13.15` 下游构建契约的一部分，不能在“裁剪”时误删。排除首版不需要的 Tailscale、OpenVPN、OpenConnect、WireGuard、ACME、DHCP、Cloudflared、USB/IP、Naive、CCM/OCM 等特性，降低二进制与攻击面。构建标签必须通过协议 fixture、TUN fallback 和内存测试验证，不能仅以“编译成功”为准。
 
-首版包含一个最小、独立且可审核的 NetHop 统计补丁。上游 V2Ray Stats tracker 在路由层接收到的是直接匹配的 outbound；当路由指向顶层 `selector` 时，它默认把字节记到 `selector`，并不知道随后实际委派的终端节点。仅对 `OutboundGroup.Now()` 做一次查询也不充分：`selector -> urltest -> node` 需要递归解析，选择还可能在统计查询与实际委派之间变化。补丁因此必须在连接真正委派时绑定终端 outbound，而不是在路由匹配时猜测：
+首版包含一个最小、独立且可审核的 NetHop 统计补丁。上游 V2Ray Stats tracker 在路由层接收到的是直接匹配的 outbound；当路由指向顶层 `selector` 时，它默认把字节记到 `selector`，并不知道随后实际委派的终端节点。当前活动配置只有 `selector -> terminal` 单层关系，但统计仍必须在连接真正委派时绑定终端 outbound，而不能在路由匹配或控制面快照时猜测：
 
 - 为每个 routed connection/packet connection/flow 携带一次性的终端 outbound attribution hook；
-- `selector`、`urltest` 等组在实际选择并委派 child 时继续传递 hook，终端 outbound 在开始传输前提交自身 tag；
-- 最多解析 8 层并检测 tag/对象循环；无法得到终端节点时退回最外层 group tag，同时增加 `stats_attribution_degraded_total` 和结构化诊断；
+- `selector` 在实际选择并委派 child 时继续传递 hook，terminal outbound 在开始传输前提交自身 tag；
+- 无法得到 terminal 时退回最外层 group tag，同时增加 `stats_attribution_degraded_total` 和结构化诊断；
 - TCP、UDP 与 TUN flow 三条 tracker 路径共享同一归因语义；切换只影响随后新建的连接，既有连接保持建立时绑定的节点；
 - 补丁不得改变选择、失败重试、连接中断或路由行为，并以独立 patch 文件和上游 fixture 维护。
 
@@ -775,7 +777,7 @@ badlinkname,tfogo_checklinkname0
 
 - TPROXY 或 TUN inbound；
 - 仅 loopback 的 mixed inbound，供 `nethopd` 显式代理下载；
-- selector、urltest、节点 outbounds、direct 和 block；
+- 单一 selector、节点 terminal outbounds、direct 和 block；
 - 真实 IP DNS 与 sniff/hijack 规则；
 - 本地/远程 SRS；
 - Clash API，随机 secret，loopback only；
@@ -784,15 +786,15 @@ badlinkname,tfogo_checklinkname0
 
 ### 18.3 selector 与测速
 
-顶层 `nethop-select` selector 包含固定的 `nethop-auto` urltest 组和全部可手选 terminal 节点。默认：
+顶层 `nethop-select` selector 直接包含全部可手选 terminal 节点。daemon 从 sealed generation registry 读取独立的有序 auto pool。默认：
 
 - `interrupt_exist_connections=false`，节点切换只影响新连接，避免主动打断现有会话；
-- urltest 使用可配置的 204 URL、合理 interval 和 tolerance；
-- `auto` 候选集与全部可手选节点分离：初始默认最多 64 个，按 source 顺序和稳定 `node_id` 选取，未进入 auto 的节点仍可手选且状态明确；Phase 0-B 在 16..256 范围内校准默认值；
-- 手动批量测速限制并发，默认 8；
+- Rust benchmark engine 使用固定 `https://www.gstatic.com/generate_204`，同一 4.5 秒 cutoff 并发探测完整 auto pool；
+- `auto` 候选集与全部可手选节点分离：固定上限 64，按 source 公平顺序和稳定 `node_id` 生成；未进入 auto 的节点仍可手选且状态明确；
+- 并发度由引擎内部候选上限约束，不暴露 `concurrency` 配置；
 - 订阅刷新后优先按稳定 `node_id` 恢复原选择；原节点不存在才回退 `auto`。
 
-节点选择意图与实际 active terminal 分开保存和返回。`auto` 下 active terminal 可随 urltest 改变；`manual` 下测速只更新延迟，不改变用户目标。daemon 通过当前 generation registry 将稳定 node ID 映射为内部 tag，并经独立 sing-box 子进程的 loopback-only、随机 secret Clash API 完成测速和切换；WebUI/CLI 不接触内部 tag 或 API secret。节点切换不重写配置、不发送 SIGHUP，因此适用小于 1 秒 SLA。
+节点选择意图与实际 active terminal 分开保存和返回。`auto` 下 daemon 按 tolerance 计算 keep/switch，并只在需要时 PUT `nethop-select`；`manual` 下测速只更新延迟，不改变用户目标。daemon 通过当前 generation registry 将稳定 node ID 映射为内部 tag，并经独立 sing-box 子进程的 loopback-only、随机 secret Clash API 完成测速和切换；WebUI/CLI 不接触内部 tag 或 API secret。节点切换不重写配置、不发送 SIGHUP，因此适用小于 1 秒 SLA。
 
 sing-box `v1.14` 的原生 gRPC API service 不属于当前 `v1.13.15` 发布契约，也不以预留依赖的方式进入实现。评估条件与迁移边界只记录在 [`11-deferred-capabilities-and-future-design.md`](./11-deferred-capabilities-and-future-design.md)。
 
@@ -1062,8 +1064,8 @@ Base64 URI、sing-box JSON、Clash YAML 和多 source 合并分别输出 parse/v
 - worker 定时器休眠时不轮询；应用 catalog 和版本检查低频执行。
 - 实时 WebSocket 只按消费者需要建立。
 - SQLite 每分钟单事务写入，聚合批量执行。
-- sing-box 生产日志为 warn，测速并发默认 8。
-- urltest 按用户启用的有界组工作，不对 2,000 个 active outbounds 无差别高频探测；后台 idle timeout 后停止 ticker。
+- sing-box 生产日志为 warn；Rust benchmark engine 最多并发 64 个 auto candidates。
+- daemon 仅在 auto intent 且代理处于捕获态时按默认 10 分钟周期启动短生命周期测速 job；manual/空闲状态没有后台测速 runtime 或高频轮询。
 - 首版不提供会修改全局 sysctl 的 performance profile。协议/timeout 等调优只能落在受审核的 sing-box allowlist 字段，并通过相同测试矩阵。
 
 ## 25. 测试策略
