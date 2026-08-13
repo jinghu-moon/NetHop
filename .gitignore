@@ -93,6 +93,10 @@ out/android-arm64/
 # CI and module builds regenerate these from the lockfile and production bundle.
 artifacts/webui/
 
+# Local node benchmark evidence is valid only when regenerated from a clean
+# revision with the required Android release gates.
+artifacts/tdd-node-benchmark/
+
 # cargo-fuzz generated outputs; deterministic seed corpora remain tracked.
 crates/nethop-subscription/fuzz/target/
 crates/nethop-subscription/fuzz/artifacts/
