@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { safeExtension, ValidationError } from "@/model/bounds";
-import { parseApplication, parseApplicationList, parseCapability, parseConfig, parseConfigSchema, parseControlEnvelope, parseEventFrame, parseHello, parseLogs, parseNode, parseNodeDelayList, parseNodeList, parseNodeSelection, parseOperational, parseRuntimeMetrics, parseSourceStatus, parseStatus, parseSubscription, parseSubscriptionSnapshot, parseTraffic } from "@/model/dto";
+import { parseApplication, parseApplicationList, parseCapability, parseConfig, parseConfigSchema, parseControlEnvelope, parseEventFrame, parseHello, parseLogs, parseNode, parseNodeBenchmarkAck, parseNodeBenchmarkResult, parseNodeDelayList, parseNodeList, parseNodeSelection, parseOperational, parseRuntimeMetrics, parseSourceStatus, parseStatus, parseSubscription, parseSubscriptionSnapshot, parseTraffic } from "@/model/dto";
 
 const digest = "a".repeat(64);
 
@@ -109,6 +109,18 @@ describe("strict DTO validators", () => {
     expect(parseNodeDelayList({ results: [{ id: "nh1s-0123456789abcdef", latency_ms: 64 }] })).toEqual([{ id: "nh1s-0123456789abcdef", latencyMs: 64 }]);
     expect(() => parseNodeDelayList({ results: [{ id: "direct", latency_ms: 1 }] })).toThrow("invalid node id");
     expect(() => parseNodeDelayList({ results: [{ id: "nh1s-0123456789abcdef", latency_ms: 65_536 }] })).toThrow();
+  });
+
+  it("validates benchmark ACK and terminal report invariants", () => {
+    const operationId = `bench_${"1".repeat(29)}`;
+    expect(parseNodeBenchmarkAck({ operation_id: operationId, phase: "running", joined_existing: true, trigger: "periodic", candidate_count: 64, probe_cutoff_ms: 4500, deadline_ms: 4900 }).joinedExisting).toBe(true);
+    expect(() => parseNodeBenchmarkAck({ operation_id: operationId, phase: "running", joined_existing: false, trigger: "manual", candidate_count: 65, probe_cutoff_ms: 4500, deadline_ms: 4900 })).toThrow();
+    const terminal = { operation_id: operationId, phase: "completed", report: { status: "partial", trigger: "manual", generation: 7, bootstrap_ms: 1, elapsed_ms: 100, tested: 2, succeeded: 1, timed_out: 1, failed: 0, diagnostic: "unauthorized", nodes: [{ node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 42 }, { node_id: "nh1s-fedcba9876543210", state: "timeout" }] } };
+    expect(parseNodeBenchmarkResult(terminal).report.diagnostic).toBe("unauthorized");
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, succeeded: 2 } })).toThrow("inconsistent benchmark counts");
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, elapsed_ms: 4901 } })).toThrow();
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, nodes: [{ node_id: "nh1s-0123456789abcdef", state: "success" }], tested: 1, succeeded: 1, timed_out: 0 } })).toThrow("invalid probe outcome");
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, internal_tag: "private" } })).toThrow("unknown field");
   });
 
   it("bounds operational extensions and 10,000-node corpus", () => {

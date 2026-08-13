@@ -53,20 +53,31 @@ describe("Protocol v3 selection runtime", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
-  it("applies one delay result without replacing unrelated nodes or stable order", () => {
+  it("applies one terminal report atomically and clears failed stale delays", () => {
     const store = createRuntimeStore();
-    const first: NodeDto = { id: "nh1s-0000000000000001", name: "A", protocol: "vless", isRequested: false, isActive: true, sourceIds: ["src_a"] };
+    const first: NodeDto = { id: "nh1s-0000000000000001", name: "A", protocol: "vless", latencyMs: 999, isRequested: false, isActive: true, sourceIds: ["src_a"] };
     const second: NodeDto = { id: "nh1s-0000000000000002", name: "B", protocol: "trojan", isRequested: false, isActive: false, sourceIds: ["src_a"] };
     store.loadNodeSnapshot({ nodes: [first, second], selection: selection(first.id) });
     const firstBefore = store.nodesById.value[first.id];
     const secondBefore = store.nodesById.value[second.id];
     const orderBefore = store.nodeOrder.value;
 
-    expect(applyRuntimeEvent(event("node_test", { result: { id: second.id, latency_ms: 42 } }), store)).toBe("applied");
-    expect(store.nodesById.value[first.id]).toBe(firstBefore);
+    const result = {
+      operation_id: `bench_${"1".repeat(29)}`,
+      phase: "completed",
+      report: { status: "partial", trigger: "manual", generation: 7, bootstrap_ms: 1, elapsed_ms: 100, tested: 2, succeeded: 1, timed_out: 1, failed: 0, nodes: [
+        { node_id: first.id, state: "timeout" },
+        { node_id: second.id, state: "success", latency_ms: 42 },
+      ] },
+      selection: { version: 1, intent: { mode: "auto" }, active_node_id: second.id, changed_at: 2 },
+    };
+    expect(applyRuntimeEvent(event("node_test", { result }), store)).toBe("applied");
+    expect(store.nodesById.value[first.id]).not.toBe(firstBefore);
+    expect(store.nodesById.value[first.id]?.latencyMs).toBeUndefined();
     expect(store.nodesById.value[second.id]).not.toBe(secondBefore);
     expect(store.nodesById.value[second.id]?.latencyMs).toBe(42);
     expect(store.nodeOrder.value).toBe(orderBefore);
+    expect(store.selection.value?.activeNodeId).toBe(second.id);
   });
 
   it("treats generation-affecting events as explicit reload boundaries", () => {

@@ -133,7 +133,7 @@ export function buildCommand(request: OperationRequest): BuiltCommand {
       assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
       return { executable: NETHOPCTL_PATH, args: ["node", "test", request.nodeId, "--json"], timeoutMs: 15000, sensitive: false };
     case "node.test-all":
-      return { executable: NETHOPCTL_PATH, args: ["node", "test-all", "--json"], timeoutMs: 20000, sensitive: false };
+      return { executable: NETHOPCTL_PATH, args: ["node", "test-all", "--json"], timeoutMs: 7000, sensitive: false };
     case "node.selection.get": return { executable: NETHOPCTL_PATH, args: ["node", "selection", "--json"], timeoutMs: 5000, sensitive: false };
     case "node.select.auto": return { executable: NETHOPCTL_PATH, args: ["node", "select", "auto", "--json"], timeoutMs: 5000, sensitive: false };
     case "node.select.manual":

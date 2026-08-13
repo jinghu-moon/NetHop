@@ -9,7 +9,7 @@ import PageState from "@/components/PageState.vue";
 import { useHost } from "@/bridge/context";
 import { runJson } from "@/bridge/command";
 import { validatedQuery } from "@/model/client";
-import { parseControlEnvelope, parseNodeDelayList, parseNodeList, parseNodeSelection, parseSubscriptionSnapshot, type NodeDto } from "@/model/dto";
+import { parseControlEnvelope, parseNodeBenchmarkResult, parseNodeList, parseNodeSelection, parseSubscriptionSnapshot, type NodeDto } from "@/model/dto";
 import { uiStores } from "@/runtime/store";
 import { createActionLock, createOperationStore } from "@/runtime/operation";
 import { parseNodeSort, sortNodes, type NodeSort } from "@/model/node-view";
@@ -85,20 +85,19 @@ async function testAllNodes(): Promise<void> {
   operations.update(operationId, "running", { message: "正在测试全部节点" });
   try {
     const response = await runJson(host, { id: "node.test-all" });
-    const results = parseControlEnvelope(response.response, parseNodeDelayList).result;
-    const delays = new Map(results.map((result) => [result.id, result.latencyMs]));
-    let updated = 0;
+    const result = parseControlEnvelope(response.response, parseNodeBenchmarkResult).result;
+    const outcomes = new Map(result.report.nodes.map((outcome) => [outcome.id, outcome]));
     for (const node of allNodes.value) {
-      const latencyMs = delays.get(node.id);
-      if (latencyMs === undefined) {
+      const outcome = outcomes.get(node.id);
+      if (outcome?.state !== "success" || outcome.latencyMs === undefined) {
         const { latencyMs: _previousLatency, ...withoutLatency } = node;
         uiStores.runtime.upsertNode(withoutLatency);
       } else {
-        uiStores.runtime.upsertNode({ ...node, latencyMs });
-        updated += 1;
+        uiStores.runtime.upsertNode({ ...node, latencyMs: outcome.latencyMs });
       }
     }
-    operations.update(operationId, "success", { message: `测速完成：成功 ${updated} / ${allNodes.value.length}` });
+    if (result.selection) uiStores.runtime.setSelection(result.selection);
+    operations.update(operationId, "success", { message: `测速完成：成功 ${result.report.succeeded} / ${result.report.tested}` });
   } catch {
     operations.update(operationId, "failure", { message: "节点测速失败" });
   }
@@ -168,7 +167,7 @@ useBackDismiss(() => actionSheetOpen.value, () => { actionSheetOpen.value = fals
     <PageState v-else-if="allNodes.length === 0" kind="empty" title="没有可用节点" />
     <TPullDownRefresh v-else v-model="refreshing" :disabled="loading" @refresh="pullRefresh">
     <button type="button" class="node-auto-control" :data-selected="automatic" @click="selectAuto">
-      <span><strong>自动优选</strong><small>{{ automatic ? "由 sing-box URLTest 自动选择" : "点击恢复自动选择" }}</small></span>
+      <span><strong>自动优选</strong><small>{{ automatic ? "由 NetHop 定期测速并自动选择" : "点击恢复自动选择" }}</small></span>
       <span v-if="automatic && selection?.activeNodeId" class="node-auto-active">{{ uiStores.runtime.nodesById.value[selection.activeNodeId]?.name ?? "状态同步中" }}</span>
     </button>
     <VirtualListViewport :items="nodeItems" :get-item-key="(_index, item) => item.id" :estimate-size="82">

@@ -90,12 +90,12 @@ export function createAppHost(): HostAdapter {
       mockManualNodeId = request.nodeId;
       return { errno: 0, stdout: envelope(nodeSelection()), stderr: "" };
     },
-    "node.test-all": () => ({ errno: 0, stdout: envelope({ results: [
-      { id: "nh1s-0123456789abcdef", latency_ms: 64 },
-      { id: "nh1s-fedcba9876543210", latency_ms: 91 },
-      { id: "nh1s-1111111111111111", latency_ms: 48 },
-      { id: "nh1s-2222222222222222", latency_ms: 188 },
-    ], selection: nodeSelection() }), stderr: "" }),
+    "node.test-all": () => ({ errno: 0, stdout: envelope({ operation_id: `bench_${"1".repeat(29)}`, phase: "completed", report: { status: "success", trigger: "manual", generation: 1, bootstrap_ms: 1, elapsed_ms: 100, tested: 4, succeeded: 4, timed_out: 0, failed: 0, nodes: [
+      { node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 64 },
+      { node_id: "nh1s-fedcba9876543210", state: "success", latency_ms: 91 },
+      { node_id: "nh1s-1111111111111111", state: "success", latency_ms: 48 },
+      { node_id: "nh1s-2222222222222222", state: "success", latency_ms: 188 },
+    ] }, selection: nodeSelection() }), stderr: "" }),
     "connections.get": { errno: 0, stdout: envelope({ connections: [] }), stderr: "" },
     "logs.get": { errno: 0, stdout: envelope({ entries: [{ seq: 1, kind: "runtime", channel: "service", payload: { kind: "service_ready", message: "daemon ready" }, raw: "{\"kind\":\"runtime\",\"payload\":{\"kind\":\"service_ready\"}}" }], channel: "service", newest_first: true }), stderr: "" },
     "topology.get": { errno: 0, stdout: envelope({ capture_mode: "mock", ipv4: "direct", ipv6: "direct" }), stderr: "" },

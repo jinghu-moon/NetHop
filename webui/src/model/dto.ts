@@ -39,6 +39,11 @@ export type LogChannelDto = "service" | "subscription" | "core";
 export interface LogEntryDto { readonly id: string; readonly channel: LogChannelDto; readonly kind: string; readonly message: string; readonly time: string; readonly raw: string }
 export interface RuntimeMetricsDto { readonly runtimeState: string; readonly generation?: number; readonly uptimeSeconds: number; readonly core?: { readonly pid: number; readonly cpuPercent?: number; readonly memoryRssBytes?: number }; readonly uploadBytes?: number; readonly downloadBytes?: number; readonly interface?: string; readonly localAddress?: string; readonly publicIp?: string }
 export interface NodeDelayDto { readonly id: string; readonly latencyMs: number }
+export type NodeProbeStateDto = "success" | "timeout" | "unavailable" | "protocol_error";
+export interface NodeProbeOutcomeDto { readonly id: string; readonly state: NodeProbeStateDto; readonly latencyMs?: number }
+export interface NodeBenchmarkReportDto { readonly status: "success" | "partial" | "failed" | "internal_error" | "superseded"; readonly trigger: "manual" | "periodic"; readonly generation: number; readonly bootstrapMs: number; readonly elapsedMs: number; readonly tested: number; readonly succeeded: number; readonly timedOut: number; readonly failed: number; readonly diagnostic?: "unauthorized"; readonly nodes: readonly NodeProbeOutcomeDto[] }
+export interface NodeBenchmarkAckDto { readonly operationId: string; readonly phase: "running"; readonly joinedExisting: boolean; readonly trigger: "manual" | "periodic"; readonly candidateCount: number; readonly probeCutoffMs: 4500; readonly deadlineMs: 4900 }
+export interface NodeBenchmarkResultDto { readonly operationId: string; readonly phase: "completed"; readonly report: NodeBenchmarkReportDto; readonly selection?: NodeSelectionDto }
 export interface ApplicationDto { readonly packageName: string; readonly uid: number; readonly mode: "all" | "blacklist" | "whitelist"; readonly sharedUid: boolean }
 export interface TrafficDto { readonly up: number; readonly down: number; readonly intervalSeconds: number }
 export interface ConfigSchemaFieldDto { readonly id: string; readonly path: string; readonly valueType: string; readonly title: string; readonly group: string; readonly order: number; readonly advanced: boolean; readonly experimental: boolean; readonly sensitive: boolean; readonly readOnly: boolean; readonly applyImpact: string; readonly riskLevel: string; readonly capabilityKey?: string; readonly options: readonly string[] }
@@ -245,6 +250,58 @@ export function parseNodeDelayList(value: unknown): readonly NodeDelayDto[] {
     if (!/^nh1s-[a-f0-9]{16}$/.test(id)) throw new ValidationError(`$.result.results[${index}].id`, "invalid node id");
     return { id, latencyMs: integer(entry.latency_ms, `$.result.results[${index}].latency_ms`, 0, 65_535) };
   });
+}
+
+export function parseNodeBenchmarkResult(value: unknown): NodeBenchmarkResultDto {
+  const object = record(value, "$.result", ["operation_id", "phase", "report", "selection"]);
+  const operationId = string(object.operation_id, "$.result.operation_id", 35);
+  if (!/^bench_[a-f0-9]{29}$/.test(operationId)) throw new ValidationError("$.result.operation_id", "invalid benchmark operation id");
+  const phase = enumeration(object.phase, "$.result.phase", ["completed"] as const);
+  const report = record(object.report, "$.result.report", ["status", "trigger", "generation", "bootstrap_ms", "elapsed_ms", "tested", "succeeded", "timed_out", "failed", "diagnostic", "nodes"]);
+  const nodes = array(report.nodes, "$.result.report.nodes", 64).map((item, index) => {
+    const entry = record(item, `$.result.report.nodes[${index}]`, ["node_id", "state", "latency_ms"]);
+    const id = string(entry.node_id, `$.result.report.nodes[${index}].node_id`, 21);
+    if (!/^nh1s-[a-f0-9]{16}$/.test(id)) throw new ValidationError(`$.result.report.nodes[${index}].node_id`, "invalid node id");
+    const state = enumeration(entry.state, `$.result.report.nodes[${index}].state`, ["success", "timeout", "unavailable", "protocol_error"] as const);
+    const latencyMs = entry.latency_ms === undefined ? undefined : integer(entry.latency_ms, `$.result.report.nodes[${index}].latency_ms`, 1, 600_000);
+    if ((state === "success") !== (latencyMs !== undefined)) throw new ValidationError(`$.result.report.nodes[${index}]`, "invalid probe outcome");
+    return { id, state, ...(latencyMs === undefined ? {} : { latencyMs }) };
+  });
+  const parsedReport: NodeBenchmarkReportDto = {
+    status: enumeration(report.status, "$.result.report.status", ["success", "partial", "failed", "internal_error", "superseded"] as const),
+    trigger: enumeration(report.trigger, "$.result.report.trigger", ["manual", "periodic"] as const),
+    generation: integer(report.generation, "$.result.report.generation", 1),
+    bootstrapMs: integer(report.bootstrap_ms, "$.result.report.bootstrap_ms", 0, 4_900),
+    elapsedMs: integer(report.elapsed_ms, "$.result.report.elapsed_ms", 0, 4_900),
+    tested: integer(report.tested, "$.result.report.tested", 0, 64),
+    succeeded: integer(report.succeeded, "$.result.report.succeeded", 0, 64),
+    timedOut: integer(report.timed_out, "$.result.report.timed_out", 0, 64),
+    failed: integer(report.failed, "$.result.report.failed", 0, 64),
+    ...(report.diagnostic === undefined ? {} : { diagnostic: enumeration(report.diagnostic, "$.result.report.diagnostic", ["unauthorized"] as const) }),
+    nodes,
+  };
+  const succeeded = nodes.filter((node) => node.state === "success").length;
+  const timedOut = nodes.filter((node) => node.state === "timeout").length;
+  if (parsedReport.tested !== nodes.length || parsedReport.succeeded !== succeeded || parsedReport.timedOut !== timedOut || parsedReport.failed !== nodes.length - succeeded - timedOut) throw new ValidationError("$.result.report", "inconsistent benchmark counts");
+  const selection = object.selection === undefined || object.selection === null ? undefined : parseNodeSelection(object.selection);
+  return { operationId, phase, report: parsedReport, ...(selection === undefined ? {} : { selection }) };
+}
+
+export function parseNodeBenchmarkAck(value: unknown): NodeBenchmarkAckDto {
+  const object = record(value, "$.result", ["operation_id", "phase", "joined_existing", "trigger", "candidate_count", "probe_cutoff_ms", "deadline_ms"]);
+  const operationId = string(object.operation_id, "$.result.operation_id", 35);
+  if (!/^bench_[a-f0-9]{29}$/.test(operationId)) throw new ValidationError("$.result.operation_id", "invalid benchmark operation id");
+  const probeCutoffMs = integer(object.probe_cutoff_ms, "$.result.probe_cutoff_ms", 4500, 4500);
+  const deadlineMs = integer(object.deadline_ms, "$.result.deadline_ms", 4900, 4900);
+  return {
+    operationId,
+    phase: enumeration(object.phase, "$.result.phase", ["running"] as const),
+    joinedExisting: boolean(object.joined_existing, "$.result.joined_existing"),
+    trigger: enumeration(object.trigger, "$.result.trigger", ["manual", "periodic"] as const),
+    candidateCount: integer(object.candidate_count, "$.result.candidate_count", 1, 64),
+    probeCutoffMs: probeCutoffMs as 4500,
+    deadlineMs: deadlineMs as 4900,
+  };
 }
 
 export function parseApplication(value: unknown): ApplicationDto {

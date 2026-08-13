@@ -1,4 +1,4 @@
-import { parseEventFrame, parseNodeDelayList, parseNodeSelection, parseSubscriptionSnapshot, type EventPayloadDto, type TrafficDto } from "@/model/dto";
+import { parseEventFrame, parseNodeBenchmarkResult, parseNodeSelection, parseSubscriptionSnapshot, type EventPayloadDto, type TrafficDto } from "@/model/dto";
 import { uiStores, type RuntimeStore } from "./store";
 
 export type StreamPhase = "awaiting_snapshot" | "live" | "resync_required" | "closed";
@@ -90,12 +90,17 @@ export function applyRuntimeEvent(payload: EventPayloadDto, store: RuntimeStore 
   }
   if (payload.kind === "node_test") {
     const result = payload.value.result;
-    const delays = parseNodeDelayList(result);
-    for (const delay of delays) {
-      const node = store.nodesById.value[delay.id];
-      if (node) store.upsertNode({ ...node, latencyMs: delay.latencyMs });
+    const benchmark = parseNodeBenchmarkResult(result);
+    for (const outcome of benchmark.report.nodes) {
+      const node = store.nodesById.value[outcome.id];
+      if (!node) continue;
+      if (outcome.state === "success" && outcome.latencyMs !== undefined) store.upsertNode({ ...node, latencyMs: outcome.latencyMs });
+      else {
+        const { latencyMs: _old, ...withoutLatency } = node;
+        store.upsertNode(withoutLatency);
+      }
     }
-    if (result && typeof result === "object" && "selection" in result) store.setSelection(parseNodeSelection((result as { selection: unknown }).selection));
+    if (benchmark.selection) store.setSelection(benchmark.selection);
     return "applied";
   }
   if (payload.kind === "generation" || payload.kind === "config" || payload.kind === "subscription_mode") return "reload";

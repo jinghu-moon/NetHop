@@ -7,7 +7,9 @@ const digest = "a".repeat(64);
 describe("consumer operation allowlist", () => {
   it("maps node operations to fixed typed argv", () => {
     expect(buildCommand({ id: "node.test", nodeId }).args).toEqual(["node", "test", nodeId, "--json"]);
-    expect(buildCommand({ id: "node.test-all" }).args).toEqual(["node", "test-all", "--json"]);
+    const testAll = buildCommand({ id: "node.test-all" });
+    expect(testAll.args).toEqual(["node", "test-all", "--json"]);
+    expect(testAll.timeoutMs).toBe(7_000);
     expect(buildCommand({ id: "node.select.auto" }).args).toEqual(["node", "select", "auto", "--json"]);
     expect(buildCommand({ id: "node.select.manual", nodeId }).args).toEqual(["node", "select", "manual", nodeId, "--json"]);
     expect(buildCommand({ id: "node.remove", nodeId, expectedDigest: digest }).args).toContain("--expected-digest");
