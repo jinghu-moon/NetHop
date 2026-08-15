@@ -180,7 +180,7 @@ protocol_version = nethopctl <-> nethopd framing and methods
 manager_version  = APK release identity，仅用于兼容诊断
 ```
 
-当前开发期 wire 只接受 `protocol_version = 3`。Protocol v3 提供 typed subscription mode/select/set-enabled、node selection/list/test-all 方法和对应事件；旧 `SelectSource`、通用 `NodeSelect { target }` 与 `selected: bool` wire shape 仅保留为测试中的 before fixture，不进入生产协议。
+当前开发期 wire 只接受 `protocol_version = 4`。Protocol v4 保留 typed subscription mode/select/set-enabled、node selection/list/test-all 方法和对应事件，并增加 generation 固化的 `display_territory_code` 与 selection v2 typed active terminal；旧 Protocol v3 wire shape 仅保留为测试中的 before fixture，不进入生产协议。
 
 项目首次正式发布前，daemon 的 schema 支持窗口固定为 `min = max = 3`，且只接受本文冻结后的 v3 shape。开发期旧 JSON、v1/v2 TOML 和包含用户 `sources[].id` 的草案全部干净拒绝，不写迁移器。首次公开发布后如需扩大兼容窗口，必须另立 schema 演进 ADR，不能把开发期兼容负担提前带入实现。
 
@@ -866,7 +866,7 @@ SetScalarField（只允许 schema 注册的标量 field_id）
 RemoveNode { node_id }（将稳定 fingerprint 写入每个 source 的 `filter.excluded_node_ids`）
 ```
 
-每个 mutation 都携带 `expected_config_digest`，在 `EffectiveConfig` clone 上应用，随后走完整 validation、SourceId registry reconcile、admission、change plan、持久化和 activation。`AddSource` 不接受调用方指定 ID；daemon 生成并在响应中返回。其他 source mutation 只接受 daemon 已分配的 ID，用户修改名称和链接时无需看到或输入 ID。RFC 6902 使用字符串 JSON Pointer、数组索引和通用 `move/copy`，对版本化配置的类型安全、权限和稳定 source identity 不利；NetHop 只吸收其“有序操作、失败整体不成功、配合 precondition”的事务思想。
+每个 mutation 都携带 `expected_config_digest`，在 `EffectiveConfig` clone 上应用，随后走完整 validation、SourceId registry reconcile、admission、change plan、持久化和 activation。`AddSource` 不接受调用方指定 ID；daemon 生成并在响应中返回。若 single 模式尚无 URL 非空的 active source，但默认文件保留了 `enabled = true` 的空 URL 占位 source，`AddSource` 必须在同一候选文档中关闭该空占位并启用新 source，禁止先提交 `NoActiveSource` 非法中间态；已有有效 active source 时，新 source 默认禁用。其他 source mutation 只接受 daemon 已分配的 ID，用户修改名称和链接时无需看到或输入 ID。RFC 6902 使用字符串 JSON Pointer、数组索引和通用 `move/copy`，对版本化配置的类型安全、权限和稳定 source identity 不利；NetHop 只吸收其“有序操作、失败整体不成功、配合 precondition”的事务思想。
 
 ### 12.3 版本协商与偏差
 

@@ -1,6 +1,6 @@
 # NetHop 系统设计
 
-> 当前实现边界（D14）：活动配置只生成 `nethop-select -> terminal` 单层 selector。daemon 通过 loopback-only Clash API 读取 selector 成员和最终快照，并由 Rust 节点测速引擎在同一 4.5 秒 probe cutoff 内并发探测最多 64 个 terminal；auto intent 在 daemon 内按 tolerance 计算是否 PUT selector，manual intent 只更新观测不切换。本文早期 `nethop-auto`/URLTest 嵌套图示属于历史设计证据，实施细节以 [`13-rust-node-benchmark-engine-design.md`](./13-rust-node-benchmark-engine-design.md) 和 [`14-rust-node-benchmark-engine-tdd-task-list.md`](./14-rust-node-benchmark-engine-tdd-task-list.md) 为准。
+> 当前实现边界（D16）：活动配置只生成 `nethop-select -> terminal` 单层 selector。daemon 通过 loopback-only Clash API 读取 selector 成员和最终快照，并由 Rust 节点测速引擎在同一 4.5 秒 probe cutoff 内并发探测最多 64 个 terminal；auto intent 在 daemon 内按 tolerance 计算是否 PUT selector，manual intent 只更新观测不切换。generation node registry v3 固化可选的 `display_territory_code`，selection snapshot v2 使用 typed `node/direct/block/unresolved` terminal，控制协议为 Protocol v4。本文早期 `nethop-auto`/URLTest 嵌套图示及 Protocol v3 字段属于历史设计证据，当前实施以 D13-D16 为准。
 
 > 状态：Draft v0.6，作为 Phase 0-A 至首版实现基线
 >
@@ -32,7 +32,7 @@
 | 后续控制面 | 独立 Kotlin Android App |
 | 项目许可证 | AGPL-3.0 |
 | sing-box 基线 | 固定稳定版 `1.13.15`；升级需审核、兼容测试和重新发版 |
-| 当前控制契约 | 用户配置只接受 schema v3；`nethopctl <-> nethopd` 只接受 Protocol v3，不保留开发期旧版本兼容层 |
+| 当前控制契约 | 用户配置只接受 schema v3；`nethopctl <-> nethopd` 只接受 Protocol v4，不保留开发期旧版本兼容层 |
 
 ### 2.2 网络与策略
 

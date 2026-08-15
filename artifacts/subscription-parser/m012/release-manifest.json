@@ -37,27 +37,27 @@
   "artifacts": [
     {
       "path": "artifacts/subscription-parser/m010/parser-only.cdx.json",
-      "sha256": "6be41a59bf0b3724ef16aab820c5212b31b347c21ff3a492eba1d58b36a7aa08"
+      "sha256": "8a0f01eb3be8811f308f7bcb79906c413c4413f4dfe5a78027ebe2da7eabb469"
     },
     {
       "path": "artifacts/subscription-parser/m010/fetch.cdx.json",
-      "sha256": "de44c721278c56e79209f17cca31423a914542847eff7f4b69c9ce183f1674e5"
+      "sha256": "cbc9d1bb2626ac97c84ec698aa8bd15393a427817660d76d38251a9b8617386a"
     },
     {
       "path": "artifacts/subscription-parser/m010/dev-test.cdx.json",
-      "sha256": "38aa5bd0930df09aa799367721e59a7ba03e5a6513098a10f7314895a2c3d5f7"
+      "sha256": "bd962208ae038d1d060a74a11d0e22458fcf51ee0b807fbc7dc240cde0c4f04d"
     },
     {
       "path": "artifacts/subscription-parser/m010/licenses.json",
-      "sha256": "a9c625c341b8f03ddf9710ccd0ad01174b2a3e8109df446e3555c5ba3fa77f7e"
+      "sha256": "071de8141e201f12f9daa483fbac39086f0bd12bbb2f017df0688e585fe57f00"
     },
     {
       "path": "artifacts/subscription-parser/m010/provenance.json",
-      "sha256": "dd44c6b61c2670435602453426be06a21e8e0c54fc30561e9afcd85340df1e70"
+      "sha256": "b35eecf7a52c5088dfc2fc59ce2fcfdf7995dbcf996d889611a2399694dac665"
     },
     {
       "path": "artifacts/subscription-parser/m010/cargo-deny-report.json",
-      "sha256": "c5bff4771d78883157119f878c87d6fb41c8cb443c1b9002d730474bf9e0ee7c"
+      "sha256": "45326ce30cc3473b76642c8922e2a661dc273a719f4d73d70dc64350f49992e1"
     },
     {
       "path": "artifacts/subscription-parser/m011/schedule-report.json",

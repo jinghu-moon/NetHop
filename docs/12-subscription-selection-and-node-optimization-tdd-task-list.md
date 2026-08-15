@@ -1,6 +1,6 @@
 # NetHop 订阅选择与节点优选 TDD 开发任务清单
 
-> 测速实施状态：本清单中的多订阅合并、稳定 ID、来源公平池、generation/LKG、manual/auto 用户语义仍是有效输入；其中旧的 sing-box URLTest/group delay、`nethop-auto` 递归解析和 25/30 秒批量测速任务已由 D13/D14 替代。D14 主机阶段的结果不回填为本清单旧 URLTest 证据；真机节点测速/功耗项目必须按 D14 M 阶段重新执行。
+> 测速与协议实施状态：本清单中的多订阅合并、稳定 ID、来源公平池、generation/LKG、manual/auto 用户语义仍是有效输入；旧 sing-box URLTest/group delay、`nethop-auto` 递归解析和 25/30 秒批量测速任务已由 D13/D14 替代，Protocol v3 selection wire 已由 D15/D16 的 Protocol v4、generation registry v3、selection snapshot v2 替代。本文的 v3 字段和任务结果只作为 before 证据，不是当前生产契约。
 
 > 状态：Implementation in progress（主机阶段完成，真机阶段部分完成）
 >

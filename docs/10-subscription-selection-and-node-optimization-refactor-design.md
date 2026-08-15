@@ -1,6 +1,6 @@
 # NetHop 订阅选择与节点优选前后端重构设计
 
-> 当前状态：本文保留 sing-box URLTest 两阶段方案作为历史分析与取舍记录；实际实施已由 D13/D14 破坏性替代。当前生产链路删除 `nethop-auto` 和 `urltest.concurrency`，composer 只生成单一 `nethop-select` 与 terminal outbounds，Rust benchmark engine 负责批量 delay、共同 cutoff、tolerance 选优和 selector 事务。后续实现或验收不得按本文旧的 group delay 请求序列判定失败。
+> 当前状态：本文保留 sing-box URLTest 两阶段方案及 Protocol v3 selection 字段作为历史分析与取舍记录；测速实现已由 D13/D14、节点元数据与 active terminal 契约已由 D15/D16 破坏性替代。当前生产链路删除 `nethop-auto` 和 `urltest.concurrency`，composer 只生成单一 `nethop-select` 与 terminal outbounds；控制面使用 Protocol v4、generation node registry v3 和 selection snapshot v2 typed `active_terminal`。后续实现或验收不得按本文旧的 group delay 请求序列或 `active_node_id/degraded_reason` wire 判定失败。
 
 > 状态：开发期设计冻结候选
 > 适用范围：`nethop-subscription`、`nethop-core`、`nethopd`、`nethop-protocol`、`nethopctl`、WebUI、模块默认配置

@@ -1,10 +1,10 @@
 # NetHop 节点国家/地区元数据与 WebUI 改进 TDD 任务清单
 
-> 状态：待实施
+> 状态：Host 阶段 A-L 与 M001-M002 已通过；M003-M007 真机验收待手动安装，N 最终签署随设备结果收口
 > 日期：2026-08-13
 > 设计来源：`15-node-region-and-webui-improvement-design.md`
 > 上位约束：`00-nethop-system-design.md`、`08-webui-design.md`、`10-subscription-selection-and-node-optimization-refactor-design.md`、`13-rust-node-benchmark-engine-design.md`
-> 当前代码基线：control protocol v3、generation node registry v2、selection snapshot v1
+> 重构前基线：control protocol v3、generation node registry v2、selection snapshot v1
 > 目标代码基线：control protocol v4、generation node registry v3、selection snapshot v2
 > 影响范围：官方数据快照、`nethop-subscription`、`nethop-core`、`nethopd`、`nethop-protocol`、`nethopctl`、WebUI、模块构建、许可证与 SBOM
 
@@ -20,9 +20,31 @@
 
 任务完成不表示提交或推送完成。本文不授权自动执行 `git commit`、`git push`、删除用户文件、下载收费数据或向真实订阅地址发送请求。
 
+### 1.1 当前实施状态（2026-08-14）
+
+下表是执行状态的事实源；后续各任务的 checkbox 保留为原始 TDD 计划和审计索引，不用批量勾选掩盖阶段内尚未执行的设备验证。机器可读副本位于 `artifacts/node-territory/d16-implementation-status.json`。
+
+| 阶段 | 状态 | 结论 |
+|---|---|---|
+| A-D | 已通过 | before 护栏、官方数据链、纯 Rust 引擎、dedupe 与三份去敏 fixture 均已验证 |
+| E-G | 已通过 | generation registry v3、selection v2、Protocol v4、CLI/daemon 消费链已切换 |
+| H-J | 已通过 | WebUI DTO/view-model、249 个本地 flags、三个节点组件及 browser contracts 已通过 |
+| K | 已通过 | 21 项 E2E 功能通过；10 张预期 UI 变化截图已人工复核并更新，复验无 diff |
+| L | 已通过 | Rust workspace 无跳过项通过；WebUI、bundle/security、module contracts、`cargo-deny` 与 M010-M014 release evidence 全绿 |
+| M | M001-M002 已通过，M003-M007 待真机 | 最新 ZIP 已构建、静态核验并传送到手机；未安装，不以传送成功代替设备验收 |
+| N | 进行中 | 生产契约、文档和实施报告已同步；最终签署和 final gate 等待 M007 |
+
+统一 host 验证入口：
+
+```powershell
+pwsh -NoProfile -File "scripts/territory-host-release-gate.ps1"
+```
+
+该脚本执行完整 workspace 回归且不跳过测试，并聚合数据、引擎、generation、protocol、WebUI、模块、供应链和 diff 门禁；它仍不等价于 M003-M007 的 Android 真机验收。
+
 ## 2. 当前事实与实施澄清
 
-### 2.1 当前代码事实
+### 2.1 重构前代码事实
 
 - `nethop-subscription::ProxyNode` 保留 `display_name`；`DedupedNode` 保留 canonical node 和全部 aliases；
 - fingerprint 只依赖连接语义，不包含显示名称，适合隔离展示元数据；
@@ -997,6 +1019,15 @@ flowchart LR
 
 ## 19. 阶段 M：Android 模块与真机验收
 
+### 19.1 当前实施结果（2026-08-14）
+
+- M001-M002 已通过：模块构建、AArch64 ELF、fake Magisk smoke、内部 checksums、manifest、SBOM、许可证和离线 WebUI 均通过；
+- sing-box 来自 `refer/sing-box-1.13.15-android-arm64.tar.gz`，构建器已核验版本、commit、Android arm64、CGO、Go build metadata 和必需 tags，manifest 记录 `official_prebuilt` 与 `core_provenance_verified = true`；
+- 产物：`out/android-arm64/NetHop-2e4a6501e0645431a34b178382c99b044b8d25a5-arm64.zip`；
+- 大小：24,240,967 bytes；SHA-256：`b25769c1a2f8c54c68ea59f58fcc7a1c7101670a521780830ef35ab05cc102d8`；
+- ADB 传送后手机端文件大小与 SHA-256 一致，路径为 `/sdcard/Download/NetHop-2e4a6501e0645431a34b178382c99b044b8d25a5-arm64.zip`；
+- M003-M007 尚未执行：当前仅传送，未安装、未重启，也未声明任何真机功能通过。
+
 - [ ] **M001 - 构建可复现 Android arm64 模块**
   - `depends_on`: L007；`parallel_with`: none
   - `scope`: Rust binaries、sing-box、WebUI、flags、licenses、manifest 和 checksums。
@@ -1170,6 +1201,7 @@ powershell -ExecutionPolicy Bypass -File "scripts/territory-data-gate.ps1"
 powershell -ExecutionPolicy Bypass -File "scripts/territory-engine-gate.ps1"
 powershell -ExecutionPolicy Bypass -File "scripts/territory-generation-gate.ps1"
 powershell -ExecutionPolicy Bypass -File "scripts/territory-protocol-gate.ps1"
+powershell -ExecutionPolicy Bypass -File "scripts/territory-host-release-gate.ps1"
 
 Push-Location "webui"
 npm run typecheck

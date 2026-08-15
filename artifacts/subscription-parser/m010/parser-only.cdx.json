@@ -2,7 +2,7 @@
   "$schema": "https://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:f8b7d687-a005-23f5-a515-d1fbbbf018a2",
+  "serialNumber": "urn:uuid:11b79198-a332-a427-7d1a-6fd56bbfd075",
   "version": 1,
   "metadata": {
     "component": {
@@ -44,6 +44,28 @@
         {
           "name": "nethop:cargo-license-original",
           "value": "AGPL-3.0-only"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/quote@1.0.47",
+      "name": "quote",
+      "version": "1.0.47",
+      "purl": "pkg:cargo/quote@1.0.47",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.47"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "MIT OR Apache-2.0"
         }
       ]
     },
@@ -203,28 +225,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/quote@1.0.47",
-      "name": "quote",
-      "version": "1.0.47",
-      "purl": "pkg:cargo/quote@1.0.47",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "properties": [
-        {
-          "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.47"
-        },
-        {
-          "name": "nethop:cargo-license-original",
-          "value": "MIT OR Apache-2.0"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:cargo/syn@2.0.119",
       "name": "syn",
       "version": "2.0.119",
@@ -238,6 +238,28 @@
         {
           "name": "nethop:cargo-id",
           "value": "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.119"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/syn@3.0.3",
+      "name": "syn",
+      "version": "3.0.3",
+      "purl": "pkg:cargo/syn@3.0.3",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#syn@3.0.3"
         },
         {
           "name": "nethop:cargo-license-original",
@@ -401,28 +423,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/syn@3.0.3",
-      "name": "syn",
-      "version": "3.0.3",
-      "purl": "pkg:cargo/syn@3.0.3",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "properties": [
-        {
-          "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#syn@3.0.3"
-        },
-        {
-          "name": "nethop:cargo-license-original",
-          "value": "MIT OR Apache-2.0"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:cargo/proc-macro2@1.0.107",
       "name": "proc-macro2",
       "version": "1.0.107",
@@ -440,6 +440,28 @@
         {
           "name": "nethop:cargo-license-original",
           "value": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/zeroize@1.9.0",
+      "name": "zeroize",
+      "version": "1.9.0",
+      "purl": "pkg:cargo/zeroize@1.9.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.0"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "Apache-2.0 OR MIT"
         }
       ]
     },
@@ -467,23 +489,23 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/num-traits@0.2.19",
-      "name": "num-traits",
-      "version": "0.2.19",
-      "purl": "pkg:cargo/num-traits@0.2.19",
+      "bom-ref": "pkg:cargo/memchr@2.8.3",
+      "name": "memchr",
+      "version": "2.8.3",
+      "purl": "pkg:cargo/memchr@2.8.3",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "Unlicense OR MIT"
         }
       ],
       "properties": [
         {
           "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#num-traits@0.2.19"
+          "value": "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.3"
         },
         {
           "name": "nethop:cargo-license-original",
-          "value": "MIT OR Apache-2.0"
+          "value": "Unlicense OR MIT"
         }
       ]
     },
@@ -638,6 +660,28 @@
         {
           "name": "nethop:cargo-license-original",
           "value": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/const-oid@0.10.2",
+      "name": "const-oid",
+      "version": "0.10.2",
+      "purl": "pkg:cargo/const-oid@0.10.2",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "nethop:cargo-id",
+          "value": "registry+https://github.com/rust-lang/crates.io-index#const-oid@0.10.2"
+        },
+        {
+          "name": "nethop:cargo-license-original",
+          "value": "Apache-2.0 OR MIT"
         }
       ]
     },
@@ -841,45 +885,23 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/memchr@2.8.3",
-      "name": "memchr",
-      "version": "2.8.3",
-      "purl": "pkg:cargo/memchr@2.8.3",
+      "bom-ref": "pkg:cargo/num-traits@0.2.19",
+      "name": "num-traits",
+      "version": "0.2.19",
+      "purl": "pkg:cargo/num-traits@0.2.19",
       "licenses": [
         {
-          "expression": "Unlicense OR MIT"
+          "expression": "MIT OR Apache-2.0"
         }
       ],
       "properties": [
         {
           "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.3"
+          "value": "registry+https://github.com/rust-lang/crates.io-index#num-traits@0.2.19"
         },
         {
           "name": "nethop:cargo-license-original",
-          "value": "Unlicense OR MIT"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:cargo/zeroize@1.9.0",
-      "name": "zeroize",
-      "version": "1.9.0",
-      "purl": "pkg:cargo/zeroize@1.9.0",
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR MIT"
-        }
-      ],
-      "properties": [
-        {
-          "name": "nethop:cargo-id",
-          "value": "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.0"
-        },
-        {
-          "name": "nethop:cargo-license-original",
-          "value": "Apache-2.0 OR MIT"
+          "value": "MIT OR Apache-2.0"
         }
       ]
     },
@@ -1037,14 +1059,14 @@
       ]
     },
     {
-      "ref": "pkg:cargo/zeroize@1.9.0",
-      "dependsOn": [
-        "pkg:cargo/zeroize_derive@1.5.0"
-      ]
-    },
-    {
       "ref": "pkg:cargo/percent-encoding@2.3.2",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/num-traits@0.2.19",
+      "dependsOn": [
+        "pkg:cargo/autocfg@1.5.1"
+      ]
     },
     {
       "ref": "pkg:cargo/memchr@2.8.3",
@@ -1100,10 +1122,14 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/cpufeatures@0.3.0",
+      "ref": "pkg:cargo/zeroize@1.9.0",
       "dependsOn": [
-        "pkg:cargo/libc@0.2.189"
+        "pkg:cargo/zeroize_derive@1.5.0"
       ]
+    },
+    {
+      "ref": "pkg:cargo/const-oid@0.10.2",
+      "dependsOn": []
     },
     {
       "ref": "pkg:cargo/crypto-common@0.2.2",
@@ -1115,6 +1141,7 @@
       "ref": "pkg:cargo/digest@0.11.3",
       "dependsOn": [
         "pkg:cargo/block-buffer@0.12.1",
+        "pkg:cargo/const-oid@0.10.2",
         "pkg:cargo/crypto-common@0.2.2"
       ]
     },
@@ -1152,9 +1179,9 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/num-traits@0.2.19",
+      "ref": "pkg:cargo/cpufeatures@0.3.0",
       "dependsOn": [
-        "pkg:cargo/autocfg@1.5.1"
+        "pkg:cargo/libc@0.2.189"
       ]
     },
     {

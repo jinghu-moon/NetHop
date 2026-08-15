@@ -1,14 +1,18 @@
 # NetHop Rust 节点测速与自动选优引擎 TDD 任务清单
 
-> 状态：主机实现、release-mode fake-core SLA/资源/后处理证据与确定性测试完成；Android 真机已通过 27 candidates SLA、资源回收、manual/periodic selection fence、自动/手动选择模式 10 分钟预算、selector 连接保持语义、TPROXY/TUN 闭环、generation 回滚和敏感信息扫描，完整真机 gate 仍待 64 candidates、多订阅和 clean reproducible release
-> 日期：2026-08-12
+> 状态：主机实现、release-mode fake-core SLA/资源/后处理证据、逐节点反馈及快速选优/同轮后台续测确定性测试完成；Android 真机已通过 Protocol v5 快速选择、单次 selector mutation、同轮后台续测与代理闭环验收
+> 日期：2026-08-15
 > 目标平台：Android arm64 Root 模块
 > 设计依据：[`13-rust-node-benchmark-engine-design.md`](./13-rust-node-benchmark-engine-design.md)
 > 前置实现：[`12-subscription-selection-and-node-optimization-tdd-task-list.md`](./12-subscription-selection-and-node-optimization-tdd-task-list.md) 阶段 A-M
 > 影响范围：`nethop-core`、`nethopd`、`nethop-protocol`、`nethopctl`、WebUI、模块构建、Android 真机证据
 > 兼容策略：项目未发布，不保留旧 group delay、`nethop-auto`、旧 timeout 或旧 wire 兼容层
 
-> 证据摘要（2026-08-13）：除既有 workspace/WebUI/module/真实 sing-box check 外，`scripts/node-benchmark-host-release-gate.ps1` 已在 release profile 运行 1/16/27/64 success（各 20 样本）、64 mixed/timeout（各 3 样本）与 100 次 bootstrap；64 success wall p95 约 8ms，mixed/timeout 三轮均约 4.5s，engine peak 为 64 task/64 socket、结束残留 0、受控 heap 增量约 1.95MiB；`node_benchmark_postprocess_evidence` 的 decision+membership GET+PUT+final snapshot p95 约 4ms。`android-size-comparison.json` 证明 nethopd 增量 378552 bytes 小于 750KiB；整 ZIP 不可比较，因为 before/after 的 sing-box 与 WebUI 输入不同。Android 基线 `android-alioth-a13-arm64-20260813-d14`（Android 13/API 33、arm64-v8a、kernel 4.19.157、Magisk 30.6）已验证 27 candidates 多轮 operation 均在 4.511 秒内；本轮三次为 4.494/4.503/4.502 秒，结果分别为 27/27、21/27、24/27 success。Windows ADB+CLI wall 分别约 4.991/5.027/5.085 秒，其中包含 ADB 进程启动与 CLI 25ms polling，不计入设备内引擎 SLA。自动选择模式的 613 秒只读窗口内恰好新增一轮周期 operation：27 candidates、4.506 秒、20 success/7 timeout；worker CPU 增加 127 ticks（设备 `CLK_TCK=100`，约 1.27 CPU 秒，占单核窗口约 0.21%），线程 4→5→4、采样 FD 19→29→19、RSS 9756→10132→9788KiB。同期整机 `wlan0` 增量约 1.10MiB/303KiB，包含其他应用流量，只作为上界，不归因成 daemon 独占流量。capture 回归覆盖 generation 10/14 的 TPROXY 与 generation 11/13 的 TUN：TUN 使用 `nethop0`、table 2022 和 `auto_route=true`，27 candidates 测速为 4.503 秒且 23/27 success；回切后 `nethop0` 被回收，table 100、`NH_OUT_A`/`NH_PRE_A` 与 TPROXY 恢复。普通应用口径使用 UID 2000 验证 Google/YouTube 为 HTTP 204、Bilibili 为 HTTP 200；UID 0 由 `applications.exclude_uids` 明确排除，不能作为代理联网测试主体。
+> D16 覆盖说明：本文完成的测速调度和选优证据继续有效；任务正文中的 `active_node_id` 是 Protocol v3 before 术语。当前消费者统一使用 Protocol v5、generation registry v3 与 selection snapshot v2 typed `active_terminal`，不得恢复旧 wire。
+
+> 证据摘要（2026-08-13）：除既有 workspace/WebUI/module/真实 sing-box check 外，`scripts/node-benchmark-host-release-gate.ps1` 已在 release profile 运行 1/16/27/64 success（各 20 样本）、64 mixed/timeout（各 3 样本）与 100 次 bootstrap；64 success wall p95 约 8ms，mixed/timeout 三轮均约 4.5s，engine peak 为 64 task/64 socket、结束残留 0、受控 heap 增量约 1.95MiB；`node_benchmark_postprocess_evidence` 的 decision+membership GET+PUT+final snapshot p95 约 4ms。`android-size-comparison.json` 证明 nethopd 增量 378552 bytes 小于 750KiB；整 ZIP 不可比较，因为 before/after 的 sing-box 与 WebUI 输入不同。Android 基线 `android-alioth-a13-arm64-20260813-d14`（Android 13/API 33、arm64-v8a、kernel 4.19.157、Magisk 30.6）已验证 27 candidates 多轮 operation 均在 4.511 秒内；本轮三次为 4.494/4.503/4.502 秒，结果分别为 27/27、21/27、24/27 success。Windows ADB+CLI wall 分别约 4.991/5.027/5.085 秒，其中包含 ADB 进程启动与 CLI 25ms polling，不计入设备内引擎 SLA。自动选择模式的 613 秒只读窗口内恰好新增一轮周期 operation：27 candidates、4.506 秒、20 success/7 timeout；worker CPU 增加 127 ticks（设备 `CLK_TCK=100`，约 1.27 CPU 秒，占单核窗口约 0.21%），线程 4→5→4、采样 FD 19→29→19、RSS 9756→10132→9788KiB。同期整机 `wlan0` 增量约 1.10MiB/303KiB，包含其他应用流量，只作为上界，不归因成 daemon 独占流量。capture 回归覆盖 generation 10/14 的 TPROXY 与 generation 11/13 的 TUN：TUN 使用 `nethop0`、table 2022 和 `auto_route=true`，27 candidates 测速为 4.503 秒且 23/27 success；回切后 `nethop0` 被回收，table 100、`NH_OUT_A`/`NH_PRE_A` 与 TPROXY 恢复。普通应用口径使用 UID 2000 验证 Google/YouTube 为 HTTP 204、Bilibili 为 HTTP 200；UID 0 由 `applications.exclude_uids` 明确排除，不能作为代理联网测试主体。2026-08-14 在 38 candidates 的真实订阅上复验：engine report 为 4.504 秒，设备内完整 CLI 墙钟为 5.12 秒。按用户确认的 7 秒 CLI 上限判定合格，继续保留 4.5 秒有效探测窗口与 4.9 秒内部 deadline。
+>
+> Protocol v5 快速选择真机补充证据（2026-08-15）：设备端二进制摘要与本地最新 arm64 模块一致，generation 6 的 64-candidate auto pool 连续三轮完整事件采样在 2021/2236/2371ms 产生快速选择里程碑，分别基于 45/43/43 个已完成候选；里程碑后原 operation 继续产生 11/12/11 个进度事件，最终均覆盖 64 candidates，设备内 operation 分别为 4525/4527/4533ms。三轮均保持当前最优节点，快速阶段和终态 selector PUT 都为 0。另以正常 CLI 临时选择已测得的高延迟节点并立即恢复 auto intent，切换轮在 2155ms 发布 `selection`，下一帧即为 `node_active`，之后同轮继续产生 14 个进度事件并在 4513ms 覆盖 64 candidates；快速阶段仅一次 selector PUT（约 10.4ms），terminal PUT 为 0。完整 CLI/ADB 墙钟为 4.96-5.10 秒，低于用户确认的 7 秒上限；worker 完成后恢复 5 threads/20 FD，RSS 回落至约 8.4MiB。每轮 generation 均保持 6，runtime/capture/core API 持续健康；普通应用 UID 2000 访问 Google/YouTube 返回 HTTP 204、Bilibili 返回 HTTP 200。证据不记录节点名称、stable ID、internal tag、订阅 URL、token、API secret 或设备 serial。
 
 > 未完成原因：M001 需要 clean revision 的可复现 release；L006 的整 ZIP 体积需要相同 sing-box/WebUI 输入；当前订阅只有 27 candidates，不能伪造 M006 的 64 candidates 设备证据；M013 需要启用第二个真实订阅源并完成多订阅公平性回归。因此 N001-N005/N009-N010 只能完成代码/静态审计，不能签署依赖 M016 的正式 release gate。
 
@@ -28,10 +32,13 @@
 | H | 完成 | 单 selector golden、删除 URLTest group/concurrency、registry auto_pool、真实 sing-box v1.13.15 single/merge check | 无 |
 | I | 完成（host + 选择真机） | stable ID、manual no-PUT、周期 auto 超过 tolerance 切换、tolerance 内保持、final snapshot、绝对 deadline、连接保持语义 | 无 |
 | J | 完成 | strict Protocol DTO、operation query/event、CLI 25ms query + 6s budget、旧同步 shape 删除 | 无 |
-| K | 完成 | strict WebUI ACK/report、7s watchdog、批量结果、失败清旧延迟、daemon active、31 项 E2E | 无 |
+| K | 完成 | strict WebUI ACK/progress/report、7s watchdog、逐节点回填、失败清旧延迟、daemon active、双向延迟排序 | 无 |
 | L | 完成（host，部分 Android） | host 全门禁；Android 27 candidates 的 thread/FD/RSS 与完成后回收通过 | 相同输入整 ZIP、64 candidates Android 资源、空闲 CPU/wakeup |
 | M | 部分完成 | M003-M005、M007-M012、M014-M015 已取得真机证据；TPROXY/TUN 测速与回切期间代理闭环成立；模块静态门禁通过 | M001 clean reproducible、M006、M013、M016 |
 | N | 代码完成、发布 gate 待定 | group delay、`nethop-auto`、旧 timeout、TOML concurrency 已从生产路径删除；D00/D06/D10/D12 已同步 | 依赖 M016 的正式删除签核与 clean release readiness |
+| O | 完成（host） | FlClash 调用链复核；有界 progress channel、generation fence、WebUI 逐节点回填、延迟升降序；nethopd、protocol 与 WebUI host gate 全绿 | Android 实时回填视觉与事件时序仍待下次模块真机回归 |
+| P | 完成（host） | Protocol v5 强制微秒级 engine/control/terminal timing；真实成功/timeout/control 测试、CLI fixture 与 WebUI strict DTO 全绿 | Android terminal timing 样本尚未采集，不据此提出优化结论 |
+| Q | 完成（host + Android） | 2.0/2.8/3.0 秒 strict checkpoint、稳定部分结果槽、单次 selector mutation、同轮后台续测、v5 milestone/ACK/terminal、WebUI 即时切换与最终收敛均通过；64-candidate 真机三轮保持及一轮强制切换通过 | 无 |
 
 ## 1. 目的与完成边界
 
@@ -99,7 +106,7 @@ VERIFY    运行本任务、直接前驱和指定回归门禁
 | daemon 契约 | `crates/nethopd/tests` | worker wake、thread、channel、generation fence、selector 事务 |
 | composer golden | `nethop-core/tests` | 单 selector 配置、registry 和真实 `sing-box check` |
 | Protocol/CLI | `nethop-protocol` / `nethopctl` tests | operation ACK/report/event、超时与脱敏 |
-| WebUI | Vitest Node/Browser + Playwright | operation 消费、批量更新、pending 与视觉回归 |
+| WebUI | Vitest Node/Browser + Playwright | operation 消费、逐节点 progress、terminal 收敛、双向延迟排序与视觉回归 |
 | 静态依赖 | manifest/lock/cargo tree 契约 | Tokio/Hyper 最小 feature 与禁入项 |
 | release A/B | Android arm64 release 构建 | 二进制、ZIP、RSS、FD、thread、task、bootstrap |
 | Android 真机 | ADB + 脱敏报告 | 5 秒 SLA、代理闭环、切换、功耗与回滚 |
@@ -259,7 +266,7 @@ flowchart LR
 
 - [ ] **B004 - 定义 operation 时间预算值对象**
   - `depends_on`: A008；`parallel_with`: B001,B002,B003
-  - `scope`: 固定 probe cutoff 4500ms、internal deadline 4900ms、wall SLA 5000ms。
+  - `scope`: 固定 probe cutoff 4500ms、internal deadline 4900ms、设备内完整 CLI wall SLA 7000ms。
   - `RED`: 0、倒序或超出 5 秒预算被接受。
   - `GREEN`: 实现单一 `BenchmarkBudget`。
   - `REFACTOR/VERIFY`: 所有剩余时间计算复用该对象；用 monotonic Instant 测试。
@@ -889,11 +896,11 @@ flowchart LR
 
 - [ ] **I008 - 发布 typed NodeTest 完成事件**
   - `depends_on`: I004,I005,I006；`parallel_with`: I007
-  - `scope`: 一轮只发布一个 bounded terminal event。
-  - `RED`: 每节点发布事件导致 64 次 UI 更新。
-  - `GREEN`: worker finalize 后发布完整 report 摘要。
+  - `scope`: 每个已完成 candidate 发布一个 bounded progress event，整轮只发布一个 bounded terminal event。
+  - `RED`: progress 泄漏 internal tag、计数不单调，或缺 terminal 导致 operation 无法收敛。
+  - `GREEN`: worker 先排空有界 progress channel，再发布完整 terminal report。
   - `REFACTOR/VERIFY`: event size/secret canary。
-  - `done`: 消费层一次性更新。
+  - `done`: 快节点即时可见，terminal 仍是唯一完整终态。
 
 - [ ] **I009 - 周期调度仅在 auto intent 启动**
   - `depends_on`: I007,I008；`parallel_with`: I010,I011
@@ -963,11 +970,11 @@ flowchart LR
 
 - [ ] **J004 - 更新 NodeTest 事件 contract**
   - `depends_on`: J001,J002,J003；`parallel_with`: J005,J006
-  - `scope`: 完成事件携带 terminal report，不发送逐节点 stream。
-  - `RED`: event reducer 无法关联 operation ID。
-  - `GREEN`: 更新 EventKind payload validator。
+  - `scope`: 同一 `EventKind::NodeTest` 承载严格 progress 或 terminal report，不增加第二套订阅主题。
+  - `RED`: event reducer 无法按 phase 校验，或 progress 缺 operation/generation/completed/candidate_count。
+  - `GREEN`: 增加严格 progress DTO，并保留 terminal report validator。
   - `REFACTOR/VERIFY`: 事件大小与 secret canary。
-  - `done`: 一轮一个完成事件。
+  - `done`: 每个候选最多一个 progress，一轮恰有一个 terminal event。
 
 - [ ] **J005 - CLI NodeTestAll 等待 operation 完成**
   - `depends_on`: J001,J002,J003；`parallel_with`: J004,J006
@@ -1059,13 +1066,13 @@ flowchart LR
   - `REFACTOR/VERIFY`: watchdog 不将本地超时伪造成 daemon success/failed。
   - `done`: 丢事件时 UI 最迟 7 秒恢复可操作。
 
-- [ ] **K007 - 一次性批量提交节点测速结果**
+- [ ] **K007 - 增量提交节点测速结果并由 terminal 收敛**
   - `depends_on`: K002,K004；`parallel_with`: K006
-  - `scope`: 一个 terminal report 只触发一次节点 store 更新。
-  - `RED`: 64 个节点造成 64 次排序、重排或 render commit。
-  - `GREEN`: 构造完整 map 后单次 replace/patch。
-  - `REFACTOR/VERIFY`: browser test 统计 store commit 和 render 次数。
-  - `done`: 一轮测速最多一次列表结果提交。
+  - `scope`: progress 只 patch 对应 stable node；terminal report 对全部 outcome 做最终一致性覆盖。
+  - `RED`: WebUI 等待整轮才显示首个结果，或失败节点继续展示旧延迟。
+  - `GREEN`: runtime store 维护本轮 probe state，event reducer 按 phase 分发。
+  - `REFACTOR/VERIFY`: 64 节点上限下验证节点顺序表不重建、未知 ID 被忽略。
+  - `done`: 快节点立即显示，terminal 后 store 与完整 report 一致。
 
 - [ ] **K008 - 映射节点失败状态且禁止复用旧延迟**
   - `depends_on`: K002,K007；`parallel_with`: K009
@@ -1102,7 +1109,7 @@ flowchart LR
 - [ ] **K012 - 通过 WebUI gate**
   - `depends_on`: K001,K002,K003,K004,K005,K006,K007,K008,K009,K010,K011；`parallel_with`: none
   - `scope`: 聚合 unit、browser、bundle 和旧节点选择回归。
-  - `RED`: 旧同步 wire、逐节点提交或前端选优存在时失败。
+  - `RED`: 旧同步 wire、未校验 progress、terminal 不收敛或前端选优存在时失败。
   - `GREEN`: 只补 gate wiring。
   - `REFACTOR/VERIFY`: 执行 WebUI lint、typecheck、unit、browser 和 build。
   - `done`: WebUI 新消费链完整通过。
@@ -1291,7 +1298,7 @@ flowchart LR
   - `GREEN`: 修正 operation completion intent fence。
   - `REFACTOR/VERIFY`: 测速中切换另一 manual 节点也不被覆盖。
   - `done`: manual 所有权始终属于用户。
-  - `evidence`: auto intent 下连续 manual operation 即使出现 109-138ms 更优节点，active 始终保持 `nh1s-0009fb426b652bc3`；生产 fence 仅允许 `trigger=periodic && intent=auto` 执行自动选优，并有定向回归测试。
+  - `evidence`: 2026-08-14 契约审计发现旧实现把 operation 来源 `trigger=manual` 错当成 selection intent，导致 auto intent 下用户即时测速不选优，违反 I010 的“即时与周期行为一致”和 D13 的 intent 不变量。RED 复现后，生产 fence 收敛为只检查 operation 完成时重新读取的持久 intent：manual intent 保持 active，auto intent 按 tolerance keep/switch；trigger 仅保留来源审计。host fake-core 已覆盖 auto+manual trigger 单次 PUT 与 manual intent 零 PUT，修复版 Android selector ACK 待新模块复验。
 
 - [x] **M010 - 验证 selector 切换连接语义**
   - `depends_on`: M008；`parallel_with`: M011,M012,M013
@@ -1436,15 +1443,185 @@ flowchart LR
   - `scope`: 从干净构建环境重跑 workspace、WebUI、module、host SLA 与指定真机回归。
   - `RED`: 旧路径残留、测试 skip、SLA 超标或回归失败时拒绝完成。
   - `GREEN`: 仅修复被最终 gate 揭示的问题，不放宽门槛。
-  - `REFACTOR/VERIFY`: 对照第 22 节逐条签核。
+  - `REFACTOR/VERIFY`: 对照第 25 节逐条签核。
   - `done`: D13 设计和 D14 清单全部有可复现证据。
 
-## 21. 推荐执行顺序与 D12 合并规则
+## 21. 阶段 O：FlClash 对照后的实时反馈与排序优化
+
+本阶段不改变 E-I 已冻结的网络探测、cutoff、deadline 或 auto 选优事务，只缩短首个结果可见时间并补齐节点页排序能力。
+
+- [x] **O001 - 冻结 FlClash 测速调用链事实**
+  - `scope`: 核对 Flutter 100/批、Go batch 并发 50、单节点 callback 与 Mihomo URLTest。
+  - `RED`: 把 FlClash 主观速度错误归因为更短整轮 deadline 或无界并发。
+  - `GREEN`: 记录源码路径和真实调用边界。
+  - `done`: 明确只吸收逐节点即时回填，不照搬调度器。
+
+- [x] **O002 - 定义严格 progress DTO**
+  - `depends_on`: O001
+  - `scope`: operation_id、phase、generation、completed、candidate_count、单个 outcome。
+  - `RED`: 未知字段、非法 operation ID、计数越界或非法 outcome 被接受。
+  - `GREEN`: protocol 使用 deny-unknown-fields DTO 与 validate。
+  - `done`: progress 可独立验证且不承载 internal tag、URL 或原始错误。
+
+- [x] **O003 - 建立有界进度通道和即时 wake**
+  - `depends_on`: O002
+  - `scope`: benchmark thread 每完成一个 candidate 尝试写入容量 64 的 channel 并唤醒 worker。
+  - `RED`: 只能在 terminal 后取得结果，或进度反压阻塞 probe。
+  - `GREEN`: 使用非阻塞 `try_send`；terminal channel 和最终 report 顺序保持不变。
+  - `done`: 不新增线程、socket、第二次 probe 或常驻 runtime。
+
+- [x] **O004 - progress 通过 generation fence 发布**
+  - `depends_on`: O003
+  - `scope`: worker 先排空 progress，再收割 terminal；旧 generation progress 被抑制。
+  - `RED`: generation 切换后旧延迟污染新节点表，或 completed 不单调。
+  - `GREEN`: 单一 helper 构造公开 DTO，并以 worker 当前 generation admission。
+  - `done`: terminal 之前的 progress 单调、脱敏、generation-bound。
+
+- [x] **O005 - WebUI 逐节点回填并由 terminal 收敛**
+  - `depends_on`: O002,O004
+  - `scope`: runtime store 标记 measuring，progress 更新单节点，terminal 覆盖最终 outcomes。
+  - `RED`: 快节点仍等待慢节点 cutoff，或 timeout 复用上轮延迟。
+  - `GREEN`: event reducer 按 `result.phase` 分发；event stream 不可用时保留 terminal 回退路径。
+  - `done`: 首个 probe 完成即可显示，最终结果与 daemon report 一致。
+
+- [x] **O006 - 增加严格延迟升降序**
+  - `depends_on`: O005
+  - `scope`: 节点页更多菜单增加“延迟：低到高/高到低”。
+  - `RED`: 未知/超时在降序跑到最前，或选中态破坏延迟次序。
+  - `GREEN`: 已知延迟按方向排序，未知统一置后，名称和 stable ID 作为确定性 tie-breaker。
+  - `done`: 两种方向语义严格、持久化值可校验。
+
+- [x] **O007 - 通过实时反馈 host gate**
+  - `depends_on`: O001,O002,O003,O004,O005,O006
+  - `scope`: protocol、nethopd benchmark、WebUI unit/browser/build/import/dependency/bundle/security 全回归。
+  - `RED`: progress 契约、terminal 回退、排序或既有节点选择任一回归。
+  - `GREEN`: 只修复被门禁揭示的问题，不放宽 4.5/4.9 秒预算。
+  - `done`: host gate 全绿；真机证据保持明确未签署。
+  - `evidence`: `nethopd` 全量测试通过；Protocol v5 selection/benchmark 契约通过；WebUI unit、browser、E2E、typecheck、production build、imports、dependencies、bundle 与 security 门禁通过。节点页保持独立 lazy chunk，未新增前端依赖。真机未执行。
+
+## 22. 阶段 P：全链路分段计时与优化前证据
+
+本阶段只增加可观测性，不调整 64 并发、4.5 秒 probe cutoff、4.9 秒 daemon deadline、probe URL、tolerance 或 selector 行为。所有字段使用单调时钟和微秒单位；阶段边界互不重叠，允许未归类间隙但禁止阶段和超过 total。
+
+- [x] **P001 - 以 strict Protocol RED 冻结 timing 契约**
+  - `scope`: `BenchmarkEngineTiming`、`BenchmarkControlTiming`、`BenchmarkTerminalTiming` 和 mandatory terminal 字段。
+  - `RED`: 类型、构造器和 terminal timing 尚不存在，Rust contract 无法编译；WebUI 对 `report.timing` 报 unknown field。
+  - `GREEN`: Protocol v5 使用 `deny_unknown_fields`、60 秒观测上限、阶段守恒、毫秒摘要映射与 operation 守恒校验。
+  - `done`: 缺字段、未知字段、越界或不守恒数据均 fail closed。
+
+- [x] **P002 - 记录 benchmark engine 各阶段真实耗时**
+  - `depends_on`: P001
+  - `scope`: thread spawn、runtime init、candidate dispatch、probe、result assembly、engine total。
+  - `RED`: 既有 `bootstrap_ms/elapsed_ms` 无法区分 runtime、探测和结果组装。
+  - `GREEN`: `Instant` 贯穿线程与 current-thread runtime；实际 report 通过 `from_timed_outcomes` 构造。
+  - `REFACTOR/VERIFY`: 成功、timeout、1/16/27/64 并发测试验证阶段和、摘要映射与 report validate。
+  - `done`: 不新增线程、socket、网络请求或第二条测速路径。
+
+- [x] **P003 - 记录 worker 收割与 selector 后处理耗时**
+  - `depends_on`: P001,P002
+  - `scope`: admission、worker reap、intent load、current snapshot、decision、target resolve、selector apply、final snapshot、operation total。
+  - `RED`: engine `elapsed_ms` 无法解释 CLI 墙钟与 selector 后处理差值。
+  - `GREEN`: admission 在 engine spawn 前截止；worker reap 由 job elapsed 与 engine total 的差得到；control 使用单一 timed wrapper 保证失败路径也填写 total。
+  - `REFACTOR/VERIFY`: automatic switch fake-core 测试验证 GET/PUT/final snapshot 对应阶段及守恒。
+  - `done`: manual、superseded、deadline 和 control error 不伪造未执行阶段。
+
+- [x] **P004 - CLI/WebUI 消费严格 timing**
+  - `depends_on`: P001,P003
+  - `scope`: CLI typed terminal fixture、WebUI DTO/interfaces/mock/event fixture。
+  - `RED`: 新 terminal 被旧 WebUI strict allowlist 拒绝。
+  - `GREEN`: CLI 原样输出；WebUI 解析 camelCase typed timing 并重复执行上限与守恒校验。
+  - `done`: timing 不含 URL、internal tag、secret 或原始 core body；首版不增加 UI 面板和遥测存储。
+
+- [x] **P005 - 完成 host 回归并冻结诊断口径**
+  - `depends_on`: P001,P002,P003,P004
+  - `scope`: Protocol、nethopd、nethopctl、WebUI unit/typecheck、文档。
+  - `VERIFY`: Protocol 全套、nethopd 全套、nethopctl 全套、WebUI 75 unit 与 typecheck 通过；`git diff --check` 无 whitespace error。
+  - `done`: D13 明确 `operation_total_us` 是 daemon 内口径，ADB/`su`/CLI 进程启动和 polling 属于外部 wall clock；Android 未采样前不调整性能参数。
+
+- [x] **P006 - 采集 64 candidates Android 三轮 timing**
+  - `depends_on`: P005
+  - `scope`: 同一 generation、同一 auto pool 连续执行三轮，分别记录外部 ADB+CLI wall、engine 阶段和 worker/control 阶段。
+  - `VERIFY`: 三轮 tested 均为 64；外部 wall 为 5020/4831/4992ms，daemon operation 为 4520.049/4519.344/4522.935ms，probe 为 4507.492/4504.483/4510.730ms；thread spawn 为 331/551/304us，runtime init 为 158/120/101us，candidate dispatch 为 1179/950/827us，result assembly 为 135/88/160us。
+  - `done`: 本地 engine 启动、派发和组装合计始终低于 2ms，完整耗时由存在 timeout candidate 时的 4.5s 共同 probe cutoff 主导；当前已满足 daemon 5s 目标与设备内 CLI 7s 硬上限，不基于公网样本缩短 cutoff 或减少候选机会。
+  - `evidence`: 三轮分别成功 36/39/40，timeout 20/15/16，其他失败 8/10/8；普通应用 UID 2000 的 Google/YouTube/Bilibili HTTPS 分别返回 204/200/200。root UID 按配置显式排除，root 直连结果不作为代理可用性证据。完整 URL、token、internal tag 和 API secret 均未进入报告。
+  - `2026-08-15 selector fix device evidence`: 修复版模块覆盖安装并重启后保持 generation 4、`running_tproxy`、capture active、core API available 和 watcher healthy。auto intent 下 64-candidate `node test-all` 的 ADB+CLI wall 为 5045ms，engine report 为 4504ms（thread spawn 719us、runtime init 540us、candidate dispatch 5779us、probe 4495915us、result assembly 1257us），control 后处理为 32061us；同轮 active terminal 发生变化，证明即时手动触发的 auto intent 会执行选优与 selector apply。随后把当前 active terminal 设为 manual intent，第二轮 64-candidate 测速 wall 为 5027ms，requested 与 active 均保持不变；测试结束后恢复 auto 成功。最终 health probe accepted，Google/YouTube/Bilibili HTTPS 分别返回 204/200/200。该证据只签署即时 auto/manual 语义和当前设备计时，不替代 M016 的完整资源、回滚与发布门禁。
+
+- [x] **P007 - 细分 probe 完成分布与 cutoff 尾部**
+  - `depends_on`: P006
+  - `scope`: 每节点 Rust 请求耗时/完成时刻；首结果、末结果、末成功、0.5/1/2/3 秒累计完成数、cutoff pending 与 tail。
+  - `RED`: cutoff 合成 timeout 被当成 0 微秒完成，`probe_us` 无法区分多数节点完成时间和等待失效节点的尾部。
+  - `GREEN`: 只在 JoinSet 实际收割点记录真实完成；shutdown 后单独为未返回候选合成 timeout，并通过 strict probe summary 表达计数与时间。
+  - `REFACTOR/VERIFY`: Protocol 对时间上限、累计桶单调、完成/pending 守恒和 tail 边界 fail closed；WebUI 重复校验；64 stalled fake core 证明 pending 不进入完成桶。
+  - `done`: 不修改 64 并发、4.5 秒 cutoff、probe URL、选择算法、线程或 socket 数；Rust/CLI 全套、WebUI unit 75、browser 9 和 typecheck 通过。
+
+- [x] **P008 - 采集 Android probe 完成分布**
+  - `depends_on`: P007
+  - `scope`: 在同一 generation 的 64-candidate auto pool 采集至少三轮新 summary，记录各时间桶、last success、pending 和 tail。
+  - `VERIFY`: 报告不含订阅 URL、internal tag 或 secret；三轮 wall 仍不超过设备 7 秒硬上限。
+  - `done`: 能量化回答多数节点完成所需时间，以及共同 cutoff 为等待少量失效节点增加的尾部成本，再决定是否设计快速选优或后台续测。
+  - `evidence`: 2026-08-15 在 generation 5、64-candidate auto pool 连续采集三轮。ADB+CLI wall 为 5174/5014/4846ms，engine elapsed 为 4505/4502/4509ms，均低于设备 7 秒硬上限。首个真实结果为 255615/215472/180130us，最后真实结果及最后成功为 2980115/4195290/3662330us；0.5/1/2/3 秒累计完成数分别为 10/21/50/59、11/23/46/52、8/19/43/49；cutoff 前真实完成 59/61/55，pending 为 5/3/9，等待少量未完成节点增加的 cutoff tail 为 1524451/306859/847385us。三轮成功 48/50/46、其他失败 11/11/9、cutoff timeout 5/3/9。结论是多数候选在 2-3 秒内完成，但当前整轮耗时由 3-9 个尾部候选触及共同 4.5 秒 cutoff 主导；该数据只支持后续评审快速选优/后台续测，不授权直接缩短 cutoff。测速后 runtime 保持 `running_tproxy`、capture active、auto intent 和 generation 5；普通 UID 2000 的 Google/YouTube/Bilibili HTTPS 分别返回 204/200/200。UID 0 由配置排除，其直连超时不是代理失败。证据未记录节点 ID、internal tag、订阅 URL、token 或 API secret。
+
+## 23. 阶段 Q：2-3 秒快速选优与同轮后台续测
+
+本阶段不缩短 4.5 秒 probe cutoff，不降低 64 candidates 获得探测机会的公平性，也不启动第二轮测速。快速决策后，原 benchmark thread 继续驱动同一批 candidate future；完整 terminal 仍在 4.9 秒 operation deadline 内收敛。
+
+- [x] **Q001 - 冻结快速选择策略边界**
+  - `scope`: earliest 2000ms、latest 2800ms、selector ACK deadline 3000ms；早期覆盖 `ceil(2N/3)`，最晚覆盖 `ceil(N/2)`。
+  - `RED`: 当前节点 pending、零成功、覆盖不足或 generation 变化仍可能触发 selector mutation。
+  - `GREEN`: `fast_selection_policy` 使用纯函数和严格 fail-closed decision enum。
+  - `VERIFY`: 覆盖 2.0/2.8 秒边界、1/64 candidates、覆盖率取整、current pending、无成功和 superseded。
+  - `done`: 只有 auto intent、覆盖达标、至少一个成功且当前候选状态已知时允许快速评估。
+
+- [x] **Q002 - 升级 strict Protocol v5**
+  - `depends_on`: Q001
+  - `scope`: running ACK、selection milestone 与 terminal 共享一个 `NodeBenchmarkFastSelection` tagged union；terminal timing 分离 `fast_control` 与 `terminal_control`。
+  - `RED`: pending 携带 metrics、switched 缺 selection、非 switched 伪造 selection、3 秒后声称 switched 或旧 v4 envelope 被接受。
+  - `GREEN`: Rust/WebUI 双端严格解析，删除生产 v4 兼容分支；hello 显式报告 `node_benchmark_fast_selection_v1`。
+  - `VERIFY`: Protocol golden、CLI fixture、WebUI DTO unknown-field/bounds/invariant 测试通过。
+  - `done`: 事件丢失后可从 operation query 的 ACK/terminal 恢复相同快速状态。
+
+- [x] **Q003 - worker 维护稳定部分结果并按检查点唤醒**
+  - `depends_on`: Q001,Q002
+  - `scope`: 按 candidate order 保存 `Vec<Option<NodeProbeOutcome>>`，progress 只填一次稳定槽；`next_wakeup_in()` 同时考虑 2.0/2.8 秒与既有 job deadline。
+  - `RED`: progress wake 丢失导致错过检查点，或完成顺序改变候选顺序和选择结果。
+  - `GREEN`: worker 每次 reap 先排空 progress、推进快速状态，再尝试收割 terminal；快速完成后不取消 benchmark job。
+  - `done`: 不新增线程、runtime、socket、远端请求或 detached background task。
+
+- [x] **Q004 - 强制单轮最多一次 selector mutation**
+  - `depends_on`: Q003
+  - `scope`: 快速控制读取 intent/current snapshot、按 tolerance 决策、解析 stable ID、执行 PUT 并读取 ACK snapshot；terminal 通过 mutation-committed 门闩禁止二次 PUT。
+  - `RED`: 快速切换后 terminal 再次选优，或 control error 因 timing 不守恒使 strict terminal 序列化 panic。
+  - `GREEN`: 快速成功后 terminal 只读取最终 core snapshot；所有快速控制成功/失败路径均结算 `fast_control.total_us`。
+  - `VERIFY`: fake-core 全 operation 只有一个 selector PUT；失败 selector 请求仍通过 timing validate。
+  - `done`: manual、generation superseded、core error 和 deadline 均不产生越权 mutation。
+
+- [x] **Q005 - WebUI 即时消费 milestone 并展示后台续测**
+  - `depends_on`: Q002,Q003
+  - `scope`: selection milestone 到达时立即更新 active selection；保留未完成节点的 `measuring` 状态；terminal 原子覆盖全部 outcome 和最终 snapshot。
+  - `RED`: WebUI 等待完整 terminal 才显示新节点，或快速切换后清空剩余测速状态。
+  - `GREEN`: runtime store 独立保存 fast selection；节点页以轻量文本显示剩余 candidate 数。
+  - `VERIFY`: switched 即时更新、kept/deferred 不伪造 selection、pending probe 保留、terminal 最终收敛测试通过。
+  - `done`: event stream 不可用时，既有同步 terminal 查询路径仍可完整收敛。
+
+- [x] **Q006 - 通过 host 完整门禁**
+  - `depends_on`: Q001,Q002,Q003,Q004,Q005
+  - `VERIFY`: `cargo fmt --check`、Protocol/CLI、`nethopd --features subscription-update` 全套及 Clippy `-D warnings` 通过；WebUI 77 unit、9 browser、31 E2E、typecheck、production build、imports、dependencies、bundle、security 与 release artifact 生成通过。
+  - `evidence`: selector 单次 mutation、失败 timing、v5 manager capability、strict selection milestone、WebUI 即时 selection/后台续测均有自动化回归；主客户端 gzip 约 65.8KiB，低于 80KiB 门禁。
+  - `done`: host 行为、契约、安全和体积门禁均通过，未引入新运行时依赖。
+
+- [x] **Q007 - Android 快速选择与后台续测验收**
+  - `depends_on`: Q006
+  - `scope`: 安装包含 Protocol v5 的新模块，在 64-candidate auto pool 连续采样至少三轮。
+  - `VERIFY`: selection milestone/`node_active` 在条件满足轮次不晚于 3 秒；terminal 继续回填剩余节点且不晚于 4.9 秒；每轮 selector PUT 最多一次；manual/current-pending/覆盖不足按设计 defer；代理闭环、generation、thread/FD/RSS 回收不退化。
+  - `done`: 真机证据脱敏记录 fast state、completed/candidate_count、elapsed、terminal 和资源恢复；不得以 host 测试替代 Android SLA。
+  - `evidence`: Protocol v5 最新模块在 generation 6、64-candidate auto pool 连续三轮完整事件采样中，于 2021/2236/2371ms 基于 45/43/43 个完成结果发布 `kept` 里程碑，随后同一 operation 继续回填 11/12/11 个进度事件，并在 4525/4527/4533ms 完整覆盖 64 candidates；三轮 fast/terminal selector PUT 均为 0。为覆盖真实切换分支，使用正常 CLI 临时选择一个已测得的高延迟 terminal 后立即恢复 auto intent；下一轮于 2155ms 发布 `switched`，`node_active` 紧随 selection 帧，同轮再回填 14 个进度事件并于 4513ms 完整收敛。该轮 fast selector PUT 恰好一次、terminal PUT 为 0，最终 intent 保持 auto。完整 CLI/ADB 墙钟 4.96-5.10 秒；完成后 worker 恢复 5 threads/20 FD、RSS 约 8.4MiB，generation 保持 6，TPROXY capture、core API、DNS guard 和 watcher 健康。普通应用 UID 2000 的 Google/YouTube/Bilibili HTTPS 分别返回 204/204/200。所有记录均脱敏。
+
+## 24. 推荐执行顺序与 D12 合并规则
 
 推荐主路径：
 
 ```text
-A -> (B || C) -> D -> E -> F -> G -> H -> I -> J -> K -> L -> M -> N
+A -> (B || C) -> D -> E -> F -> G -> H -> I -> J -> K -> L -> M -> N -> O -> P -> Q
 ```
 
 执行约束：
@@ -1457,7 +1634,7 @@ A -> (B || C) -> D -> E -> F -> G -> H -> I -> J -> K -> L -> M -> N
 6. host fake-core gate 先于 Android 真机。公网抖动不能用于否定确定性正确性测试，也不能用于掩盖真机 SLA 失败；
 7. 每个节点独立形成 RED/GREEN/REFACTOR/VERIFY 证据，禁止阶段末一次性补写测试记录。
 
-## 22. 完成定义
+## 25. 完成定义
 
 只有同时满足以下条件，才能声明 Rust 节点测速引擎完成：
 
@@ -1477,7 +1654,7 @@ A -> (B || C) -> D -> E -> F -> G -> H -> I -> J -> K -> L -> M -> N
 - [ ] `nethop-auto`、group delay、旧 wire、旧 timeout 和 TOML concurrency 已删除；
 - [ ] D10、D12 及受影响架构文档已同步，release readiness 报告可复现。
 
-## 23. 常用验证命令
+## 26. 常用验证命令
 
 以下命令是执行期入口，具体 package/test 名称以各 RED 节点落地后的真实名称为准，不得用空测试过滤器伪造通过：
 

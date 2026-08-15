@@ -1,0 +1,55 @@
+{
+  "schema": "nethop-node-territory-d16-status-v1",
+  "generated_at": "2026-08-14",
+  "design": "docs/15-node-region-and-webui-improvement-design.md",
+  "task_list": "docs/16-node-territory-and-webui-tdd-task-list.md",
+  "contracts": {
+    "control_protocol": 4,
+    "generation_node_registry": 3,
+    "selection_snapshot": 2,
+    "territory_source_count": 5,
+    "territory_count": 249,
+    "flag_count": 249
+  },
+  "measurements": {
+    "territory_benchmark_names": 2000,
+    "territory_benchmark_p95_budget_us": 5000,
+    "territory_benchmark_last_p50_us": 2673,
+    "territory_benchmark_last_p95_us": 3342,
+    "flag_archive_budget_bytes": 102400,
+    "flag_archive_last_bytes": 99815,
+    "nodes_view_chunk_before_gzip_bytes": 52340,
+    "nodes_view_chunk_after_gzip_bytes": 8861
+  },
+  "module_candidate": {
+    "file_name": "NetHop-2e4a6501e0645431a34b178382c99b044b8d25a5-arm64.zip",
+    "sha256": "b25769c1a2f8c54c68ea59f58fcc7a1c7101670a521780830ef35ab05cc102d8",
+    "bytes": 24240967,
+    "core_origin": "official_prebuilt",
+    "core_provenance_verified": true,
+    "device_path": "/sdcard/Download/NetHop-2e4a6501e0645431a34b178382c99b044b8d25a5-arm64.zip"
+  },
+  "stages": [
+    { "id": "A", "status": "passed", "evidence": ["crates/nethop-subscription/tests/territory_contracts.rs", "crates/nethop-core/tests/generation_node_registry_contracts.rs", "webui/tests/unit/node-view.test.ts"] },
+    { "id": "B", "status": "passed", "evidence": ["data/territories/source-versions.json", "tools/territory-generator", "scripts/territory-data-gate.ps1"] },
+    { "id": "C", "status": "passed", "evidence": ["crates/nethop-subscription/src/territory.rs", "crates/nethop-subscription/examples/territory_benchmark.rs", "scripts/territory-engine-gate.ps1"] },
+    { "id": "D", "status": "passed", "evidence": ["crates/nethop-subscription/tests/fixtures/territory", "crates/nethop-subscription/tests/territory_contracts.rs"] },
+    { "id": "E", "status": "passed", "evidence": ["crates/nethop-core/src/generation.rs", "scripts/territory-generation-gate.ps1"] },
+    { "id": "F", "status": "passed", "evidence": ["crates/nethopd/src/selection.rs", "crates/nethopd/tests/selection_resolution_contracts.rs"] },
+    { "id": "G", "status": "passed", "evidence": ["crates/nethop-protocol/tests/protocol_v3_selection_contracts.rs", "crates/nethopctl/tests/cli_contracts.rs", "scripts/territory-protocol-gate.ps1"] },
+    { "id": "H", "status": "passed", "evidence": ["webui/src/model/dto.ts", "webui/src/model/node-view.ts", "webui/tests/unit/node-view.test.ts"] },
+    { "id": "I", "status": "passed", "evidence": ["webui/src/assets/flags", "licenses/country-flag-icons-MIT.txt", "licenses/Unicode-3.0.txt"] },
+    { "id": "J", "status": "passed", "evidence": ["webui/src/components/nodes", "webui/tests/browser/node-components.test.ts"] },
+    { "id": "K", "status": "passed", "evidence": ["webui/src/views/NodesView.vue", "webui/src/views/OverviewView.vue", "webui/tests/browser/event-state.test.ts", "webui/tests/e2e/release-quality.spec.ts-snapshots"] },
+    { "id": "L", "status": "passed", "evidence": ["scripts/node-territory-webui-gate.ps1", "scripts/module-contracts.ps1", "scripts/webui-release-readiness-contracts.ps1", "artifacts/subscription-parser/m014/release-freeze.json"] },
+    { "id": "M", "status": "pending_device", "evidence": ["out/android-arm64/package-summary.json", "out/android-arm64/module/build-manifest.json", "out/android-arm64/module/checksums.sha256", "scripts/module-contracts.ps1", "artifacts/webui/webui-sbom.cdx.json", "artifacts/webui/webui-licenses.json"] },
+    { "id": "N", "status": "in_progress", "evidence": ["docs/15-node-region-and-webui-improvement-design.md", "docs/16-node-territory-and-webui-tdd-task-list.md"] }
+  ],
+  "blockers": [
+    {
+      "id": "android-device-validation",
+      "status": "pending_device",
+      "detail": "The current module ZIP was built and transferred to the connected Android device, but M003-M007 still require manual installation and device validation."
+    }
+  ]
+}

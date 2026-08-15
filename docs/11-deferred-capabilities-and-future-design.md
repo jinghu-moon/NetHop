@@ -1,7 +1,7 @@
 # NetHop 延期能力与未来设计候选登记
 
 > 状态：持续维护的设计登记，不是发布路线图
-> 适用范围：NetHop 全部 Rust crate、sing-box 集成、Android Root 数据面、CLI、WebUI 与未来 Manager APK
+> 适用范围：NetHop 全部 Rust crate、sing-box 集成、Android Root 数据面、CLI、WebUI 与 Companion APK
 > 当前基线：Android arm64 Root 模块，sing-box `v1.13.15`，同步 Rust 控制面
 > 关联文档：`00-nethop-system-design.md`、`01-performance-budget-and-slo.md`、`02-subscription-import-and-parser-design.md`、`06-configuration-toml-refactor-design.md`、`08-webui-design.md`、`10-subscription-selection-and-node-optimization-refactor-design.md`
 > 初始调研时间：2026-08-10
@@ -71,7 +71,7 @@
 - sing-box pin 升级；
 - 当前实现出现无法绕开的能力缺口；
 - Android 真机 profile 发现明确瓶颈；
-- Manager APK 进入对应功能开发；
+- Companion APK 进入对应功能开发；
 - 上游弃用、移除或改变当前依赖的 API；
 - 安全边界或 Android 平台能力发生变化。
 
@@ -238,7 +238,7 @@ services.api(loopback + secret, dashboard disabled)
 - RFC 6902 JSON Patch；
 - 通用数据库；
 - 为数组项目设计的细粒度 CRUD 协议；
-- 为未来 Manager 预留未知字段 passthrough。
+- 为未来客户端预留未知字段 passthrough。
 
 重新评估条件：配置接近 256 KiB、应用/规则数据达到数千项，或 Android profile 证明全量处理影响交互。届时优先采用 typed patch 和独立有界 store，不把 TOML 扩大成数据库。
 

@@ -1,12 +1,14 @@
 # NetHop 节点国家/地区元数据与 WebUI 节点页改进设计
 
-> 状态：开发期设计候选
+> 状态：Host 实现完成，Android 真机验收待执行
 > 日期：2026-08-13
 > 目标平台：Android arm64 Root 模块、Magisk/KernelSU WebUI
 > 参考原型：`refer/proxy_node_list.html`
 > 真实样本：`refer/glados-facility.com_khi1215215@163.yaml`、`refer/魔戒.yaml`、`refer/fsllist.yaml`
 > 上位约束：`00-nethop-system-design.md`、`08-webui-design.md`、`10-subscription-selection-and-node-optimization-refactor-design.md`、`13-rust-node-benchmark-engine-design.md`
 > 影响范围：`nethop-subscription`、`nethop-core`、`nethopd`、`nethop-protocol`、`nethopctl`、WebUI、模块构建与许可证清单
+
+> 实施记录：2026-08-14；机器可读状态见 `artifacts/node-territory/d16-implementation-status.json`。
 
 ## 1. 文档目的
 
@@ -106,7 +108,7 @@ ID-Surabaya-...
 
 例如 `魔戒.yaml` 中大量不同国家节点共享 `a.mjanyt.com`，只依靠 server 无法区分地区。
 
-### 2.4 当前 NetHop 已有的数据
+### 2.4 设计时 NetHop 已有的数据
 
 当前 generation 节点注册表已经包含：
 
@@ -139,7 +141,7 @@ latency_ms, alive, is_requested, is_active
 - 多订阅去重后仍能利用全部 alias 推导地区；
 - 地区元数据随 generation 固化并通过 typed IPC 输出；
 - WebUI 只消费后端字段，不维护第二套名称识别规则；
-- 当前节点卡片严格展示 `is_active`/`active_node_id` 指向的终端节点；
+- 当前节点摘要严格展示 selection snapshot v2 的 typed `active_terminal`；只有 `node` terminal 才派生 active node ID；
 - 延迟展示与 D13/D14 Rust benchmark 结果一致；
 - 本地旗帜按需加载，不依赖网络或系统 Emoji 字体；
 - 保持两列节点布局和虚拟滚动，节点数增加时不产生明显卡顿。
@@ -1091,6 +1093,29 @@ Android、桌面浏览器和 WebView 字体表现不一致，部分系统可能�
 11. 无 CDN、无 GeoIP 服务、无敏感数据外发；
 12. flags 许可证、SBOM、bundle 和 ZIP 体积证据完整；
 13. Rust、WebUI、模块构建及真机关键流程全部通过。
+
+### 16.1 2026-08-14 实施结果
+
+Host 侧已经完成并验证以下实现：
+
+- 固定 CLDR 48.2.0、UN M49/ISO identity 与 `country-flag-icons` 1.6.20 输入，单一 Rust generator 生成 249 个 territory、Rust registry、WebUI allowlist 和 249 个本地 SVG；
+- 标准 identity、展示名称、人工 recognition 与 location 分层，运行时不联网、不使用 IP/域名/GeoIP；
+- dedupe 合并 aliases 后只推断一次，territory 不进入 fingerprint、stable ID、fair pool、测速或选优；
+- generation node registry v3、selection snapshot v2 和 Protocol v4 已一次性切换，旧 wire 不进入生产路径；
+- WebUI 已使用 typed active terminal、严格 territory allowlist、活动节点摘要、两列 `NodeCard`、本地旗帜和明确的延迟状态；
+- 三份真实去敏 fixture 通过：GLaDOS 56、魔戒 44、fsllist 51 个名称；`GB` 流量单位误判已回归；
+- 2,000 名称 release benchmark 最近一次 `p50 = 2673 us`、`p95 = 3342 us`，低于 `p95 <= 5000 us` 门禁；
+- NodesView gzip chunk 从约 52.34 KiB 降至 8.86 KiB；249 个 flags 压缩后 99,815 bytes，低于 100 KiB 门禁；
+- Rust workspace 全 feature/locked 回归无跳过项通过；WebUI unit/browser/E2E/build/security/bundle、模块 contracts 全绿，10 张视觉基线已人工复核并更新；
+- `cargo-deny`、M010-M014 release evidence 和 freeze gate 已通过，供应链阻塞已解除；
+- M001-M002 已完成：使用经元数据核验的官方 sing-box 1.13.15 Android arm64 预编译核心构建模块，ZIP 内 manifest、checksums、SBOM、许可证和 249 个离线地区映射均通过门禁；
+- 当前模块为 `NetHop-2e4a6501e0645431a34b178382c99b044b8d25a5-arm64.zip`，大小 24,240,967 bytes，SHA-256 为 `b25769c1a2f8c54c68ea59f58fcc7a1c7101670a521780830ef35ab05cc102d8`，已仅传送至手机 `/sdcard/Download/`。
+
+尚未宣告最终完成的事项：
+
+- 模块尚未由用户手动安装，M003-M007 的 active terminal、地区旗帜、全部测速、auto/manual、TPROXY/TUN 和常用站点真机验证仍待执行；
+
+因此，本文的 1-12 项 host 完成定义和第 13 项中的模块构建已有自动证据，剩余边界仅为安装后的真机关键流程。聚合入口为 `scripts/territory-host-release-gate.ps1`，状态清单不会把“已传送 ZIP”误记为“已通过设备验收”。
 
 ## 17. 最终设计结论
 

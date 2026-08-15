@@ -18,7 +18,7 @@ NetHop WebUI 采用以下已确认决策：
 |---|---|
 | 第一宿主 | KernelSU Module WebUI |
 | 第二宿主 | APatch WebUI，在通过兼容性测试后与 KernelSU 同级支持 |
-| Magisk | 官方 Manager 不内置同等 WebUI 宿主；保留 Action/CLI，未来由 Manager APK 统一覆盖 |
+| Magisk | 官方 Manager 不内置同等 WebUI 宿主；保留 Action/CLI，不纳入 Companion/WebUI 首版支持 |
 | 前端 | Vue 3 + TypeScript + Vite + Vue Router |
 | 组件库 | `tdesign-mobile-vue`，显式按需导入 |
 | 业务图标 | `@tabler/icons-vue`，静态命名导入 |
@@ -26,7 +26,7 @@ NetHop WebUI 采用以下已确认决策：
 | 长列表引擎 | `@tanstack/vue-virtual`，节点和应用列表的唯一虚拟化实现 |
 | root bridge | `kernelsu` npm bridge |
 | 后端入口 | 固定路径 `nethopctl --json/--jsonl` |
-| 当前 wire | Protocol v3；schema v3；订阅 `single/merge` 与节点 requested/active 分离 |
+| 当前 wire | Protocol v4；schema v3；generation registry v3；selection snapshot v2；订阅 `single/merge` 与节点 requested/active 分离 |
 | 实时状态 | 一个长驻 JSONL 事件流，snapshot + 单调序号 + 背压恢复 |
 | 配置写入 | typed mutation 或完整事务 apply，WebUI 不直接改 TOML |
 | 首版范围 | 完整日常闭环，随后覆盖全部稳定 CLI 能力 |
@@ -124,11 +124,11 @@ NetHop 不采用跳转式或 iframe 式面板。
 
 ### 2.5 Magisk 与 KernelSU
 
-KernelSU 官方定义 `webroot/index.html` 为模块 WebUI 入口，并通过 WebView 提供 `exec`、`spawn`、`toast`、`moduleInfo`、`listPackages`、`getPackagesInfo`、`enableEdgeToEdge` 和 `exit` 等 API。KernelSU Manager 使用 `WebViewAssetLoader` 加载模块本地资源，并关闭普通文件访问。
+KernelSU 官方定义 `webroot/index.html` 为模块 WebUI 入口，并通过 WebView 提供 `exec`、`spawn`、`toast`、`moduleInfo`、`listPackages`、`getPackagesInfo`、`enableEdgeToEdge` 和 `exit` 等 API。KernelSU Manager 使用 `WebViewAssetLoader`、绑定 global-mount Root shell 的 `SuFileInputStream` 加载模块本地资源，并关闭普通文件访问。普通 APK 不能用普通 `FileInputStream` 可靠直读 `/data/adb/modules`，但经用户授权的 Root APK 可以复用这条受控流式读取链；具体安全和生命周期契约见 D17。
 
 APatch 官方说明其 WebUI 实现与 KernelSU 兼容，但 NetHop 仍以真实安装测试为准，不只凭文档声明稳定支持。
 
-Magisk 官方模块规范包含 `action.sh`，但当前不提供与 KernelSU 相同的内嵌 Module WebUI 契约。首版不启动本地 HTTP server 补齐这一差异，也不把 MMRL/WebUI X 作为强依赖。Magisk 用户继续使用 Action/CLI；未来 Manager APK 复用同一 typed IPC 语义。
+Magisk 官方模块规范包含 `action.sh`，但当前不提供与 KernelSU 相同的内嵌 Module WebUI 契约。首版不启动本地 HTTP server 补齐这一差异，也不把 MMRL/WebUI X 作为强依赖。Magisk 用户继续使用 Action/CLI；[`17-quick-settings-tile-companion-design.md`](./17-quick-settings-tile-companion-design.md) 定义的 Companion APK 不把 Magisk WebUI 纳入首版支持和验收范围。
 
 ## 3. 设计目标
 
@@ -636,7 +636,7 @@ backoff
 | Query cache | 节点、连接、日志等有界查询 | 页面/会话 |
 | Draft | 尚未提交的表单 | 页面 |
 
-subscription state 额外保存 `mode + configured sources + active source set`；selection state 额外保存 `intent + requested_node_id + active_node_id + degraded reason`。两者都以 Protocol v3 snapshot/event 为事实源，不能从卡片选中状态、列表顺序或内部 core tag 反推。
+subscription state 额外保存 `mode + configured sources + active source set`；selection state 保存 `intent + requested_node_id + active_terminal`，其中 terminal 是 `node/direct/block/unresolved` 的严格 union。两者都以 Protocol v4 snapshot/event 为事实源，不能从卡片选中状态、列表顺序或内部 core tag 反推。`activeNodeId` 只允许从 `active_terminal.kind = node` 派生，不是 wire 字段。
 
 禁止把 draft 直接覆盖 active state。配置页同时显示：
 
@@ -944,7 +944,7 @@ P0 宿主。必须验证：
 - `webroot` 随 ZIP 存在不代表官方 Magisk Manager 会展示；
 - 不自动启动 HTTP server；
 - 不把第三方 WebUI 宿主作为模块安装前提；
-- 后续 Manager APK 使用 `su -c nethopctl` 管道和相同 DTO，不复用 KernelSU 特有 JS API。
+- 不开发重复业务页面的完整 Manager APK；Companion APK 通过受限 Android HostAdapter 和 Root PathHandler 加载模块唯一 `webroot`，复用同一 WebUI、`nethopctl` 和 DTO，其首版不承诺 Magisk WebUI。
 
 ### 16.4 浏览器开发模式
 
@@ -1080,13 +1080,16 @@ Playwright 截图至少覆盖：
 
 每项只在 CLI JSON 契约稳定后接入，不为赶 UI 解析 human text。
 
-### Phase W3：Manager APK 复用准备
+### Phase W3：Companion APK 同源 WebUI 准备
 
 - 抽离 framework-neutral DTO fixtures；
 - 固化 operation IDs、error codes 和 i18n keys；
 - 复用视觉 token；
-- 保留 KernelSU host adapter 与未来 Android root-shell adapter 的同一 `WebUiBridge` 语义；
-- 不要求 APK 嵌入当前 WebView 代码。
+- 保留 KernelSU host adapter 与 Android root-shell adapter 的同一 `WebUiBridge` 语义；
+- WebUI 构建产物只发布到模块 `webroot`；同步生成逐文件路径、长度、MIME 和 digest manifest；
+- Companion 通过固定根、只读、manifest allowlist 的 Root PathHandler 流式加载模块 `webroot`，APK 不复制完整页面资产；
+- APK 只内嵌无 Root bridge 的最小 fallback 页面；
+- Android HostAdapter、WebView 安全边界和安装契约以 D17 为准。
 
 ## 19. 发布闸门
 

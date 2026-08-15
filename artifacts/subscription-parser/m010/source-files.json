@@ -3,11 +3,11 @@
   "files": [
     {
       "path": "Cargo.lock",
-      "sha256": "190c984316cc3fa4062d53ce4e97936e7d9c406c2570b5ee4be1556300a993dc"
+      "sha256": "f288abe5fffe2850f4c91e9faf447d1e21bd44281435ff85a549973f86b50e49"
     },
     {
       "path": "Cargo.toml",
-      "sha256": "11980132743dd49957587851dee4fbd1523d264511089d573d445a51f8a64d06"
+      "sha256": "b5325bb9cb5e74c4dec35476c84091be885cf440f9948fbac728c1d7bb140193"
     },
     {
       "path": "crates/nethop-core/Cargo.toml",
@@ -19,23 +19,31 @@
     },
     {
       "path": "crates/nethop-core/src/composer.rs",
-      "sha256": "09d08eb314200de3cfcd129c588ea713675101c6981642ac19cfdb52358eae56"
+      "sha256": "742c7c3585ca1348f52f427e69577e6f5d1af50ec90cb7e4d020dbc5edbf7dfa"
     },
     {
       "path": "crates/nethop-core/src/diagnostics.rs",
       "sha256": "d794cc01710d3e8106ba95e7912c56703af5f04d209feef15dbbd7e7aad068d5"
     },
     {
+      "path": "crates/nethop-core/src/generated/territory_registry.rs",
+      "sha256": "88de210de61b89711bd9bb332566a2a63fb4d889d6770abc86d4a7291b17c159"
+    },
+    {
       "path": "crates/nethop-core/src/generation.rs",
-      "sha256": "1e1067c65e22239b6289116d2b25c30bd1ebc6ef811a7a157ec0547a1583c21f"
+      "sha256": "1124c1a47d6e1001bb2263386f2c4b247f14bb856c386d3abae67fcc9a2653a1"
     },
     {
       "path": "crates/nethop-core/src/lib.rs",
-      "sha256": "f755dbe978c5c01efc5b6eadd50a774150072133ef10ddcf3226983bff6a7b74"
+      "sha256": "d35d056477e83409506c15ab7c72d4cb75f80280453fcd82fb1d6f0f816be2f7"
     },
     {
       "path": "crates/nethop-core/src/state.rs",
       "sha256": "eb05ebb0faf49fea7e0ca8bf9bdccbfbfec5c64182fedc44d99287b9cbd9cc53"
+    },
+    {
+      "path": "crates/nethop-core/src/territory.rs",
+      "sha256": "eb1e0c1b9ef975db4769c60102c12bb77e93f8bc1f575f94e25228c358c60126"
     },
     {
       "path": "crates/nethop-subscription/Cargo.toml",
@@ -82,12 +90,20 @@
       "sha256": "5287d81d31f7d4034713b87c848d019161be97c8f8d14864916f743376300967"
     },
     {
+      "path": "crates/nethop-subscription/src/generated/territory_data.rs",
+      "sha256": "743e18569c44a83bf2ea547165b0fe8b5d99a8c3093fd4f601f9d2291853a5af"
+    },
+    {
+      "path": "crates/nethop-subscription/src/generated/territory_recognition.rs",
+      "sha256": "b2a9d0a5c69d2f09d63156620c2c21df28db336f8fb1691daecf68990b214daa"
+    },
+    {
       "path": "crates/nethop-subscription/src/ipc.rs",
       "sha256": "18ad7361c3fed4d8b0934e19560aff00a53e0384a3a94c26d940dd2e2ec8aefb"
     },
     {
       "path": "crates/nethop-subscription/src/lib.rs",
-      "sha256": "dd0f91c6ee7a1cb22e785e0f1895c58d6465e2a5640cd9a95d99479fe77d2b2b"
+      "sha256": "d7c60a59b85620c04d6f95228a47d0790316ca9244a71f76e7e7599dd1230525"
     },
     {
       "path": "crates/nethop-subscription/src/limits.rs",
@@ -103,7 +119,7 @@
     },
     {
       "path": "crates/nethop-subscription/src/pipeline.rs",
-      "sha256": "0b60e66f7be89bd732cfb8c3a50ea5b6e80f534d5a022ec09285e9c3072f43a4"
+      "sha256": "9bd990f81f799f9cd9d7b8148fccf6072cf6395d5fb16035b3938c9f21372a56"
     },
     {
       "path": "crates/nethop-subscription/src/protocol.rs",
@@ -128,6 +144,10 @@
     {
       "path": "crates/nethop-subscription/src/surfboard.rs",
       "sha256": "b0f858922187646e4c7752d8b946b0ae654232d1ab6574f72b5a20889a70a75b"
+    },
+    {
+      "path": "crates/nethop-subscription/src/territory.rs",
+      "sha256": "9a23ae7dd8d0b1dd297e1d43ab0f1faecc1ee1f7a2d309eeb632c042d717295d"
     },
     {
       "path": "crates/nethop-subscription/src/uri.rs",
