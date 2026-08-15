@@ -25,7 +25,7 @@ fn event_kind_name(kind: EventKind) -> &'static str {
 fn protocol_v1_before_golden_is_frozen_and_rejected_by_v2() {
     let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
     assert_eq!(fixture["protocol_version"], 1);
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 5);
 
     let frames = fixture["frames"].as_object().unwrap();
     for value in frames.values() {

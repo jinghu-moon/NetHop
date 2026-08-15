@@ -486,6 +486,13 @@ struct SelectingUpdater {
 }
 
 #[cfg(feature = "subscription-update")]
+struct ImportUpdater {
+    events: Rc<RefCell<Vec<&'static str>>>,
+    pending_import: bool,
+    generation: GenerationId,
+}
+
+#[cfg(feature = "subscription-update")]
 struct FixedWifiFacts;
 
 #[cfg(feature = "subscription-update")]
@@ -525,6 +532,55 @@ impl RuntimeUpdateSource for SelectingUpdater {
     }
 
     fn discard(&mut self, _prepared: Self::Prepared) -> Result<(), RuntimeUpdateError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeUpdateSource for ImportUpdater {
+    type Prepared = ();
+
+    fn request_source_update(
+        &mut self,
+        _source_id: Option<&str>,
+    ) -> Result<(), RuntimeUpdateError> {
+        self.events.borrow_mut().push("unexpected_source_update");
+        Err(RuntimeUpdateError::Prepare)
+    }
+
+    fn request_import(
+        &mut self,
+        _bytes: Vec<u8>,
+        _format_hint: nethop_subscription::FormatHint,
+        _candidate_digest: String,
+    ) -> Result<(), RuntimeUpdateError> {
+        if self.pending_import {
+            return Err(RuntimeUpdateError::Prepare);
+        }
+        self.pending_import = true;
+        self.events.borrow_mut().push("request_import");
+        Ok(())
+    }
+
+    fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError> {
+        if !std::mem::take(&mut self.pending_import) {
+            return Err(RuntimeUpdateError::Prepare);
+        }
+        self.events.borrow_mut().push("prepare_import");
+        Ok(())
+    }
+
+    fn generation(&self, _prepared: &Self::Prepared) -> GenerationId {
+        self.generation
+    }
+
+    fn commit(&mut self, _prepared: Self::Prepared) -> Result<GenerationId, RuntimeUpdateError> {
+        self.events.borrow_mut().push("commit_import");
+        Ok(self.generation)
+    }
+
+    fn discard(&mut self, _prepared: Self::Prepared) -> Result<(), RuntimeUpdateError> {
+        self.events.borrow_mut().push("discard_import");
         Ok(())
     }
 }
@@ -706,6 +762,68 @@ fn request_with_params(
     request(id, method)
         .with_params(ControlParams::new(wait, if_needed))
         .unwrap()
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
+fn manual_import_apply_executes_the_armed_import_without_requesting_a_source_refresh() {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = ConfigStore::new(&config_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let digest = snapshot.digest().to_owned();
+    let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let config_runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let runtime_events = Rc::new(RefCell::new(Vec::new()));
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let generation = GenerationId::new(1).unwrap();
+    let recovery = RuleSetRecovery::new(Rc::clone(&runtime_events), Rc::new(Cell::new(0)), None);
+    let updater = ImportUpdater {
+        events: Rc::clone(&update_events),
+        pending_import: false,
+        generation,
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater)
+    .with_configuration(config_runtime, false);
+    let request = request("manual-import", ControlMethod::SubscriptionImportApply)
+        .with_params(ControlParams::import_document(
+            digest,
+            Some("a".repeat(64)),
+            json!({"content":"vmess://fixture", "format_hint":"uri_list"}),
+        ))
+        .unwrap();
+
+    let response = application.handle(request);
+
+    assert!(response.ok(), "{response:?}");
+    assert_eq!(response.generation(), Some(generation.get()));
+    assert_eq!(response.result().unwrap()["completed"], true);
+    assert_eq!(
+        update_events.borrow().as_slice(),
+        ["request_import", "prepare_import", "commit_import"]
+    );
+    assert_eq!(runtime_events.borrow().as_slice(), ["core_start"]);
 }
 
 #[test]
@@ -1683,18 +1801,25 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     .with_source_status_store(source_status);
 
     let hello = request("hello", ControlMethod::ProtocolHello)
-        .with_params(ControlParams::hello("manager-alpha".into(), 3, 3))
+        .with_params(ControlParams::hello("manager-alpha".into(), 5, 5))
         .unwrap();
     let hello = application.handle(hello);
     assert!(hello.ok());
     assert_eq!(hello.result().unwrap()["compatible"], true);
-    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 3);
+    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 5);
     assert!(
         hello.result().unwrap()["supported_features"]
             .as_array()
             .unwrap()
             .iter()
             .any(|value| value == "multi_source")
+    );
+    assert!(
+        hello.result().unwrap()["supported_features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "node_benchmark_fast_selection_v1")
     );
 
     let incompatible = request("hello-new", ControlMethod::ProtocolHello)

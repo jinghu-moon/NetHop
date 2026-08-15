@@ -270,7 +270,9 @@ impl DataPlaneHealthProbe<FakeProcess> for FakeDataPlaneHealth<'_> {
         );
         self.events.borrow_mut().push("data_health");
         if self.fail {
-            Err(DataPlaneHealthError::NetworkUnhealthy)
+            Err(DataPlaneHealthError::NetworkUnhealthy {
+                cause: NetworkHealthError::OwnerMarkerMissing,
+            })
         } else {
             Ok(())
         }
@@ -325,7 +327,9 @@ fn production_data_plane_adapter_requires_a_live_core_and_verified_network_plan(
                 &supported_report(),
             )
             .unwrap_err(),
-        DataPlaneHealthError::NetworkUnhealthy
+        DataPlaneHealthError::NetworkUnhealthy {
+            cause: NetworkHealthError::OwnerMarkerMissing,
+        }
     );
 
     let mut process = ExitedProcess;
@@ -532,8 +536,15 @@ fn recovery_data_plane_failure_rolls_back_before_stopping_core() {
     assert_eq!(
         error,
         WorkerRecoveryError::DataPlaneHealthFailed {
+            error: DataPlaneHealthError::NetworkUnhealthy {
+                cause: NetworkHealthError::OwnerMarkerMissing,
+            },
             cleanup_failed: false
         }
+    );
+    assert_eq!(
+        error.cause_code(),
+        Some("network_health_owner_marker_missing")
     );
     assert_eq!(
         events.borrow().as_slice(),
@@ -549,6 +560,26 @@ fn recovery_data_plane_failure_rolls_back_before_stopping_core() {
         store.current_generation().unwrap(),
         Some(GenerationId::new(1).unwrap())
     );
+}
+
+#[test]
+fn recovery_diagnostics_preserve_network_step_indices_without_command_output() {
+    let error = WorkerRecoveryError::NetworkApplyFailed {
+        error: ExecutionError::ApplyRollbackFailed {
+            apply_step: 6,
+            rollback_step: 4,
+        },
+        cleanup_failed: true,
+    };
+
+    assert_eq!(error.diagnostic_code(), "worker_network_apply_failed");
+    assert_eq!(
+        error.cause_code(),
+        Some("network_executor_apply_rollback_failed")
+    );
+    assert_eq!(error.apply_step(), Some(6));
+    assert_eq!(error.rollback_step(), Some(4));
+    assert!(error.cleanup_failed());
 }
 
 fn assert_candidate_removed(store: &GenerationStore) {

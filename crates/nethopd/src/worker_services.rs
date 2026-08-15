@@ -154,6 +154,7 @@ pub fn build_candidate(
                 .collect(),
                 auto_ids.contains(node.node_id.as_str()),
             )
+            .map(|record| record.with_display_territory_code(node.display_territory_code))
             .map_err(BuildCandidateError::from)
         })
         .collect::<Result<Vec<_>, BuildCandidateError>>()?;

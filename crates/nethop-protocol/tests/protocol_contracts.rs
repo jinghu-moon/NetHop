@@ -13,14 +13,14 @@ fn request_id() -> RequestId {
 }
 
 #[test]
-fn request_golden_uses_big_endian_length_and_v3_json() {
+fn request_golden_uses_big_endian_length_and_v5_json() {
     let frame = WireFrame::Request(ControlRequest::new(request_id(), ControlMethod::StatusGet));
     let encoded = FrameCodec::encode(&frame).unwrap();
     let length = u32::from_be_bytes(encoded[..4].try_into().unwrap()) as usize;
     assert_eq!(length, encoded.len() - 4);
     assert_eq!(
         &encoded[4..],
-        br#"{"version":3,"request_id":"req-001","method":"status.get","params":{}}"#
+        br#"{"version":5,"request_id":"req-001","method":"status.get","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -28,7 +28,7 @@ fn request_golden_uses_big_endian_length_and_v3_json() {
 #[test]
 fn request_rejects_unknown_fields_versions_and_unbounded_ids() {
     let unknown =
-        br#"{"version":3,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
+        br#"{"version":5,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
     let mut framed = (unknown.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(unknown);
     assert_eq!(
@@ -72,7 +72,7 @@ fn response_requires_exactly_one_result_or_error_branch() {
         failure
     );
 
-    let invalid = br#"{"version":3,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
+    let invalid = br#"{"version":5,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
     let mut framed = (invalid.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(invalid);
     assert_eq!(
@@ -160,7 +160,7 @@ fn codec_rejects_trailing_bytes_invalid_utf8_and_truncated_io() {
 
 #[test]
 fn protocol_version_is_frozen() {
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 5);
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn control_error_details_are_optional_and_bounded_by_the_outer_frame() {
 }
 
 #[test]
-fn subscription_update_is_a_bounded_v3_empty_params_command() {
+fn subscription_update_is_a_bounded_v5_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::SubscriptionUpdate,
@@ -199,7 +199,7 @@ fn subscription_update_is_a_bounded_v3_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":3,"request_id":"req-001","method":"subscription.update","params":{}}"#
+        br#"{"version":5,"request_id":"req-001","method":"subscription.update","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -239,7 +239,7 @@ fn local_import_preview_and_apply_are_digest_bound_documents() {
 }
 
 #[test]
-fn config_reload_is_a_bounded_v3_empty_params_command() {
+fn config_reload_is_a_bounded_v5_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::ConfigReload,
@@ -247,7 +247,7 @@ fn config_reload_is_a_bounded_v3_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":3,"request_id":"req-001","method":"config.reload","params":{}}"#
+        br#"{"version":5,"request_id":"req-001","method":"config.reload","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -452,7 +452,7 @@ fn close_all_and_log_clear_accept_only_empty_params() {
 #[test]
 fn operational_params_reject_unknown_fields() {
     let payload =
-        br#"{"version":3,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
+        br#"{"version":5,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
     let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(payload);
     assert_eq!(

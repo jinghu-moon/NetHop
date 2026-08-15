@@ -54,3 +54,14 @@ fn failed_generation_can_restore_the_previous_manual_source_exactly() {
     store.restore(checkpoint).unwrap();
     assert_eq!(store.load().unwrap().unwrap().bytes(), first);
 }
+
+#[test]
+#[cfg(unix)]
+fn manual_source_rejects_a_public_parent_before_the_first_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(ManualSourceStore::new(directory.path().join("manual-source.body")).is_err());
+}

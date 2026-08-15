@@ -479,7 +479,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
                 ClashApiLimits::default(),
             )
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
-            NodeSelectionStore::new(runtime.root().join("state/selection.v1.json"))
+            NodeSelectionStore::new(runtime.root().join("state/selection.v2.json"))
                 .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
             runtime.root().join("state/diagnostics-latest.json"),
         )

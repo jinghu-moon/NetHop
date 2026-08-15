@@ -102,8 +102,10 @@ pub use nethop_protocol::{
 };
 pub use node_benchmark::{
     AutoSelectionDecision, BenchmarkCandidate, BenchmarkEndpoint, BenchmarkError, BenchmarkJob,
-    MAX_BENCHMARK_CANDIDATES, OPERATION_DEADLINE, PROBE_CUTOFF, choose_auto_target, run_benchmark,
-    spawn_benchmark, spawn_benchmark_with_wake,
+    CurrentCandidateState, FAST_SELECTION_DEADLINE, FAST_SELECTION_EARLIEST, FAST_SELECTION_LATEST,
+    FastSelectionPolicyDecision, MAX_BENCHMARK_CANDIDATES, OPERATION_DEADLINE, PROBE_CUTOFF,
+    choose_auto_target, fast_selection_policy, run_benchmark, spawn_benchmark,
+    spawn_benchmark_with_wake,
 };
 #[cfg(feature = "benchmark-evidence")]
 pub use node_benchmark::{
@@ -140,9 +142,9 @@ pub use scheduler::{
     SchedulerEngine, SchedulerError,
 };
 pub use selection::{
-    ActiveTerminal, GroupState, NodeListItem, NodeListSnapshot, NodeSelectionIntent,
-    NodeSelectionSnapshot, NodeSelectionStore, SelectionDiagnosticCode, SelectionModelError,
-    StableNodeId, join_node_snapshot, resolve_active_terminal,
+    ActiveTerminal, ActiveTerminalSnapshot, GroupState, NodeListItem, NodeListSnapshot,
+    NodeSelectionIntent, NodeSelectionSnapshot, NodeSelectionStore, SelectionDiagnosticCode,
+    SelectionModelError, StableNodeId, join_node_snapshot, resolve_active_terminal,
 };
 #[cfg(feature = "subscription-update")]
 pub use source_config::{

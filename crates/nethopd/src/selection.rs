@@ -9,7 +9,7 @@ use nethop_subscription::SourceId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const SELECTION_SNAPSHOT_VERSION: u8 = 1;
+const SELECTION_SNAPSHOT_VERSION: u8 = 2;
 const MAX_NODE_NAME_BYTES: usize = 128;
 const MAX_PROTOCOL_BYTES: usize = 32;
 const MAX_NODE_SOURCES: usize = 16;
@@ -211,15 +211,6 @@ pub enum ActiveTerminal {
     Unresolved(SelectionDiagnosticCode),
 }
 
-impl ActiveTerminal {
-    pub const fn degraded_reason(&self) -> Option<SelectionDiagnosticCode> {
-        match self {
-            Self::Unresolved(code) => Some(*code),
-            Self::Node(_) | Self::Direct | Self::Block => None,
-        }
-    }
-}
-
 pub fn resolve_active_terminal(
     root: &str,
     groups: &BTreeMap<String, GroupState>,
@@ -245,6 +236,35 @@ pub fn resolve_active_terminal(
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActiveTerminalSnapshot {
+    Node { node_id: StableNodeId },
+    Direct,
+    Block,
+    Unresolved { reason: SelectionDiagnosticCode },
+}
+
+impl From<ActiveTerminal> for ActiveTerminalSnapshot {
+    fn from(value: ActiveTerminal) -> Self {
+        match value {
+            ActiveTerminal::Node(node_id) => Self::Node { node_id },
+            ActiveTerminal::Direct => Self::Direct,
+            ActiveTerminal::Block => Self::Block,
+            ActiveTerminal::Unresolved(reason) => Self::Unresolved { reason },
+        }
+    }
+}
+
+impl ActiveTerminalSnapshot {
+    pub const fn active_node_id(&self) -> Option<&StableNodeId> {
+        match self {
+            Self::Node { node_id } => Some(node_id),
+            Self::Direct | Self::Block | Self::Unresolved { .. } => None,
+        }
+    }
+}
+
 fn valid_internal_tag(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
@@ -254,24 +274,21 @@ fn valid_internal_tag(value: &str) -> bool {
 pub struct NodeSelectionSnapshot {
     version: u8,
     intent: NodeSelectionIntent,
-    active_node_id: Option<StableNodeId>,
+    active_terminal: ActiveTerminalSnapshot,
     changed_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    degraded_reason: Option<SelectionDiagnosticCode>,
 }
 
 impl NodeSelectionSnapshot {
     pub fn new(
         intent: NodeSelectionIntent,
-        active_node_id: Option<StableNodeId>,
+        active_terminal: ActiveTerminalSnapshot,
         changed_at: u64,
     ) -> Self {
         Self {
             version: SELECTION_SNAPSHOT_VERSION,
             intent,
-            active_node_id,
+            active_terminal,
             changed_at,
-            degraded_reason: None,
         }
     }
 
@@ -283,21 +300,16 @@ impl NodeSelectionSnapshot {
         &self.intent
     }
 
+    pub const fn active_terminal(&self) -> &ActiveTerminalSnapshot {
+        &self.active_terminal
+    }
+
     pub const fn active_node_id(&self) -> Option<&StableNodeId> {
-        self.active_node_id.as_ref()
+        self.active_terminal.active_node_id()
     }
 
     pub const fn changed_at(&self) -> u64 {
         self.changed_at
-    }
-
-    pub const fn degraded_reason(&self) -> Option<SelectionDiagnosticCode> {
-        self.degraded_reason
-    }
-
-    pub fn with_degraded_reason(mut self, reason: Option<SelectionDiagnosticCode>) -> Self {
-        self.degraded_reason = reason;
-        self
     }
 
     pub fn validate(&self) -> Result<(), SelectionModelError> {
@@ -319,6 +331,8 @@ pub struct NodeListItem {
     alive: Option<bool>,
     is_requested: bool,
     is_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_territory_code: Option<nethop_core::DisplayTerritoryCode>,
 }
 
 impl NodeListItem {
@@ -332,6 +346,7 @@ impl NodeListItem {
         alive: Option<bool>,
         is_requested: bool,
         is_active: bool,
+        display_territory_code: Option<nethop_core::DisplayTerritoryCode>,
     ) -> Result<Self, SelectionModelError> {
         let name = name.into();
         let protocol = protocol.into();
@@ -359,6 +374,7 @@ impl NodeListItem {
             alive,
             is_requested,
             is_active,
+            display_territory_code,
         })
     }
 
@@ -386,6 +402,10 @@ impl NodeListItem {
         self.is_active
     }
 
+    pub const fn display_territory_code(&self) -> Option<nethop_core::DisplayTerritoryCode> {
+        self.display_territory_code
+    }
+
     pub(crate) fn set_observation(&mut self, latency_ms: Option<u32>, alive: Option<bool>) {
         self.latency_ms = latency_ms;
         self.alive = alive;
@@ -402,11 +422,8 @@ pub fn join_node_snapshot(
         NodeSelectionIntent::Auto => None,
         NodeSelectionIntent::Manual { node_id } => Some(node_id),
     };
-    let degraded_reason = active.degraded_reason();
-    let active_node_id = match active {
-        ActiveTerminal::Node(node_id) => Some(node_id),
-        ActiveTerminal::Direct | ActiveTerminal::Block | ActiveTerminal::Unresolved(_) => None,
-    };
+    let active_terminal = ActiveTerminalSnapshot::from(active);
+    let active_node_id = active_terminal.active_node_id();
     let mut nodes = Vec::with_capacity(registry.records().len());
     for record in registry.records() {
         let id = StableNodeId::new(record.stable_node_id())?;
@@ -423,13 +440,13 @@ pub fn join_node_snapshot(
             None,
             None,
             requested == Some(&id),
-            active_node_id.as_ref() == Some(&id),
+            active_node_id == Some(&id),
+            record.display_territory_code(),
         )?);
     }
     Ok(NodeListSnapshot::new(
         nodes,
-        NodeSelectionSnapshot::new(intent, active_node_id, changed_at)
-            .with_degraded_reason(degraded_reason),
+        NodeSelectionSnapshot::new(intent, active_terminal, changed_at),
     ))
 }
 

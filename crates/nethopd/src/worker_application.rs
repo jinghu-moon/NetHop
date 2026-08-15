@@ -27,12 +27,16 @@ use nethop_core::{ManagedOptions, TunStack};
 #[cfg(feature = "subscription-update")]
 use nethop_protocol::PROTOCOL_VERSION;
 use nethop_protocol::{
-    ControlError, ControlMethod, ControlParams, ControlRequest, ControlResponse, ErrorDomain,
-    EventKind, NodeBenchmarkCompletedPhase, NodeBenchmarkOperationAck, NodeBenchmarkRunningPhase,
-    NodeBenchmarkTerminalReport, WebUiErrorKind, WebUiPayloadOperation,
+    BenchmarkControlTiming, BenchmarkTerminalTiming, ControlError, ControlMethod, ControlParams,
+    ControlRequest, ControlResponse, ErrorDomain, EventKind, FastSelectionDeferredReason,
+    NodeBenchmarkCompletedPhase, NodeBenchmarkFastSelection, NodeBenchmarkOperationAck,
+    NodeBenchmarkProgress, NodeBenchmarkProgressPhase, NodeBenchmarkRunningPhase,
+    NodeBenchmarkSelection, NodeBenchmarkSelectionPhase, NodeBenchmarkTerminalReport,
+    NodeProbeOutcome, NodeProbeState, WebUiErrorKind, WebUiPayloadOperation,
 };
 use serde_json::json;
 
+use crate::operational_control::{FastSelectionApply, FastSelectionContext, FastSelectionInput};
 #[cfg(feature = "subscription-update")]
 use crate::worker_services::{unavailable_control_error, unavailable_control_error_with_details};
 use crate::{
@@ -43,7 +47,9 @@ use crate::{
     WorkerServiceError, WorkerServiceTasks,
 };
 use crate::{
-    BenchmarkJob, BenchmarkReport, BenchmarkStatus, BenchmarkTrigger, spawn_benchmark_with_wake,
+    BenchmarkJob, BenchmarkReport, BenchmarkStatus, BenchmarkTrigger, CurrentCandidateState,
+    FAST_SELECTION_DEADLINE, FAST_SELECTION_EARLIEST, FAST_SELECTION_LATEST,
+    FastSelectionPolicyDecision, fast_selection_policy, spawn_benchmark_with_wake,
 };
 use crate::{CandidateChecker, CoreLauncher, OperationalControl, WebUiPayloadStore};
 #[cfg(feature = "subscription-update")]
@@ -64,19 +70,110 @@ use nethop_subscription::FormatHint;
 const IDLE_WAKEUP: Duration = Duration::from_secs(1);
 static BENCHMARK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+fn duration_us(value: Duration) -> u64 {
+    u64::try_from(value.as_micros()).unwrap_or(u64::MAX)
+}
+
 struct RunningNodeBenchmark {
     operation_id: String,
     job: BenchmarkJob,
+    operation_started: Instant,
+    admission_us: u64,
     ordered_node_ids: Vec<String>,
     generation: u64,
     tolerance_ms: u32,
     deadline: Instant,
     trigger: BenchmarkTrigger,
+    completed: usize,
+    partial_outcomes: Vec<Option<NodeProbeOutcome>>,
+    fast_context_loaded: bool,
+    fast_current_node_id: Option<String>,
+    fast_selection: NodeBenchmarkFastSelection,
+    fast_mutation_committed: bool,
+    fast_control_timing: BenchmarkControlTiming,
 }
 
 struct CompletedNodeBenchmark {
     operation_id: String,
     document: serde_json::Value,
+}
+
+impl RunningNodeBenchmark {
+    fn record_progress(&mut self, outcomes: &[NodeProbeOutcome]) {
+        for outcome in outcomes {
+            let Some(index) = self
+                .ordered_node_ids
+                .iter()
+                .position(|node_id| node_id == &outcome.node_id)
+            else {
+                continue;
+            };
+            if self.partial_outcomes[index].is_none() {
+                self.partial_outcomes[index] = Some(outcome.clone());
+            }
+        }
+    }
+
+    fn partial_results(&self) -> Vec<NodeProbeOutcome> {
+        self.partial_outcomes.iter().flatten().cloned().collect()
+    }
+
+    fn current_candidate_state(&self) -> CurrentCandidateState {
+        if !self.fast_context_loaded {
+            return CurrentCandidateState::Unknown;
+        }
+        let Some(current_node_id) = self.fast_current_node_id.as_deref() else {
+            return CurrentCandidateState::NotInPool;
+        };
+        let Some(index) = self
+            .ordered_node_ids
+            .iter()
+            .position(|node_id| node_id == current_node_id)
+        else {
+            return CurrentCandidateState::NotInPool;
+        };
+        if self.partial_outcomes[index].is_some() {
+            CurrentCandidateState::Completed
+        } else {
+            CurrentCandidateState::Pending
+        }
+    }
+
+    fn fast_policy(&self) -> FastSelectionPolicyDecision {
+        fast_selection_policy(
+            self.operation_started.elapsed(),
+            self.ordered_node_ids.len(),
+            self.partial_outcomes.iter().flatten().count(),
+            self.partial_outcomes
+                .iter()
+                .flatten()
+                .filter(|outcome| outcome.state == NodeProbeState::Success)
+                .count(),
+            self.current_candidate_state(),
+        )
+    }
+
+    fn fast_wakeup_in(&self) -> Option<Duration> {
+        if !self.fast_selection.is_pending() {
+            return None;
+        }
+        let elapsed = self.operation_started.elapsed();
+        Some(if elapsed < FAST_SELECTION_EARLIEST {
+            FAST_SELECTION_EARLIEST - elapsed
+        } else if elapsed < FAST_SELECTION_LATEST {
+            FAST_SELECTION_LATEST - elapsed
+        } else {
+            Duration::ZERO
+        })
+    }
+
+    fn fast_metrics(&self) -> (usize, usize, u64) {
+        (
+            self.partial_outcomes.iter().flatten().count(),
+            self.ordered_node_ids.len(),
+            duration_us(self.operation_started.elapsed()),
+        )
+    }
 }
 
 #[cfg(feature = "subscription-update")]
@@ -1770,7 +1867,25 @@ where
             generation,
         ) {
             Ok(Some(active)) => active,
-            Ok(None) | Err(_) => {
+            Ok(None) => {
+                let _ = self.updater.discard(prepared);
+                self.publish_generation_build_status(accounting, UpdateStatus::Failed);
+                self.start(now);
+                return Ok(());
+            }
+            Err(error) => {
+                self.event_hub.publish(
+                    EventKind::Runtime,
+                    json!({
+                        "kind": "generation_activation",
+                        "state": "failed",
+                        "diagnostic_code": error.diagnostic_code(),
+                        "cause_code": error.cause_code(),
+                        "apply_step": error.apply_step(),
+                        "rollback_step": error.rollback_step(),
+                        "cleanup_failed": error.cleanup_failed(),
+                    }),
+                );
                 let _ = self.updater.discard(prepared);
                 self.publish_generation_build_status(accounting, UpdateStatus::Failed);
                 self.start(now);
@@ -1793,6 +1908,15 @@ where
         }
         if self.updater.commit(prepared).is_err() {
             let cleanup_failed = active.stop(&mut self.network, &mut self.verifier).is_err();
+            self.event_hub.publish(
+                EventKind::Runtime,
+                json!({
+                    "kind": "generation_commit",
+                    "state": "failed",
+                    "diagnostic_code": "runtime_update_commit_failed",
+                    "cleanup_failed": cleanup_failed,
+                }),
+            );
             self.publish_generation_build_status(accounting, UpdateStatus::Failed);
             if cleanup_failed {
                 return Err(WorkerServiceError::ShutdownFailed);
@@ -2036,8 +2160,12 @@ where
             joined_existing,
             trigger: running.trigger,
             candidate_count: running.ordered_node_ids.len(),
+            fast_selection_earliest_ms: nethop_protocol::NODE_BENCHMARK_FAST_SELECTION_EARLIEST_MS,
+            fast_selection_latest_ms: nethop_protocol::NODE_BENCHMARK_FAST_SELECTION_LATEST_MS,
+            fast_selection_deadline_ms: nethop_protocol::NODE_BENCHMARK_FAST_SELECTION_DEADLINE_MS,
             probe_cutoff_ms: nethop_protocol::NODE_BENCHMARK_PROBE_CUTOFF_MS,
             deadline_ms: nethop_protocol::NODE_BENCHMARK_DEADLINE_MS,
+            fast_selection: running.fast_selection.clone(),
         })
         .expect("benchmark ACK is a bounded protocol DTO")
     }
@@ -2047,6 +2175,7 @@ where
         request_id: nethop_protocol::RequestId,
         trigger: BenchmarkTrigger,
     ) -> ControlResponse {
+        let operation_started = Instant::now();
         let generation = self.snapshot().generation.map(GenerationId::get);
         if let Some(running) = self.node_benchmark.as_ref() {
             return ControlResponse::success(
@@ -2083,6 +2212,7 @@ where
                 );
             }
         };
+        let admission_us = duration_us(operation_started.elapsed());
         let job = match spawn_benchmark_with_wake(
             plan.endpoint,
             plan.candidates,
@@ -2108,14 +2238,24 @@ where
         );
         self.completed_node_benchmark = None;
         let deadline = job.deadline();
+        let candidate_count = plan.ordered_node_ids.len();
         self.node_benchmark = Some(RunningNodeBenchmark {
             operation_id: operation_id.clone(),
             job,
+            operation_started,
+            admission_us,
             ordered_node_ids: plan.ordered_node_ids,
             generation,
             tolerance_ms: self.benchmark_tolerance_ms(),
             deadline,
             trigger,
+            completed: 0,
+            partial_outcomes: vec![None; candidate_count],
+            fast_context_loaded: false,
+            fast_current_node_id: None,
+            fast_selection: NodeBenchmarkFastSelection::Pending,
+            fast_mutation_committed: false,
+            fast_control_timing: BenchmarkControlTiming::zero(),
         });
         ControlResponse::success(
             request_id,
@@ -2163,7 +2303,224 @@ where
         )
     }
 
+    fn advance_fast_node_selection(&mut self, current_generation: Option<u64>) {
+        let Some(running) = self.node_benchmark.as_mut() else {
+            return;
+        };
+        if !running.fast_selection.is_pending() {
+            return;
+        }
+        if current_generation != Some(running.generation) {
+            let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+            running.fast_selection = NodeBenchmarkFastSelection::Superseded {
+                completed,
+                candidate_count,
+                elapsed_us,
+            };
+            return;
+        }
+
+        loop {
+            let decision = self
+                .node_benchmark
+                .as_ref()
+                .map(RunningNodeBenchmark::fast_policy)
+                .unwrap_or(FastSelectionPolicyDecision::Wait);
+            match decision {
+                FastSelectionPolicyDecision::Wait => return,
+                FastSelectionPolicyDecision::NeedCurrent => {
+                    let context = {
+                        let (running, control) =
+                            (&mut self.node_benchmark, &mut self.operational_control);
+                        let Some(running) = running.as_mut() else {
+                            return;
+                        };
+                        let Some(control) = control.as_ref() else {
+                            let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+                            running.fast_selection = NodeBenchmarkFastSelection::Deferred {
+                                completed,
+                                candidate_count,
+                                elapsed_us,
+                                reason: FastSelectionDeferredReason::ControlError,
+                            };
+                            break;
+                        };
+                        control.fast_selection_context(&mut running.fast_control_timing)
+                    };
+                    let Some(running) = self.node_benchmark.as_mut() else {
+                        return;
+                    };
+                    match context {
+                        Ok(FastSelectionContext::Auto { current_node_id }) => {
+                            running.fast_context_loaded = true;
+                            running.fast_current_node_id = current_node_id;
+                            continue;
+                        }
+                        Ok(FastSelectionContext::Manual) => {
+                            let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+                            running.fast_selection = NodeBenchmarkFastSelection::NotApplicable {
+                                completed,
+                                candidate_count,
+                                elapsed_us,
+                            };
+                            break;
+                        }
+                        Err(_) => {
+                            let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+                            running.fast_selection = NodeBenchmarkFastSelection::Deferred {
+                                completed,
+                                candidate_count,
+                                elapsed_us,
+                                reason: FastSelectionDeferredReason::ControlError,
+                            };
+                            break;
+                        }
+                    }
+                }
+                FastSelectionPolicyDecision::Evaluate => {
+                    let result = {
+                        let (running, control) =
+                            (&mut self.node_benchmark, &mut self.operational_control);
+                        let Some(running) = running.as_mut() else {
+                            return;
+                        };
+                        let Some(control) = control.as_mut() else {
+                            let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+                            running.fast_selection = NodeBenchmarkFastSelection::Deferred {
+                                completed,
+                                candidate_count,
+                                elapsed_us,
+                                reason: FastSelectionDeferredReason::ControlError,
+                            };
+                            break;
+                        };
+                        control.apply_fast_selection(
+                            FastSelectionInput {
+                                outcomes: &running.partial_results(),
+                                ordered_node_ids: &running.ordered_node_ids,
+                                current_node_id: running.fast_current_node_id.as_deref(),
+                                tolerance_ms: running.tolerance_ms,
+                                deadline: running.operation_started + FAST_SELECTION_DEADLINE,
+                            },
+                            &mut running.fast_mutation_committed,
+                            &mut running.fast_control_timing,
+                        )
+                    };
+                    let Some(running) = self.node_benchmark.as_mut() else {
+                        return;
+                    };
+                    let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+                    running.fast_selection = match result {
+                        Ok(FastSelectionApply::Switched(selection)) => {
+                            NodeBenchmarkFastSelection::Switched {
+                                completed,
+                                candidate_count,
+                                elapsed_us,
+                                selection,
+                            }
+                        }
+                        Ok(FastSelectionApply::Kept) => NodeBenchmarkFastSelection::Kept {
+                            completed,
+                            candidate_count,
+                            elapsed_us,
+                        },
+                        Ok(FastSelectionApply::NotApplicable) => {
+                            NodeBenchmarkFastSelection::NotApplicable {
+                                completed,
+                                candidate_count,
+                                elapsed_us,
+                            }
+                        }
+                        Err(_) => NodeBenchmarkFastSelection::Deferred {
+                            completed,
+                            candidate_count,
+                            elapsed_us,
+                            reason: FastSelectionDeferredReason::ControlError,
+                        },
+                    };
+                    break;
+                }
+                FastSelectionPolicyDecision::Defer(reason) => {
+                    let Some(running) = self.node_benchmark.as_mut() else {
+                        return;
+                    };
+                    let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+                    running.fast_selection = NodeBenchmarkFastSelection::Deferred {
+                        completed,
+                        candidate_count,
+                        elapsed_us,
+                        reason,
+                    };
+                    break;
+                }
+            }
+        }
+
+        let Some(running) = self.node_benchmark.as_ref() else {
+            return;
+        };
+        if running.fast_selection.is_pending()
+            || matches!(
+                running.fast_selection,
+                NodeBenchmarkFastSelection::Superseded { .. }
+            )
+        {
+            return;
+        }
+        let milestone = NodeBenchmarkSelection {
+            operation_id: running.operation_id.clone(),
+            phase: NodeBenchmarkSelectionPhase::Selection,
+            generation: running.generation,
+            fast_selection: running.fast_selection.clone(),
+        };
+        milestone
+            .validate()
+            .expect("fast benchmark selection is a bounded protocol DTO");
+        let document =
+            serde_json::to_value(milestone).expect("fast benchmark selection is serializable");
+        self.event_hub.publish(
+            EventKind::NodeTest,
+            json!({"kind":"node_test","result":document}),
+        );
+        if let NodeBenchmarkFastSelection::Switched { selection, .. } = &running.fast_selection {
+            self.event_hub.publish(
+                EventKind::NodeActive,
+                json!({"kind":"node_active","selection":selection}),
+            );
+        }
+    }
+
     fn reap_node_benchmark(&mut self) {
+        let current_generation = self.snapshot().generation.map(GenerationId::get);
+        let progress = self
+            .node_benchmark
+            .as_ref()
+            .map(|running| running.job.drain_progress())
+            .unwrap_or_default();
+        if let Some(running) = self.node_benchmark.as_mut() {
+            running.record_progress(&progress);
+        }
+        let progress_documents = self
+            .node_benchmark
+            .as_mut()
+            .map(|running| {
+                benchmark_progress_documents(
+                    current_generation,
+                    running.generation,
+                    &running.operation_id,
+                    running.ordered_node_ids.len(),
+                    &mut running.completed,
+                    progress,
+                )
+            })
+            .unwrap_or_default();
+        for document in progress_documents {
+            self.event_hub.publish(
+                EventKind::NodeTest,
+                json!({"kind":"node_test","result":document}),
+            );
+        }
+        self.advance_fast_node_selection(current_generation);
         let Some(report) = self
             .node_benchmark
             .as_mut()
@@ -2171,34 +2528,64 @@ where
         else {
             return;
         };
+        let job_elapsed_us = self
+            .node_benchmark
+            .as_ref()
+            .map(|running| running.job.elapsed_us())
+            .unwrap_or_default();
         let running = self
             .node_benchmark
             .take()
             .expect("completed benchmark remains worker-owned");
-        let current_generation = self.snapshot().generation.map(GenerationId::get);
+        let mut running = running;
+        if running.fast_selection.is_pending() {
+            let (completed, candidate_count, elapsed_us) = running.fast_metrics();
+            running.fast_selection = NodeBenchmarkFastSelection::NotNeeded {
+                completed,
+                candidate_count,
+                elapsed_us,
+            };
+        }
         let mut report: BenchmarkReport = report;
+        let worker_reap_us = job_elapsed_us.saturating_sub(report.timing.total_us);
+        let mut control_timing = BenchmarkControlTiming::zero();
         let selection = if current_generation != Some(running.generation) {
             report.status = BenchmarkStatus::Superseded;
             None
         } else {
             self.operational_control.as_mut().and_then(|control| {
                 control
-                    .complete_benchmark(
+                    .complete_benchmark_with_commit_timed(
                         &report,
                         &running.ordered_node_ids,
                         running.tolerance_ms,
                         running.deadline,
+                        running.fast_mutation_committed,
+                        &mut control_timing,
                     )
                     .ok()
             })
         };
-        let document = serde_json::to_value(NodeBenchmarkTerminalReport {
+        let terminal_timing = BenchmarkTerminalTiming {
+            admission_us: running.admission_us,
+            worker_reap_us,
+            fast_control: running.fast_control_timing,
+            terminal_control: control_timing,
+            operation_total_us: duration_us(running.operation_started.elapsed()),
+        };
+        let terminal = NodeBenchmarkTerminalReport {
             operation_id: running.operation_id.clone(),
             phase: NodeBenchmarkCompletedPhase::Completed,
             report,
             selection,
-        })
-        .expect("terminal benchmark report is a bounded protocol DTO");
+            fast_selection: running.fast_selection,
+            timing: terminal_timing,
+        };
+        terminal
+            .validate()
+            .expect("terminal benchmark timing preserves protocol invariants");
+        let document = serde_json::to_value(terminal)
+            .expect("terminal benchmark report is a bounded protocol DTO");
         self.event_hub.publish(
             EventKind::NodeTest,
             json!({"kind":"node_test","result":document}),
@@ -2726,8 +3113,7 @@ where
                     unavailable_control_error(ErrorDomain::Subscription, "IMPORT-BUSY"),
                 );
             }
-            self.control.queue_command(ControlCommand::Update);
-            let completed = self.handle_commands(self.clock.now()).is_ok()
+            let completed = self.update(self.clock.now()).is_ok()
                 && self.snapshot().last_update == UpdateStatus::Succeeded;
             let generation = self.snapshot().generation.map(GenerationId::get);
             return if completed {
@@ -2785,6 +3171,8 @@ where
                                 "connection_control", "structured_log_control", "log_channels", "runtime_metrics", "diagnostics_bundle"
                                 , "persistent_manual_source", "config_backup_v1"
                                 , "core_update_check", "traffic_event", "private_payload"
+                                , "node_territory_metadata_v1", "typed_active_terminal_v2"
+                                , "node_benchmark_fast_selection_v1"
                             ]
                         }),
                     );
@@ -3443,6 +3831,33 @@ fn import_document(document: Option<&serde_json::Value>) -> Option<(Vec<u8>, For
         _ => return None,
     };
     Some((content.as_bytes().to_vec(), format_hint))
+}
+
+fn benchmark_progress_documents(
+    current_generation: Option<u64>,
+    benchmark_generation: u64,
+    operation_id: &str,
+    candidate_count: usize,
+    completed: &mut usize,
+    outcomes: impl IntoIterator<Item = nethop_protocol::NodeProbeOutcome>,
+) -> Vec<serde_json::Value> {
+    outcomes
+        .into_iter()
+        .filter_map(|outcome| {
+            *completed = completed.saturating_add(1);
+            (current_generation == Some(benchmark_generation)).then(|| {
+                serde_json::to_value(NodeBenchmarkProgress {
+                    operation_id: operation_id.to_owned(),
+                    phase: NodeBenchmarkProgressPhase::Progress,
+                    generation: benchmark_generation,
+                    completed: *completed,
+                    candidate_count,
+                    outcome,
+                })
+                .expect("benchmark progress is a bounded protocol DTO")
+            })
+        })
+        .collect()
 }
 
 fn state_wire_for_event(state: RuntimeState) -> &'static str {
@@ -4586,6 +5001,10 @@ where
             .node_benchmark
             .as_ref()
             .map(|running| running.job.remaining());
+        let fast_benchmark = self
+            .node_benchmark
+            .as_ref()
+            .and_then(RunningNodeBenchmark::fast_wakeup_in);
         let periodic_benchmark = (captures_traffic(self.snapshot().state)
             && self
                 .operational_control
@@ -4603,6 +5022,7 @@ where
             .chain(traffic)
             .chain(payload_cleanup)
             .chain(benchmark)
+            .chain(fast_benchmark)
             .chain(periodic_benchmark)
             .min()
             .unwrap_or(IDLE_WAKEUP)
@@ -4661,5 +5081,47 @@ where
             running.job.cancel();
         }
         self.stop()
+    }
+}
+
+#[cfg(test)]
+mod benchmark_progress_tests {
+    use super::benchmark_progress_documents;
+    use nethop_protocol::{NodeProbeOutcome, NodeProbeState};
+
+    #[test]
+    fn progress_is_monotonic_generation_bound_and_redacted() {
+        let operation_id = format!("bench_{}", "1".repeat(29));
+        let mut completed = 0;
+        let documents = benchmark_progress_documents(
+            Some(7),
+            7,
+            &operation_id,
+            2,
+            &mut completed,
+            [
+                NodeProbeOutcome::success("nh1s-0000000000000001", 42).unwrap(),
+                NodeProbeOutcome::failed("nh1s-0000000000000002", NodeProbeState::Timeout).unwrap(),
+            ],
+        );
+
+        assert_eq!(completed, 2);
+        assert_eq!(documents[0]["completed"], 1);
+        assert_eq!(documents[1]["completed"], 2);
+        assert_eq!(documents[0]["candidate_count"], 2);
+        let encoded = serde_json::to_string(&documents).unwrap();
+        assert!(!encoded.contains("terminal-"));
+        assert!(!encoded.contains("https://"));
+
+        let stale = benchmark_progress_documents(
+            Some(8),
+            7,
+            &operation_id,
+            2,
+            &mut completed,
+            [NodeProbeOutcome::success("nh1s-0000000000000001", 41).unwrap()],
+        );
+        assert!(stale.is_empty());
+        assert_eq!(completed, 3);
     }
 }

@@ -1,0 +1,15 @@
+{
+  "version": 4,
+  "methods": {
+    "mode_get": "subscription.mode_get",
+    "mode_set": "subscription.mode_set",
+    "subscription_select": "subscription.select",
+    "subscription_set_enabled": "subscription.set_enabled",
+    "node_selection_get": "node.selection_get",
+    "node_select_auto": "node.select_auto",
+    "node_select_manual": "node.select_manual",
+    "node_test_all": "node.test_all",
+    "node_test_operation_get": "node.test_operation_get",
+    "node_list": "node.list"
+  }
+}

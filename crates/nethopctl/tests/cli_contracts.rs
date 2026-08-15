@@ -39,8 +39,12 @@ fn benchmark_running(request_id: &str, operation_id: &str) -> ControlResponse {
             "joined_existing": false,
             "trigger": "manual",
             "candidate_count": 2,
+            "fast_selection_earliest_ms": 2000,
+            "fast_selection_latest_ms": 2800,
+            "fast_selection_deadline_ms": 3000,
             "probe_cutoff_ms": 4500,
-            "deadline_ms": 4900
+            "deadline_ms": 4900,
+            "fast_selection": { "state": "pending" }
         }),
     )
 }
@@ -58,11 +62,60 @@ fn benchmark_completed(request_id: &str, operation_id: &str) -> ControlResponse 
                 "generation": 7,
                 "bootstrap_ms": 1,
                 "elapsed_ms": 50,
+                "timing": {
+                    "thread_spawn_us": 100,
+                    "runtime_init_us": 900,
+                    "candidate_dispatch_us": 200,
+                    "probe_us": 48_000,
+                    "result_assembly_us": 300,
+                    "total_us": 50_000
+                },
+                "probe": {
+                    "first_result_us": 49_000,
+                    "last_result_us": 49_000,
+                    "last_success_us": 49_000,
+                    "completed_within_500ms": 1,
+                    "completed_within_1s": 1,
+                    "completed_within_2s": 1,
+                    "completed_within_3s": 1,
+                    "completed_before_cutoff": 1,
+                    "cutoff_pending": 0,
+                    "cutoff_tail_us": 0
+                },
                 "tested": 1,
                 "succeeded": 1,
                 "timed_out": 0,
                 "failed": 0,
-                "nodes": [{"node_id":"nh1s-0123456789abcdef","state":"success","latency_ms":42}]
+                "nodes": [{"node_id":"nh1s-0123456789abcdef","state":"success","latency_ms":42,"request_elapsed_us":48_000,"completed_at_us":49_000}]
+            },
+            "fast_selection": {
+                "state": "not_needed",
+                "completed": 1,
+                "candidate_count": 1,
+                "elapsed_us": 50_000
+            },
+            "timing": {
+                "admission_us": 500,
+                "worker_reap_us": 200,
+                "fast_control": {
+                    "intent_load_us": 0,
+                    "current_snapshot_us": 0,
+                    "decision_us": 0,
+                    "target_resolve_us": 0,
+                    "selector_apply_us": 0,
+                    "final_snapshot_us": 0,
+                    "total_us": 0
+                },
+                "terminal_control": {
+                    "intent_load_us": 50,
+                    "current_snapshot_us": 0,
+                    "decision_us": 0,
+                    "target_resolve_us": 0,
+                    "selector_apply_us": 0,
+                    "final_snapshot_us": 250,
+                    "total_us": 400
+                },
+                "operation_total_us": 51_100
             }
         }),
     )
@@ -550,7 +603,7 @@ fn operational_commands_build_only_bounded_typed_params() {
 }
 
 #[test]
-fn protocol_v3_subscription_and_selection_commands_are_unambiguous() {
+fn protocol_v5_subscription_and_selection_commands_are_unambiguous() {
     let digest = "a".repeat(64);
     let source = "src_0123456789abcdef0123456789abcdef";
     let node = "nh1s-0123456789abcdef";
@@ -725,7 +778,7 @@ fn client_sends_one_typed_request_and_preserves_daemon_response() {
     assert_eq!(transport.observed[0].method(), CliCommand::Status.method());
     assert_eq!(
         render_response(&actual).unwrap(),
-        r#"{"version":3,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
+        r#"{"version":5,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
     );
 }
 

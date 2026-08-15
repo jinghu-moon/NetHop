@@ -7,7 +7,7 @@ use std::{
 };
 
 use nethop_core::{CapturePolicy, GenerationId, GenerationNodeRegistry, RuntimeState};
-use nethop_protocol::{ControlMethod, ControlParams, ErrorDomain};
+use nethop_protocol::{BenchmarkControlTiming, ControlMethod, ControlParams, ErrorDomain};
 use serde::Serialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -21,6 +21,46 @@ use crate::{
 };
 
 static TEMP_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
+fn duration_us(value: Duration) -> u64 {
+    u64::try_from(value.as_micros()).unwrap_or(u64::MAX)
+}
+
+fn measure_result<T, E>(slot: &mut u64, operation: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    let started = Instant::now();
+    let result = operation();
+    *slot = duration_us(started.elapsed());
+    result
+}
+
+fn measure_result_accumulated<T, E>(
+    slot: &mut u64,
+    operation: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let started = Instant::now();
+    let result = operation();
+    *slot = slot.saturating_add(duration_us(started.elapsed()));
+    result
+}
+
+pub(crate) enum FastSelectionContext {
+    Auto { current_node_id: Option<String> },
+    Manual,
+}
+
+pub(crate) enum FastSelectionApply {
+    Switched(Value),
+    Kept,
+    NotApplicable,
+}
+
+pub(crate) struct FastSelectionInput<'a> {
+    pub outcomes: &'a [nethop_protocol::NodeProbeOutcome],
+    pub ordered_node_ids: &'a [String],
+    pub current_node_id: Option<&'a str>,
+    pub tolerance_ms: u32,
+    pub deadline: Instant,
+}
 
 #[derive(Debug)]
 pub(crate) struct BenchmarkPlan {
@@ -177,8 +217,7 @@ impl OperationalControl {
                     "clash_api": {
                         "available": core.is_ok() && connections.is_ok(),
                         "node_count": selection.as_ref().map_or(0, |snapshot| snapshot.nodes().len()),
-                        "active_node_id": selection.as_ref().and_then(|snapshot| snapshot.selection().active_node_id()),
-                        "degraded_reason": selection.as_ref().and_then(|snapshot| snapshot.selection().degraded_reason()),
+                        "active_terminal": selection.as_ref().map(|snapshot| snapshot.selection().active_terminal()),
                         "active_connection_count": connections.as_ref().map_or(0, Vec::len),
                     },
                 });
@@ -203,8 +242,7 @@ impl OperationalControl {
             "core_api": if core.is_ok() && connections.is_ok() { "available" } else { "unavailable" },
             "selector": {
                 "intent": selection.as_ref().map(|snapshot| snapshot.selection().intent()),
-                "active_node_id": selection.as_ref().and_then(|snapshot| snapshot.selection().active_node_id()),
-                "degraded_reason": selection.as_ref().and_then(|snapshot| snapshot.selection().degraded_reason()),
+                "active_terminal": selection.as_ref().map(|snapshot| snapshot.selection().active_terminal()),
                 "candidate_count": selection.as_ref().map_or(0, |snapshot| snapshot.nodes().len()),
             },
             "active_connection_count": connections.as_ref().map_or(0, Vec::len),
@@ -265,7 +303,14 @@ impl OperationalControl {
     }
 
     pub fn replay_selection(&mut self) -> Result<ReplayResult, OperationalControlError> {
-        let (intent, _) = self.selection_store.load()?;
+        let (intent, _) = match self.selection_store.load() {
+            Ok(selection) => selection,
+            Err(SelectionModelError::UnsupportedSnapshot | SelectionModelError::InvalidStore) => {
+                self.selection_store.reset_auto(unix_seconds())?;
+                return Ok(ReplayResult::FellBackToAuto);
+            }
+            Err(error) => return Err(error.into()),
+        };
         match intent {
             NodeSelectionIntent::Auto => Ok(ReplayResult::Restored),
             NodeSelectionIntent::Manual { node_id } => {
@@ -312,6 +357,7 @@ impl OperationalControl {
         })
     }
 
+    #[cfg(any(test, feature = "benchmark-evidence"))]
     pub(crate) fn complete_benchmark(
         &mut self,
         report: &BenchmarkReport,
@@ -319,39 +365,205 @@ impl OperationalControl {
         tolerance_ms: u32,
         deadline: Instant,
     ) -> Result<Value, OperationalControlError> {
+        let mut timing = BenchmarkControlTiming::zero();
+        self.complete_benchmark_timed(
+            report,
+            ordered_node_ids,
+            tolerance_ms,
+            deadline,
+            &mut timing,
+        )
+    }
+
+    #[cfg(any(test, feature = "benchmark-evidence"))]
+    pub(crate) fn complete_benchmark_timed(
+        &mut self,
+        report: &BenchmarkReport,
+        ordered_node_ids: &[String],
+        tolerance_ms: u32,
+        deadline: Instant,
+        timing: &mut BenchmarkControlTiming,
+    ) -> Result<Value, OperationalControlError> {
+        self.complete_benchmark_with_commit_timed(
+            report,
+            ordered_node_ids,
+            tolerance_ms,
+            deadline,
+            false,
+            timing,
+        )
+    }
+
+    pub(crate) fn complete_benchmark_with_commit_timed(
+        &mut self,
+        report: &BenchmarkReport,
+        ordered_node_ids: &[String],
+        tolerance_ms: u32,
+        deadline: Instant,
+        mutation_committed: bool,
+        timing: &mut BenchmarkControlTiming,
+    ) -> Result<Value, OperationalControlError> {
+        *timing = BenchmarkControlTiming::zero();
+        let started = Instant::now();
+        let result = self.complete_benchmark_inner(
+            report,
+            ordered_node_ids,
+            tolerance_ms,
+            deadline,
+            mutation_committed,
+            timing,
+        );
+        timing.total_us = duration_us(started.elapsed());
+        result
+    }
+
+    fn complete_benchmark_inner(
+        &mut self,
+        report: &BenchmarkReport,
+        ordered_node_ids: &[String],
+        tolerance_ms: u32,
+        deadline: Instant,
+        mutation_committed: bool,
+        timing: &mut BenchmarkControlTiming,
+    ) -> Result<Value, OperationalControlError> {
         if deadline <= Instant::now() {
             return Err(OperationalControlError::BenchmarkDeadline);
         }
-        let (intent, _) = self.selection_store.load()?;
-        if report.trigger == BenchmarkTrigger::Periodic
-            && matches!(intent, NodeSelectionIntent::Auto)
-        {
+        let (intent, _) =
+            measure_result(&mut timing.intent_load_us, || self.selection_store.load())?;
+        if matches!(intent, NodeSelectionIntent::Auto) && !mutation_committed {
+            let snapshot_started = Instant::now();
             let current = self
                 .node_snapshot()
                 .ok()
                 .and_then(|snapshot| snapshot.selection().active_node_id().cloned());
-            if let AutoSelectionDecision::Switch { node_id } = choose_auto_target(
+            timing.current_snapshot_us = duration_us(snapshot_started.elapsed());
+            let decision_started = Instant::now();
+            let decision = choose_auto_target(
                 ordered_node_ids,
                 &report.nodes,
                 current.as_ref().map(StableNodeId::as_str),
                 tolerance_ms,
-            ) {
-                let registry = self.current_registry()?;
-                let record = registry
-                    .by_stable_id(&node_id)
-                    .ok_or(OperationalControlError::UnknownNode)?;
-                self.api
-                    .select_node_before(record.internal_tag(), deadline)?;
+            );
+            timing.decision_us = duration_us(decision_started.elapsed());
+            if let AutoSelectionDecision::Switch { node_id } = decision {
+                let internal_tag = measure_result(&mut timing.target_resolve_us, || {
+                    let registry = self.current_registry()?;
+                    registry
+                        .by_stable_id(&node_id)
+                        .map(|record| record.internal_tag().to_owned())
+                        .ok_or(OperationalControlError::UnknownNode)
+                })?;
+                measure_result(&mut timing.selector_apply_us, || {
+                    self.api.select_node_before(&internal_tag, deadline)
+                })?;
             }
         }
         let timeout = deadline.saturating_duration_since(Instant::now());
         if timeout.is_zero() {
             return Err(OperationalControlError::BenchmarkDeadline);
         }
-        let core = self.api.group_snapshot_with_timeout(timeout)?;
-        Ok(serde_json::to_value(
-            self.node_snapshot_from_core(&core)?.selection(),
-        )?)
+        measure_result(&mut timing.final_snapshot_us, || {
+            let core = self.api.group_snapshot_with_timeout(timeout)?;
+            Ok(serde_json::to_value(
+                self.node_snapshot_from_core(&core)?.selection(),
+            )?)
+        })
+    }
+
+    pub(crate) fn fast_selection_context(
+        &self,
+        timing: &mut BenchmarkControlTiming,
+    ) -> Result<FastSelectionContext, OperationalControlError> {
+        let started = Instant::now();
+        let result = (|| {
+            let (intent, _) = measure_result_accumulated(&mut timing.intent_load_us, || {
+                self.selection_store.load()
+            })?;
+            Ok(if matches!(intent, NodeSelectionIntent::Auto) {
+                let snapshot = measure_result_accumulated(&mut timing.current_snapshot_us, || {
+                    self.node_snapshot()
+                })?;
+                FastSelectionContext::Auto {
+                    current_node_id: snapshot
+                        .selection()
+                        .active_node_id()
+                        .map(StableNodeId::as_str)
+                        .map(ToOwned::to_owned),
+                }
+            } else {
+                FastSelectionContext::Manual
+            })
+        })();
+        timing.total_us = timing
+            .total_us
+            .saturating_add(duration_us(started.elapsed()));
+        result
+    }
+
+    pub(crate) fn apply_fast_selection(
+        &mut self,
+        input: FastSelectionInput<'_>,
+        mutation_committed: &mut bool,
+        timing: &mut BenchmarkControlTiming,
+    ) -> Result<FastSelectionApply, OperationalControlError> {
+        if input.deadline <= Instant::now() {
+            return Err(OperationalControlError::BenchmarkDeadline);
+        }
+        let started = Instant::now();
+        let result = (|| {
+            let (intent, _) = measure_result_accumulated(&mut timing.intent_load_us, || {
+                self.selection_store.load()
+            })?;
+            if !matches!(intent, NodeSelectionIntent::Auto) {
+                return Ok(FastSelectionApply::NotApplicable);
+            }
+            let decision_started = Instant::now();
+            let decision = choose_auto_target(
+                input.ordered_node_ids,
+                input.outcomes,
+                input.current_node_id,
+                input.tolerance_ms,
+            );
+            timing.decision_us = timing
+                .decision_us
+                .saturating_add(duration_us(decision_started.elapsed()));
+            Ok(match decision {
+                AutoSelectionDecision::Keep => FastSelectionApply::Kept,
+                AutoSelectionDecision::Switch { node_id } => {
+                    let internal_tag =
+                        measure_result_accumulated(&mut timing.target_resolve_us, || {
+                            let registry = self.current_registry()?;
+                            registry
+                                .by_stable_id(&node_id)
+                                .map(|record| record.internal_tag().to_owned())
+                                .ok_or(OperationalControlError::UnknownNode)
+                        })?;
+                    measure_result_accumulated(&mut timing.selector_apply_us, || {
+                        self.api.select_node_before(&internal_tag, input.deadline)
+                    })?;
+                    *mutation_committed = true;
+                    let timeout = input.deadline.saturating_duration_since(Instant::now());
+                    if timeout.is_zero() {
+                        return Err(OperationalControlError::BenchmarkDeadline);
+                    }
+                    let selection = measure_result_accumulated(
+                        &mut timing.final_snapshot_us,
+                        || -> Result<Value, OperationalControlError> {
+                            let core = self.api.group_snapshot_with_timeout(timeout)?;
+                            Ok(serde_json::to_value(
+                                self.node_snapshot_from_core(&core)?.selection(),
+                            )?)
+                        },
+                    )?;
+                    FastSelectionApply::Switched(selection)
+                }
+            })
+        })();
+        timing.total_us = timing
+            .total_us
+            .saturating_add(duration_us(started.elapsed()));
+        result
     }
 
     #[cfg(feature = "benchmark-evidence")]
@@ -776,17 +988,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(selection["intent"]["mode"], "manual");
-        assert_eq!(selection["active_node_id"], FIRST);
+        assert_eq!(selection["active_terminal"]["kind"], "node");
+        assert_eq!(selection["active_terminal"]["node_id"], FIRST);
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with("GET /proxies "));
     }
 
     #[test]
-    fn manually_triggered_benchmark_never_auto_selects_even_with_auto_intent() {
+    fn manually_triggered_benchmark_selects_when_intent_is_auto() {
         let directory = tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
-        let (address, server) = serve(vec![(200, selector_document(FIRST))]);
+        let before = selector_document(FIRST);
+        let (address, server) = serve(vec![
+            (200, before.clone()),
+            (200, before),
+            (204, String::new()),
+            (200, selector_document(SECOND)),
+        ]);
         let mut control = control(&root, address, NodeSelectionIntent::Auto);
 
         let selection = control
@@ -799,10 +1018,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(selection["intent"]["mode"], "auto");
-        assert_eq!(selection["active_node_id"], FIRST);
+        assert_eq!(selection["active_terminal"]["kind"], "node");
+        assert_eq!(selection["active_terminal"]["node_id"], SECOND);
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("GET /proxies "));
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("PUT /proxies/nethop-select "))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -822,7 +1048,8 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(selection["active_node_id"], FIRST);
+        assert_eq!(selection["active_terminal"]["kind"], "node");
+        assert_eq!(selection["active_terminal"]["node_id"], FIRST);
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert!(
@@ -844,17 +1071,20 @@ mod tests {
             (200, selector_document(SECOND)),
         ]);
         let mut control = control(&root, address, NodeSelectionIntent::Auto);
+        let mut timing = BenchmarkControlTiming::zero();
 
         let selection = control
-            .complete_benchmark(
+            .complete_benchmark_timed(
                 &report(BenchmarkTrigger::Periodic, 200, 40),
                 &[FIRST.to_owned(), SECOND.to_owned()],
                 50,
                 Instant::now() + Duration::from_secs(1),
+                &mut timing,
             )
             .unwrap();
 
-        assert_eq!(selection["active_node_id"], SECOND);
+        assert_eq!(selection["active_terminal"]["kind"], "node");
+        assert_eq!(selection["active_terminal"]["node_id"], SECOND);
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 4);
         assert_eq!(
@@ -866,6 +1096,174 @@ mod tests {
         );
         assert!(requests[2].ends_with(&format!(r#"{{"name":"{SECOND}"}}"#)));
         assert!(requests[3].starts_with("GET /proxies "));
+        assert!(timing.current_snapshot_us > 0);
+        assert!(timing.selector_apply_us > 0);
+        assert!(timing.final_snapshot_us > 0);
+        assert!(
+            timing.intent_load_us
+                + timing.current_snapshot_us
+                + timing.decision_us
+                + timing.target_resolve_us
+                + timing.selector_apply_us
+                + timing.final_snapshot_us
+                <= timing.total_us
+        );
+        timing.validate().unwrap();
+    }
+
+    #[test]
+    fn fast_switch_commits_once_while_terminal_only_reads_final_snapshot() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let before = selector_document(FIRST);
+        let after = selector_document(SECOND);
+        let (address, server) = serve(vec![
+            (200, before.clone()),
+            (200, before),
+            (204, String::new()),
+            (200, after.clone()),
+            (200, after),
+        ]);
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+        let mut fast_timing = BenchmarkControlTiming::zero();
+        let context = control.fast_selection_context(&mut fast_timing).unwrap();
+        let FastSelectionContext::Auto { current_node_id } = context else {
+            panic!("auto intent must produce an auto context");
+        };
+        let mut mutation_committed = false;
+        let fast = control
+            .apply_fast_selection(
+                FastSelectionInput {
+                    outcomes: &report(BenchmarkTrigger::Manual, 200, 40).nodes,
+                    ordered_node_ids: &[FIRST.to_owned(), SECOND.to_owned()],
+                    current_node_id: current_node_id.as_deref(),
+                    tolerance_ms: 50,
+                    deadline: Instant::now() + Duration::from_secs(1),
+                },
+                &mut mutation_committed,
+                &mut fast_timing,
+            )
+            .unwrap();
+        assert!(matches!(fast, FastSelectionApply::Switched(_)));
+        assert!(mutation_committed);
+
+        let mut terminal_timing = BenchmarkControlTiming::zero();
+        let selection = control
+            .complete_benchmark_with_commit_timed(
+                &report(BenchmarkTrigger::Manual, 200, 20),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now() + Duration::from_secs(1),
+                true,
+                &mut terminal_timing,
+            )
+            .unwrap();
+        assert_eq!(selection["active_terminal"]["node_id"], SECOND);
+        assert_eq!(terminal_timing.selector_apply_us, 0);
+
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("PUT /proxies/nethop-select "))
+                .count(),
+            1
+        );
+        assert_eq!(requests.len(), 5);
+    }
+
+    #[test]
+    fn failed_fast_control_still_accounts_for_total_time() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let before = selector_document(FIRST);
+        let (address, server) = serve(vec![(200, before), (500, String::new())]);
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+        let mut timing = BenchmarkControlTiming::zero();
+        let context = control.fast_selection_context(&mut timing).unwrap();
+        let FastSelectionContext::Auto { current_node_id } = context else {
+            panic!("auto intent must produce an auto context");
+        };
+        let mut mutation_committed = false;
+
+        let Err(error) = control.apply_fast_selection(
+            FastSelectionInput {
+                outcomes: &report(BenchmarkTrigger::Manual, 200, 40).nodes,
+                ordered_node_ids: &[FIRST.to_owned(), SECOND.to_owned()],
+                current_node_id: current_node_id.as_deref(),
+                tolerance_ms: 50,
+                deadline: Instant::now() + Duration::from_secs(1),
+            },
+            &mut mutation_committed,
+            &mut timing,
+        ) else {
+            panic!("rejected selector request must fail");
+        };
+
+        assert!(matches!(error, OperationalControlError::ClashApi(_)));
+        assert!(!mutation_committed);
+        assert!(timing.selector_apply_us > 0);
+        timing.validate().unwrap();
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn failed_fast_ack_never_allows_a_second_selector_mutation() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let before = selector_document(FIRST);
+        let after = selector_document(SECOND);
+        let (address, server) = serve(vec![
+            (200, before.clone()),
+            (200, before),
+            (204, String::new()),
+            (500, String::new()),
+            (200, after),
+        ]);
+        let mut control = control(&root, address, NodeSelectionIntent::Auto);
+        let mut fast_timing = BenchmarkControlTiming::zero();
+        let context = control.fast_selection_context(&mut fast_timing).unwrap();
+        let FastSelectionContext::Auto { current_node_id } = context else {
+            panic!("auto intent must produce an auto context");
+        };
+        let mut mutation_committed = false;
+
+        let result = control.apply_fast_selection(
+            FastSelectionInput {
+                outcomes: &report(BenchmarkTrigger::Manual, 200, 40).nodes,
+                ordered_node_ids: &[FIRST.to_owned(), SECOND.to_owned()],
+                current_node_id: current_node_id.as_deref(),
+                tolerance_ms: 50,
+                deadline: Instant::now() + Duration::from_secs(1),
+            },
+            &mut mutation_committed,
+            &mut fast_timing,
+        );
+        assert!(result.is_err());
+        assert!(mutation_committed);
+
+        let mut terminal_timing = BenchmarkControlTiming::zero();
+        let selection = control
+            .complete_benchmark_with_commit_timed(
+                &report(BenchmarkTrigger::Manual, 200, 20),
+                &[FIRST.to_owned(), SECOND.to_owned()],
+                50,
+                Instant::now() + Duration::from_secs(1),
+                mutation_committed,
+                &mut terminal_timing,
+            )
+            .unwrap();
+        assert_eq!(selection["active_terminal"]["node_id"], SECOND);
+
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("PUT /proxies/nethop-select "))
+                .count(),
+            1
+        );
+        assert_eq!(requests.len(), 5);
     }
 
     #[test]

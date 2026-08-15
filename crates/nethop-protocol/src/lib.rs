@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: u8 = 3;
+pub const PROTOCOL_VERSION: u8 = 5;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_WEBUI_STDOUT_BYTES: usize = MAX_FRAME_BYTES;
 pub const MAX_WEBUI_STDERR_BYTES: usize = 64 * 1024;
@@ -287,8 +287,12 @@ pub enum WebUiPayloadOperation {
 }
 
 pub const MAX_NODE_BENCHMARK_CANDIDATES: usize = 64;
+pub const NODE_BENCHMARK_FAST_SELECTION_EARLIEST_MS: u32 = 2_000;
+pub const NODE_BENCHMARK_FAST_SELECTION_LATEST_MS: u32 = 2_800;
+pub const NODE_BENCHMARK_FAST_SELECTION_DEADLINE_MS: u32 = 3_000;
 pub const NODE_BENCHMARK_PROBE_CUTOFF_MS: u32 = 4_500;
 pub const NODE_BENCHMARK_DEADLINE_MS: u32 = 4_900;
+pub const MAX_NODE_BENCHMARK_TIMING_US: u64 = 60_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -329,6 +333,8 @@ pub struct NodeProbeOutcome {
     pub state: NodeProbeState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u32>,
+    pub request_elapsed_us: u64,
+    pub completed_at_us: u64,
 }
 
 impl NodeProbeOutcome {
@@ -337,6 +343,8 @@ impl NodeProbeOutcome {
             node_id: node_id.into(),
             state: NodeProbeState::Success,
             latency_ms: Some(latency_ms),
+            request_elapsed_us: 0,
+            completed_at_us: 0,
         };
         outcome.validate()?;
         Ok(outcome)
@@ -350,9 +358,22 @@ impl NodeProbeOutcome {
             node_id: node_id.into(),
             state,
             latency_ms: None,
+            request_elapsed_us: 0,
+            completed_at_us: 0,
         };
         outcome.validate()?;
         Ok(outcome)
+    }
+
+    pub fn with_timing(
+        mut self,
+        request_elapsed_us: u64,
+        completed_at_us: u64,
+    ) -> Result<Self, ProtocolError> {
+        self.request_elapsed_us = request_elapsed_us;
+        self.completed_at_us = completed_at_us;
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
@@ -361,11 +382,256 @@ impl NodeProbeOutcome {
             || self
                 .latency_ms
                 .is_some_and(|delay| delay == 0 || delay > u32::from(u16::MAX))
+            || self.request_elapsed_us > MAX_NODE_BENCHMARK_TIMING_US
+            || self.completed_at_us > MAX_NODE_BENCHMARK_TIMING_US
+            || self.request_elapsed_us > self.completed_at_us
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkProbeSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_result_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_result_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_us: Option<u64>,
+    pub completed_within_500ms: usize,
+    pub completed_within_1s: usize,
+    pub completed_within_2s: usize,
+    pub completed_within_3s: usize,
+    pub completed_before_cutoff: usize,
+    pub cutoff_pending: usize,
+    pub cutoff_tail_us: u64,
+}
+
+impl BenchmarkProbeSummary {
+    fn completed(nodes: &[NodeProbeOutcome]) -> Self {
+        let first_result_us = nodes.iter().map(|outcome| outcome.completed_at_us).min();
+        let last_result_us = nodes.iter().map(|outcome| outcome.completed_at_us).max();
+        let last_success_us = nodes
+            .iter()
+            .filter(|outcome| outcome.state == NodeProbeState::Success)
+            .map(|outcome| outcome.completed_at_us)
+            .max();
+        Self {
+            first_result_us,
+            last_result_us,
+            last_success_us,
+            completed_within_500ms: nodes
+                .iter()
+                .filter(|outcome| outcome.completed_at_us <= 500_000)
+                .count(),
+            completed_within_1s: nodes
+                .iter()
+                .filter(|outcome| outcome.completed_at_us <= 1_000_000)
+                .count(),
+            completed_within_2s: nodes
+                .iter()
+                .filter(|outcome| outcome.completed_at_us <= 2_000_000)
+                .count(),
+            completed_within_3s: nodes
+                .iter()
+                .filter(|outcome| outcome.completed_at_us <= 3_000_000)
+                .count(),
+            completed_before_cutoff: nodes.len(),
+            cutoff_pending: 0,
+            cutoff_tail_us: 0,
+        }
+    }
+
+    fn empty() -> Self {
+        Self::completed(&[])
+    }
+
+    fn validate(
+        &self,
+        tested: usize,
+        succeeded: usize,
+        timing: &BenchmarkEngineTiming,
+    ) -> Result<(), ProtocolError> {
+        let counts = [
+            self.completed_within_500ms,
+            self.completed_within_1s,
+            self.completed_within_2s,
+            self.completed_within_3s,
+            self.completed_before_cutoff,
+        ];
+        let has_completed = self.completed_before_cutoff > 0;
+        if counts.windows(2).any(|pair| pair[0] > pair[1])
+            || self
+                .completed_before_cutoff
+                .checked_add(self.cutoff_pending)
+                != Some(tested)
+            || (self.first_result_us.is_some() != has_completed)
+            || (self.last_result_us.is_some() != has_completed)
+            || (self.last_success_us.is_some() != (succeeded > 0))
+            || self
+                .first_result_us
+                .zip(self.last_result_us)
+                .is_some_and(|(first, last)| first > last)
+            || self
+                .last_success_us
+                .zip(self.last_result_us)
+                .is_some_and(|(success, last)| success > last)
+            || self
+                .first_result_us
+                .into_iter()
+                .chain(self.last_result_us)
+                .chain(self.last_success_us)
+                .any(|value| value > timing.total_us)
+            || self.cutoff_tail_us > timing.probe_us
+            || (self.cutoff_pending == 0 && self.cutoff_tail_us != 0)
+            || self
+                .last_result_us
+                .and_then(|last| last.checked_add(self.cutoff_tail_us))
+                .is_some_and(|end| end > timing.total_us)
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkEngineTiming {
+    pub thread_spawn_us: u64,
+    pub runtime_init_us: u64,
+    pub candidate_dispatch_us: u64,
+    pub probe_us: u64,
+    pub result_assembly_us: u64,
+    pub total_us: u64,
+}
+
+impl BenchmarkEngineTiming {
+    fn aggregate(bootstrap_ms: u32, elapsed_ms: u32) -> Self {
+        Self {
+            thread_spawn_us: 0,
+            runtime_init_us: u64::from(bootstrap_ms) * 1_000,
+            candidate_dispatch_us: 0,
+            probe_us: u64::from(elapsed_ms.saturating_sub(bootstrap_ms)) * 1_000,
+            result_assembly_us: 0,
+            total_us: u64::from(elapsed_ms) * 1_000,
+        }
+    }
+
+    fn validate(&self, bootstrap_ms: u32, elapsed_ms: u32) -> Result<(), ProtocolError> {
+        let stages = [
+            self.thread_spawn_us,
+            self.runtime_init_us,
+            self.candidate_dispatch_us,
+            self.probe_us,
+            self.result_assembly_us,
+        ];
+        let accounted = checked_timing_sum(&stages).ok_or(ProtocolError::InvalidEnvelope)?;
+        let bootstrap_us = self
+            .thread_spawn_us
+            .checked_add(self.runtime_init_us)
+            .ok_or(ProtocolError::InvalidEnvelope)?;
+        if stages
+            .into_iter()
+            .chain([self.total_us])
+            .any(|value| value > MAX_NODE_BENCHMARK_TIMING_US)
+            || accounted > self.total_us
+            || self.total_us / 1_000 != u64::from(elapsed_ms)
+            || bootstrap_us / 1_000 != u64::from(bootstrap_ms)
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkControlTiming {
+    pub intent_load_us: u64,
+    pub current_snapshot_us: u64,
+    pub decision_us: u64,
+    pub target_resolve_us: u64,
+    pub selector_apply_us: u64,
+    pub final_snapshot_us: u64,
+    pub total_us: u64,
+}
+
+impl BenchmarkControlTiming {
+    pub fn zero() -> Self {
+        Self {
+            intent_load_us: 0,
+            current_snapshot_us: 0,
+            decision_us: 0,
+            target_resolve_us: 0,
+            selector_apply_us: 0,
+            final_snapshot_us: 0,
+            total_us: 0,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let stages = [
+            self.intent_load_us,
+            self.current_snapshot_us,
+            self.decision_us,
+            self.target_resolve_us,
+            self.selector_apply_us,
+            self.final_snapshot_us,
+        ];
+        let accounted = checked_timing_sum(&stages).ok_or(ProtocolError::InvalidEnvelope)?;
+        if stages
+            .into_iter()
+            .chain([self.total_us])
+            .any(|value| value > MAX_NODE_BENCHMARK_TIMING_US)
+            || accounted > self.total_us
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkTerminalTiming {
+    pub admission_us: u64,
+    pub worker_reap_us: u64,
+    pub fast_control: BenchmarkControlTiming,
+    pub terminal_control: BenchmarkControlTiming,
+    pub operation_total_us: u64,
+}
+
+impl BenchmarkTerminalTiming {
+    fn validate(&self, report: &BenchmarkReport) -> Result<(), ProtocolError> {
+        self.fast_control.validate()?;
+        self.terminal_control.validate()?;
+        let accounted = checked_timing_sum(&[
+            self.admission_us,
+            report.timing.total_us,
+            self.worker_reap_us,
+            self.terminal_control.total_us,
+        ])
+        .ok_or(ProtocolError::InvalidEnvelope)?;
+        if self.admission_us > MAX_NODE_BENCHMARK_TIMING_US
+            || self.worker_reap_us > MAX_NODE_BENCHMARK_TIMING_US
+            || self.operation_total_us > MAX_NODE_BENCHMARK_TIMING_US
+            || self.fast_control.total_us > self.operation_total_us
+            || accounted > self.operation_total_us
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+fn checked_timing_sum(values: &[u64]) -> Option<u64> {
+    values
+        .iter()
+        .try_fold(0_u64, |sum, value| sum.checked_add(*value))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,6 +642,8 @@ pub struct BenchmarkReport {
     pub generation: u64,
     pub bootstrap_ms: u32,
     pub elapsed_ms: u32,
+    pub timing: BenchmarkEngineTiming,
+    pub probe: BenchmarkProbeSummary,
     pub tested: usize,
     pub succeeded: usize,
     pub timed_out: usize,
@@ -391,6 +659,45 @@ impl BenchmarkReport {
         generation: u64,
         bootstrap_ms: u32,
         elapsed_ms: u32,
+        nodes: Vec<NodeProbeOutcome>,
+    ) -> Result<Self, ProtocolError> {
+        Self::from_timed_outcomes(
+            trigger,
+            generation,
+            bootstrap_ms,
+            elapsed_ms,
+            BenchmarkEngineTiming::aggregate(bootstrap_ms, elapsed_ms),
+            nodes,
+        )
+    }
+
+    pub fn from_timed_outcomes(
+        trigger: BenchmarkTrigger,
+        generation: u64,
+        bootstrap_ms: u32,
+        elapsed_ms: u32,
+        timing: BenchmarkEngineTiming,
+        nodes: Vec<NodeProbeOutcome>,
+    ) -> Result<Self, ProtocolError> {
+        let probe = BenchmarkProbeSummary::completed(&nodes);
+        Self::from_timed_outcomes_with_probe_summary(
+            trigger,
+            generation,
+            bootstrap_ms,
+            elapsed_ms,
+            timing,
+            probe,
+            nodes,
+        )
+    }
+
+    pub fn from_timed_outcomes_with_probe_summary(
+        trigger: BenchmarkTrigger,
+        generation: u64,
+        bootstrap_ms: u32,
+        elapsed_ms: u32,
+        timing: BenchmarkEngineTiming,
+        probe: BenchmarkProbeSummary,
         nodes: Vec<NodeProbeOutcome>,
     ) -> Result<Self, ProtocolError> {
         let succeeded = nodes
@@ -415,6 +722,8 @@ impl BenchmarkReport {
             generation,
             bootstrap_ms,
             elapsed_ms,
+            timing,
+            probe,
             tested: nodes.len(),
             succeeded,
             timed_out,
@@ -433,6 +742,8 @@ impl BenchmarkReport {
             generation,
             bootstrap_ms: 0,
             elapsed_ms: elapsed_ms.min(NODE_BENCHMARK_DEADLINE_MS),
+            timing: BenchmarkEngineTiming::aggregate(0, elapsed_ms.min(NODE_BENCHMARK_DEADLINE_MS)),
+            probe: BenchmarkProbeSummary::empty(),
             tested: 0,
             succeeded: 0,
             timed_out: 0,
@@ -450,6 +761,16 @@ impl BenchmarkReport {
             || self.tested != self.nodes.len()
             || self.succeeded + self.timed_out + self.failed != self.tested
             || self.nodes.iter().any(|outcome| outcome.validate().is_err())
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        self.timing.validate(self.bootstrap_ms, self.elapsed_ms)?;
+        self.probe
+            .validate(self.tested, self.succeeded, &self.timing)?;
+        if self
+            .nodes
+            .iter()
+            .any(|outcome| outcome.completed_at_us > self.timing.total_us)
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
@@ -487,8 +808,180 @@ pub enum NodeBenchmarkRunningPhase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum NodeBenchmarkProgressPhase {
+    Progress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeBenchmarkSelectionPhase {
+    Selection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NodeBenchmarkCompletedPhase {
     Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeBenchmarkProgress {
+    pub operation_id: String,
+    pub phase: NodeBenchmarkProgressPhase,
+    pub generation: u64,
+    pub completed: usize,
+    pub candidate_count: usize,
+    pub outcome: NodeProbeOutcome,
+}
+
+impl NodeBenchmarkProgress {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !valid_benchmark_operation_id(&self.operation_id)
+            || self.generation == 0
+            || self.completed == 0
+            || self.candidate_count == 0
+            || self.completed > self.candidate_count
+            || self.candidate_count > MAX_NODE_BENCHMARK_CANDIDATES
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        self.outcome.validate()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FastSelectionDeferredReason {
+    InsufficientCoverage,
+    CurrentPending,
+    NoSuccess,
+    ControlError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NodeBenchmarkFastSelection {
+    Pending,
+    Switched {
+        completed: usize,
+        candidate_count: usize,
+        elapsed_us: u64,
+        selection: Value,
+    },
+    Kept {
+        completed: usize,
+        candidate_count: usize,
+        elapsed_us: u64,
+    },
+    Deferred {
+        completed: usize,
+        candidate_count: usize,
+        elapsed_us: u64,
+        reason: FastSelectionDeferredReason,
+    },
+    NotApplicable {
+        completed: usize,
+        candidate_count: usize,
+        elapsed_us: u64,
+    },
+    Superseded {
+        completed: usize,
+        candidate_count: usize,
+        elapsed_us: u64,
+    },
+    NotNeeded {
+        completed: usize,
+        candidate_count: usize,
+        elapsed_us: u64,
+    },
+}
+
+impl NodeBenchmarkFastSelection {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let Some((completed, candidate_count, elapsed_us)) = self.metrics() else {
+            return Ok(());
+        };
+        let elapsed_limit_ms = if matches!(self, Self::Switched { .. }) {
+            NODE_BENCHMARK_FAST_SELECTION_DEADLINE_MS
+        } else {
+            NODE_BENCHMARK_DEADLINE_MS
+        };
+        if candidate_count == 0
+            || candidate_count > MAX_NODE_BENCHMARK_CANDIDATES
+            || completed > candidate_count
+            || elapsed_us > u64::from(elapsed_limit_ms) * 1_000
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if let Self::Switched { selection, .. } = self {
+            validate_webui_value(selection, 0)?;
+        }
+        Ok(())
+    }
+
+    pub const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending)
+    }
+
+    pub const fn metrics(&self) -> Option<(usize, usize, u64)> {
+        match self {
+            Self::Pending => None,
+            Self::Switched {
+                completed,
+                candidate_count,
+                elapsed_us,
+                ..
+            }
+            | Self::Kept {
+                completed,
+                candidate_count,
+                elapsed_us,
+            }
+            | Self::Deferred {
+                completed,
+                candidate_count,
+                elapsed_us,
+                ..
+            }
+            | Self::NotApplicable {
+                completed,
+                candidate_count,
+                elapsed_us,
+            }
+            | Self::Superseded {
+                completed,
+                candidate_count,
+                elapsed_us,
+            }
+            | Self::NotNeeded {
+                completed,
+                candidate_count,
+                elapsed_us,
+            } => Some((*completed, *candidate_count, *elapsed_us)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeBenchmarkSelection {
+    pub operation_id: String,
+    pub phase: NodeBenchmarkSelectionPhase,
+    pub generation: u64,
+    pub fast_selection: NodeBenchmarkFastSelection,
+}
+
+impl NodeBenchmarkSelection {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !valid_benchmark_operation_id(&self.operation_id)
+            || self.generation == 0
+            || self.fast_selection.is_pending()
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        self.fast_selection.validate()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -499,6 +992,8 @@ pub struct NodeBenchmarkTerminalReport {
     pub report: BenchmarkReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection: Option<Value>,
+    pub fast_selection: NodeBenchmarkFastSelection,
+    pub timing: BenchmarkTerminalTiming,
 }
 
 impl NodeBenchmarkTerminalReport {
@@ -507,6 +1002,11 @@ impl NodeBenchmarkTerminalReport {
             return Err(ProtocolError::InvalidEnvelope);
         }
         self.report.validate()?;
+        if self.fast_selection.is_pending() {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        self.fast_selection.validate()?;
+        self.timing.validate(&self.report)?;
         if let Some(selection) = &self.selection {
             validate_webui_value(selection, 0)?;
         }
@@ -522,8 +1022,12 @@ pub struct NodeBenchmarkOperationAck {
     pub joined_existing: bool,
     pub trigger: BenchmarkTrigger,
     pub candidate_count: usize,
+    pub fast_selection_earliest_ms: u32,
+    pub fast_selection_latest_ms: u32,
+    pub fast_selection_deadline_ms: u32,
     pub probe_cutoff_ms: u32,
     pub deadline_ms: u32,
+    pub fast_selection: NodeBenchmarkFastSelection,
 }
 
 impl NodeBenchmarkOperationAck {
@@ -531,12 +1035,15 @@ impl NodeBenchmarkOperationAck {
         if !valid_benchmark_operation_id(&self.operation_id)
             || self.candidate_count == 0
             || self.candidate_count > MAX_NODE_BENCHMARK_CANDIDATES
+            || self.fast_selection_earliest_ms != NODE_BENCHMARK_FAST_SELECTION_EARLIEST_MS
+            || self.fast_selection_latest_ms != NODE_BENCHMARK_FAST_SELECTION_LATEST_MS
+            || self.fast_selection_deadline_ms != NODE_BENCHMARK_FAST_SELECTION_DEADLINE_MS
             || self.probe_cutoff_ms != NODE_BENCHMARK_PROBE_CUTOFF_MS
             || self.deadline_ms != NODE_BENCHMARK_DEADLINE_MS
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
-        Ok(())
+        self.fast_selection.validate()
     }
 }
 

@@ -560,3 +560,50 @@ fn local_import_requires_preview_digest_and_does_not_publish_before_commit() {
     let generated = fs::read_to_string(store.generations_root().join("2/config.json")).unwrap();
     assert!(generated.contains("local.example"));
 }
+
+#[test]
+fn local_import_bootstraps_without_configured_source_cache() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let checker = FakeChecker {
+        calls: calls.clone(),
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: BTreeMap::new(),
+            fail: false,
+            failed_source: None,
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    )
+    .with_manual_source_store(
+        ManualSourceStore::new(directory.path().join("manual-source.body")).unwrap(),
+    );
+    let payload = b"trojan://local-secret@local.example:443#local\n";
+
+    let preview = service
+        .preview_import(&config, payload, FormatHint::UriList)
+        .unwrap();
+    assert_eq!(preview.node_count, 1);
+    let prepared = service
+        .prepare_import(
+            &config,
+            payload,
+            FormatHint::UriList,
+            &preview.candidate_digest,
+        )
+        .unwrap();
+    let report = service.commit(prepared).unwrap();
+
+    assert_eq!(report.node_count, 1);
+    assert_eq!(store.current_generation().unwrap(), Some(report.generation));
+    assert_eq!(calls.get(), 1);
+    assert!(directory.path().join("manual-source.body").is_file());
+}

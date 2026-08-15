@@ -262,6 +262,41 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
 }
 
 #[test]
+fn add_source_replaces_the_enabled_empty_single_mode_placeholder() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    let registry_path = directory.path().join("source-registry.v1.json");
+    write(&config_path, "Primary", "", true);
+    let store = ConfigStore::new(&config_path).unwrap();
+    let registry = SourceRegistry::new(&registry_path).unwrap();
+    let snapshot = store.load().unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let mut runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let digest = runtime.current().digest().to_owned();
+
+    let outcome = runtime
+        .mutate_with_entropy(
+            &digest,
+            &ConfigMutation::AddSource {
+                name: "Live".into(),
+                url: "https://live.example/sub".into(),
+            },
+            &mut FixedEntropy(2),
+        )
+        .unwrap();
+
+    let added_id = outcome.source_id().expect("daemon assigns the source ID");
+    let document = runtime.redacted_document();
+    assert_eq!(document["subscriptions"]["sources"][0]["enabled"], false);
+    assert_eq!(document["subscriptions"]["sources"][1]["enabled"], true);
+    assert_eq!(
+        document["subscriptions"]["sources"][1]["source_id"],
+        added_id
+    );
+    assert_eq!(runtime.source_config().active_sources().count(), 1);
+}
+
+#[test]
 fn subscription_candidate_preview_is_pure_and_cas_guarded() {
     let directory = tempdir().unwrap();
     let config_path = directory.path().join("nethop.toml");

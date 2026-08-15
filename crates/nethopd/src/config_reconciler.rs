@@ -778,8 +778,13 @@ fn apply_mutation(
             set_value(document, "/service/enabled", serde_json::json!(enabled))?;
         }
         ConfigMutation::AddSource { name, url } => {
-            let enabled = !sources.sources().iter().any(|source| source.enabled());
+            let enabled = sources.active_sources().next().is_none();
             let list = array_mut(document, "/subscriptions/sources")?;
+            if enabled {
+                for source in list.iter_mut().filter_map(serde_json::Value::as_object_mut) {
+                    source.insert("enabled".into(), serde_json::json!(false));
+                }
+            }
             *added_index = Some(list.len());
             list.push(serde_json::json!({"name": name, "url": url, "enabled": enabled}));
             preferred_ids.push(None);

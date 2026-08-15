@@ -336,15 +336,16 @@ where
         }
         let mut inputs = Vec::new();
         for source in config.active_sources() {
-            let body = self.fetcher.cached(source)?;
-            inputs.push(FilteredSourceInput {
-                source: SourceInput {
-                    source_id: source.id().clone(),
-                    format_hint: source.expected_format(),
-                    bytes: body.bytes,
-                },
-                filter: source.filter().clone(),
-            });
+            if let Ok(body) = self.fetcher.cached(source) {
+                inputs.push(FilteredSourceInput {
+                    source: SourceInput {
+                        source_id: source.id().clone(),
+                        format_hint: source.expected_format(),
+                        bytes: body.bytes,
+                    },
+                    filter: source.filter().clone(),
+                });
+            }
         }
         inputs.push(FilteredSourceInput {
             source: SourceInput {

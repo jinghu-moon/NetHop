@@ -1,7 +1,8 @@
 use nethop_android::{
     ApplyReceipt, CapabilityError, CapabilityProbe, CapabilityReport, ExecutionError,
-    NetworkCommandBackend, NetworkExecutor, NetworkHealthVerifier, NetworkPlan, NetworkPlanError,
-    NetworkPlanner, PlanSlot, ProbeBackend, TunFallbackPlanner, default_tun_interface,
+    NetworkCommandBackend, NetworkExecutor, NetworkHealthError, NetworkHealthVerifier, NetworkPlan,
+    NetworkPlanError, NetworkPlanner, PlanSlot, ProbeBackend, TunFallbackPlanner,
+    default_tun_interface,
 };
 use nethop_core::{
     Candidate, CaptureMode, CapturePolicy, GenerationId, GenerationStore, RuntimeState,
@@ -75,7 +76,7 @@ pub enum DataPlaneHealthError {
     #[error("candidate core state could not be observed during data-plane verification")]
     CoreObserveFailed,
     #[error("candidate network plan is unhealthy")]
-    NetworkUnhealthy,
+    NetworkUnhealthy { cause: NetworkHealthError },
     #[error("candidate TUN interface is unhealthy")]
     TunUnhealthy,
     #[error("candidate TUN interface remained after core shutdown")]
@@ -87,9 +88,16 @@ impl DataPlaneHealthError {
         match self {
             Self::CoreExited => "data_plane_core_exited",
             Self::CoreObserveFailed => "data_plane_core_observe_failed",
-            Self::NetworkUnhealthy => "data_plane_network_unhealthy",
+            Self::NetworkUnhealthy { .. } => "data_plane_network_unhealthy",
             Self::TunUnhealthy => "data_plane_tun_unhealthy",
             Self::TunCleanupFailed => "data_plane_tun_cleanup_failed",
+        }
+    }
+
+    pub const fn cause_code(self) -> &'static str {
+        match self {
+            Self::NetworkUnhealthy { cause } => cause.code().as_str(),
+            _ => self.as_str(),
         }
     }
 }
@@ -173,7 +181,7 @@ where
                 }
                 self.network
                     .verify(plan)
-                    .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+                    .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause })
             }
             RuntimeAttachmentView::Tun { .. } => self
                 .tun
@@ -198,7 +206,7 @@ where
     fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
         self.network
             .replace_inbound_port(inbound_port)
-            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+            .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause })
     }
 
     fn replace_health_timeout(
@@ -239,7 +247,7 @@ impl<V: NetworkHealthVerifier> RuntimeHealthVerifier for V {
     ) -> Result<(), DataPlaneHealthError> {
         match attachment {
             RuntimeAttachmentView::Tproxy(plan) => NetworkHealthVerifier::verify(self, plan)
-                .map_err(|_| DataPlaneHealthError::NetworkUnhealthy),
+                .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause }),
             RuntimeAttachmentView::Tun { .. } => Err(DataPlaneHealthError::TunUnhealthy),
         }
     }
@@ -253,7 +261,7 @@ impl<V: NetworkHealthVerifier> RuntimeHealthVerifier for V {
 
     fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
         NetworkHealthVerifier::replace_inbound_port(self, inbound_port)
-            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+            .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause })
     }
 }
 
@@ -289,13 +297,13 @@ where
         };
         self.verifier
             .verify(plan)
-            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+            .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause })
     }
 
     fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
         self.verifier
             .replace_inbound_port(inbound_port)
-            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+            .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause })
     }
 }
 
@@ -312,7 +320,7 @@ where
             RuntimeAttachmentView::Tproxy(plan) => self
                 .network
                 .verify(plan)
-                .map_err(|_| DataPlaneHealthError::NetworkUnhealthy),
+                .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause }),
             RuntimeAttachmentView::Tun { .. } => self
                 .tun
                 .verify_active()
@@ -336,7 +344,7 @@ where
     fn replace_inbound_port(&mut self, inbound_port: u16) -> Result<(), DataPlaneHealthError> {
         self.network
             .replace_inbound_port(inbound_port)
-            .map_err(|_| DataPlaneHealthError::NetworkUnhealthy)
+            .map_err(|cause| DataPlaneHealthError::NetworkUnhealthy { cause })
     }
 
     fn replace_health_timeout(
@@ -674,15 +682,17 @@ where
                 Err(error) => {
                     let cleanup_failed = process.stop().is_err()
                         || matches!(error, ExecutionError::ApplyRollbackFailed { .. });
-                    return Err(WorkerRecoveryError::NetworkApplyFailed { cleanup_failed });
+                    return Err(WorkerRecoveryError::NetworkApplyFailed {
+                        error,
+                        cleanup_failed,
+                    });
                 }
             },
             PreparedAttachment::Tun => RuntimeAttachment::Tun,
         };
-        if self
-            .data_plane_health
-            .wait_healthy(&mut process, attachment.view(), &capabilities)
-            .is_err()
+        if let Err(error) =
+            self.data_plane_health
+                .wait_healthy(&mut process, attachment.view(), &capabilities)
         {
             let network_failed = match &mut attachment {
                 RuntimeAttachment::Tproxy { plan, receipt } => {
@@ -696,7 +706,10 @@ where
                 .wait_stopped(attachment.view())
                 .is_err();
             let cleanup_failed = network_failed || core_failed || data_plane_failed;
-            return Err(WorkerRecoveryError::DataPlaneHealthFailed { cleanup_failed });
+            return Err(WorkerRecoveryError::DataPlaneHealthFailed {
+                error,
+                cleanup_failed,
+            });
         }
         Ok(ActiveRuntime {
             active: ActiveGeneration::recovered(generation, process),
@@ -721,17 +734,68 @@ pub enum WorkerRecoveryError {
     #[error("current generation core failed startup health")]
     CoreHealthFailed { cleanup_failed: bool },
     #[error("current generation network plan could not be applied")]
-    NetworkApplyFailed { cleanup_failed: bool },
+    NetworkApplyFailed {
+        error: ExecutionError,
+        cleanup_failed: bool,
+    },
     #[error("current generation data plane failed health verification")]
-    DataPlaneHealthFailed { cleanup_failed: bool },
+    DataPlaneHealthFailed {
+        error: DataPlaneHealthError,
+        cleanup_failed: bool,
+    },
 }
 
 impl WorkerRecoveryError {
+    pub const fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::InvalidCurrentGeneration => "worker_invalid_current_generation",
+            Self::CapabilityProbeFailed => "worker_capability_probe_failed",
+            Self::CoreCheckFailed => "worker_core_check_failed",
+            Self::NetworkPlanRejected => "worker_network_plan_rejected",
+            Self::CoreStartFailed => "worker_core_start_failed",
+            Self::CoreHealthFailed { .. } => "worker_core_health_failed",
+            Self::NetworkApplyFailed { .. } => "worker_network_apply_failed",
+            Self::DataPlaneHealthFailed { .. } => "worker_data_plane_health_failed",
+        }
+    }
+
+    pub const fn cause_code(self) -> Option<&'static str> {
+        match self {
+            Self::NetworkApplyFailed { error, .. } => Some(error.code().as_str()),
+            Self::DataPlaneHealthFailed { error, .. } => Some(error.cause_code()),
+            _ => None,
+        }
+    }
+
+    pub const fn apply_step(self) -> Option<usize> {
+        match self {
+            Self::NetworkApplyFailed {
+                error: ExecutionError::ApplyFailed { step },
+                ..
+            } => Some(step),
+            Self::NetworkApplyFailed {
+                error: ExecutionError::ApplyRollbackFailed { apply_step, .. },
+                ..
+            } => Some(apply_step),
+            _ => None,
+        }
+    }
+
+    pub const fn rollback_step(self) -> Option<usize> {
+        match self {
+            Self::NetworkApplyFailed {
+                error: ExecutionError::ApplyRollbackFailed { rollback_step, .. },
+                ..
+            } => Some(rollback_step),
+            _ => None,
+        }
+    }
+
     pub const fn cleanup_failed(self) -> bool {
         match self {
             Self::CoreHealthFailed { cleanup_failed }
-            | Self::NetworkApplyFailed { cleanup_failed }
-            | Self::DataPlaneHealthFailed { cleanup_failed } => cleanup_failed,
+            | Self::NetworkApplyFailed { cleanup_failed, .. }
+            | Self::DataPlaneHealthFailed { cleanup_failed, .. } => cleanup_failed,
             _ => false,
         }
     }

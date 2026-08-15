@@ -310,6 +310,40 @@ fn replay_falls_back_to_auto_when_a_node_disappears() {
 }
 
 #[test]
+fn replay_replaces_an_unsupported_selection_snapshot_with_auto() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let state_path = root.join("selection.v2.json");
+    fs::write(
+        &state_path,
+        r#"{"version":1,"intent":{"mode":"auto"},"changed_at":1}"#,
+    )
+    .unwrap();
+    let generations = generation_root(&root, &["nh1s-0123456789abcdef"]);
+    let mut control = OperationalControl::new(
+        api("127.0.0.1:9".parse().unwrap()),
+        NodeSelectionStore::new(&state_path).unwrap(),
+        root.join("diagnostics-latest.json"),
+    )
+    .unwrap()
+    .with_generation_root(generations)
+    .unwrap();
+
+    assert_eq!(
+        control.replay_selection().unwrap(),
+        ReplayResult::FellBackToAuto
+    );
+    assert_eq!(
+        NodeSelectionStore::new(state_path)
+            .unwrap()
+            .load()
+            .unwrap()
+            .0,
+        NodeSelectionIntent::Auto
+    );
+}
+
+#[test]
 fn diagnostics_bundle_is_compact_persisted_and_secret_free() {
     let directory = tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();

@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, fs};
 
 use nethop_core::{GenerationNodeRecord, GenerationNodeRegistry};
 use nethopd::{
-    ActiveTerminal, GroupState, NodeSelectionIntent, NodeSelectionStore, SelectionDiagnosticCode,
-    StableNodeId, join_node_snapshot, resolve_active_terminal,
+    ActiveTerminal, ActiveTerminalSnapshot, GroupState, NodeSelectionIntent, NodeSelectionStore,
+    SelectionDiagnosticCode, StableNodeId, join_node_snapshot, resolve_active_terminal,
 };
 use tempfile::tempdir;
 
@@ -77,9 +77,11 @@ fn unresolved_active_never_falls_back_to_the_first_registry_node() {
     )
     .unwrap();
     assert!(snapshot.selection().active_node_id().is_none());
-    assert_eq!(
-        snapshot.selection().degraded_reason(),
-        Some(SelectionDiagnosticCode::ActiveNodeUnresolved)
-    );
+    assert!(matches!(
+        snapshot.selection().active_terminal(),
+        ActiveTerminalSnapshot::Unresolved {
+            reason: SelectionDiagnosticCode::ActiveNodeUnresolved
+        }
+    ));
     assert!(snapshot.nodes().iter().all(|node| !node.is_active()));
 }

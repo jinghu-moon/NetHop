@@ -58,7 +58,7 @@ impl ManualSourceStore {
         }
         let parent = path.parent().ok_or(ManualSourceError::InvalidPath)?;
         let metadata = fs::symlink_metadata(parent).map_err(|_| ManualSourceError::InvalidPath)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() || !private_parent(&metadata) {
             return Err(ManualSourceError::InvalidPath);
         }
         Ok(Self { path })
@@ -183,6 +183,17 @@ fn parse_format(value: &str) -> Option<FormatHint> {
 fn private_file(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
     metadata.permissions().mode() & 0o077 == 0
+}
+
+#[cfg(unix)]
+fn private_parent(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o077 == 0
+}
+
+#[cfg(not(unix))]
+fn private_parent(_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 #[cfg(not(unix))]

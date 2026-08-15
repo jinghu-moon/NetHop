@@ -16,7 +16,8 @@ use http_body_util::{BodyExt, Empty, Limited};
 use hyper::{Request, StatusCode, body::Bytes, client::conn::http1};
 use hyper_util::rt::TokioIo;
 use nethop_protocol::{
-    BenchmarkDiagnostic, BenchmarkReport, BenchmarkStatus, BenchmarkTrigger, NodeProbeOutcome,
+    BenchmarkDiagnostic, BenchmarkEngineTiming, BenchmarkProbeSummary, BenchmarkReport,
+    BenchmarkStatus, BenchmarkTrigger, FastSelectionDeferredReason, NodeProbeOutcome,
     NodeProbeState,
 };
 use serde::Deserialize;
@@ -27,8 +28,15 @@ use tokio::{net::TcpStream, task::JoinSet, time::Instant as TokioInstant};
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 pub const MAX_BENCHMARK_CANDIDATES: usize = 64;
-pub const PROBE_CUTOFF: Duration = Duration::from_millis(4_500);
+pub const PROBE_CUTOFF: Duration =
+    Duration::from_millis(nethop_protocol::NODE_BENCHMARK_PROBE_CUTOFF_MS as u64);
 pub const OPERATION_DEADLINE: Duration = Duration::from_millis(4_900);
+pub const FAST_SELECTION_EARLIEST: Duration =
+    Duration::from_millis(nethop_protocol::NODE_BENCHMARK_FAST_SELECTION_EARLIEST_MS as u64);
+pub const FAST_SELECTION_LATEST: Duration =
+    Duration::from_millis(nethop_protocol::NODE_BENCHMARK_FAST_SELECTION_LATEST_MS as u64);
+pub const FAST_SELECTION_DEADLINE: Duration =
+    Duration::from_millis(nethop_protocol::NODE_BENCHMARK_FAST_SELECTION_DEADLINE_MS as u64);
 const RESPONSE_BODY_LIMIT: usize = 4 * 1024;
 const RESPONSE_HEADER_LIMIT: usize = 8 * 1024;
 const RESPONSE_HEADER_COUNT_LIMIT: usize = 32;
@@ -200,6 +208,64 @@ pub enum AutoSelectionDecision {
     Switch { node_id: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurrentCandidateState {
+    Unknown,
+    NotInPool,
+    Pending,
+    Completed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FastSelectionPolicyDecision {
+    Wait,
+    NeedCurrent,
+    Evaluate,
+    Defer(FastSelectionDeferredReason),
+}
+
+pub fn fast_selection_policy(
+    elapsed: Duration,
+    candidate_count: usize,
+    completed_count: usize,
+    successful_count: usize,
+    current_state: CurrentCandidateState,
+) -> FastSelectionPolicyDecision {
+    if elapsed < FAST_SELECTION_EARLIEST {
+        return FastSelectionPolicyDecision::Wait;
+    }
+    let latest = elapsed >= FAST_SELECTION_LATEST;
+    let threshold = if latest {
+        candidate_count.div_ceil(2)
+    } else {
+        candidate_count.saturating_mul(2).div_ceil(3)
+    };
+    if completed_count < threshold {
+        return if latest {
+            FastSelectionPolicyDecision::Defer(FastSelectionDeferredReason::InsufficientCoverage)
+        } else {
+            FastSelectionPolicyDecision::Wait
+        };
+    }
+    if successful_count == 0 {
+        return if latest {
+            FastSelectionPolicyDecision::Defer(FastSelectionDeferredReason::NoSuccess)
+        } else {
+            FastSelectionPolicyDecision::Wait
+        };
+    }
+    match current_state {
+        CurrentCandidateState::Unknown => FastSelectionPolicyDecision::NeedCurrent,
+        CurrentCandidateState::Pending if latest => {
+            FastSelectionPolicyDecision::Defer(FastSelectionDeferredReason::CurrentPending)
+        }
+        CurrentCandidateState::Pending => FastSelectionPolicyDecision::Wait,
+        CurrentCandidateState::NotInPool | CurrentCandidateState::Completed => {
+            FastSelectionPolicyDecision::Evaluate
+        }
+    }
+}
+
 pub fn choose_auto_target(
     ordered_node_ids: &[String],
     outcomes: &[NodeProbeOutcome],
@@ -307,41 +373,31 @@ fn run_benchmark_with_cancel(
     cutoff: Duration,
     cancelled: Arc<AtomicBool>,
 ) -> Result<BenchmarkReport, BenchmarkError> {
-    run_benchmark_from(
+    run_benchmark_from(BenchmarkRun {
         endpoint,
         candidates,
         trigger,
         generation,
-        cutoff,
+        started: Instant::now(),
+        thread_spawn_us: 0,
+        runtime_init_us: 0,
+        probe_cutoff: cutoff,
         cancelled,
-        Instant::now(),
-    )
+        progress: None,
+        wake: None,
+    })
 }
 
-fn run_benchmark_from(
-    endpoint: BenchmarkEndpoint,
-    candidates: Vec<BenchmarkCandidate>,
-    trigger: BenchmarkTrigger,
-    generation: u64,
-    cutoff: Duration,
-    cancelled: Arc<AtomicBool>,
-    started: Instant,
-) -> Result<BenchmarkReport, BenchmarkError> {
-    validate_candidates(&candidates)?;
+fn run_benchmark_from(mut run: BenchmarkRun) -> Result<BenchmarkReport, BenchmarkError> {
+    validate_candidates(&run.candidates)?;
+    let runtime_started = Instant::now();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()
         .map_err(|_| BenchmarkError::Runtime)?;
-    Ok(runtime.block_on(run_async(BenchmarkRun {
-        endpoint,
-        candidates,
-        trigger,
-        generation,
-        started,
-        probe_cutoff: cutoff,
-        cancelled,
-    })))
+    run.runtime_init_us = duration_us(runtime_started.elapsed());
+    Ok(runtime.block_on(run_async(run)))
 }
 
 struct BenchmarkRun {
@@ -350,8 +406,12 @@ struct BenchmarkRun {
     trigger: BenchmarkTrigger,
     generation: u64,
     started: Instant,
+    thread_spawn_us: u64,
+    runtime_init_us: u64,
     probe_cutoff: Duration,
     cancelled: Arc<AtomicBool>,
+    progress: Option<mpsc::SyncSender<NodeProbeOutcome>>,
+    wake: Option<mpsc::Sender<()>>,
 }
 
 pub fn spawn_benchmark(
@@ -372,22 +432,28 @@ pub fn spawn_benchmark_with_wake(
 ) -> Result<BenchmarkJob, BenchmarkError> {
     validate_candidates(&candidates)?;
     let (sender, receiver) = mpsc::sync_channel(1);
+    let (progress_sender, progress_receiver) = mpsc::sync_channel(MAX_BENCHMARK_CANDIDATES);
     let started = Instant::now();
     let cancelled = Arc::new(AtomicBool::new(false));
     let thread_cancelled = Arc::clone(&cancelled);
     let handle = thread::Builder::new()
         .name("nethop-node-bench".to_owned())
         .spawn(move || {
+            let thread_spawn_us = duration_us(started.elapsed());
             let report = catch_unwind(AssertUnwindSafe(|| {
-                run_benchmark_from(
+                run_benchmark_from(BenchmarkRun {
                     endpoint,
                     candidates,
                     trigger,
                     generation,
-                    PROBE_CUTOFF,
-                    thread_cancelled,
                     started,
-                )
+                    thread_spawn_us,
+                    runtime_init_us: 0,
+                    probe_cutoff: PROBE_CUTOFF,
+                    cancelled: thread_cancelled,
+                    progress: Some(progress_sender),
+                    wake: wake.clone(),
+                })
             }))
             .ok()
             .and_then(Result::ok)
@@ -402,6 +468,7 @@ pub fn spawn_benchmark_with_wake(
         .map_err(|_| BenchmarkError::Runtime)?;
     Ok(BenchmarkJob {
         receiver,
+        progress_receiver,
         handle: Some(handle),
         started,
         trigger,
@@ -412,6 +479,7 @@ pub fn spawn_benchmark_with_wake(
 
 pub struct BenchmarkJob {
     receiver: mpsc::Receiver<BenchmarkReport>,
+    progress_receiver: mpsc::Receiver<NodeProbeOutcome>,
     handle: Option<thread::JoinHandle<()>>,
     started: Instant,
     trigger: BenchmarkTrigger,
@@ -426,6 +494,10 @@ impl BenchmarkJob {
 
     pub fn remaining(&self) -> Duration {
         self.deadline().saturating_duration_since(Instant::now())
+    }
+
+    pub fn elapsed_us(&self) -> u64 {
+        duration_us(self.started.elapsed())
     }
 
     pub fn try_complete(&mut self) -> Option<BenchmarkReport> {
@@ -445,6 +517,10 @@ impl BenchmarkJob {
                 ))
             }
         }
+    }
+
+    pub fn drain_progress(&self) -> Vec<NodeProbeOutcome> {
+        self.progress_receiver.try_iter().collect()
     }
 
     fn join(&mut self) {
@@ -472,15 +548,21 @@ async fn run_async(run: BenchmarkRun) -> BenchmarkReport {
         trigger,
         generation,
         started,
+        thread_spawn_us,
+        runtime_init_us,
         probe_cutoff,
         cancelled,
+        progress,
+        wake,
     } = run;
     #[cfg(feature = "benchmark-evidence")]
     LAST_BOOTSTRAP_MICROS.store(
         started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
         Ordering::Release,
     );
-    let bootstrap_ms = duration_ms(started.elapsed());
+    let bootstrap_us = thread_spawn_us.saturating_add(runtime_init_us);
+    let bootstrap_ms = duration_ms(Duration::from_micros(bootstrap_us));
+    let dispatch_started = Instant::now();
     let candidate_ids = candidates
         .iter()
         .map(|candidate| candidate.node_id.clone())
@@ -492,16 +574,25 @@ async fn run_async(run: BenchmarkRun) -> BenchmarkReport {
         tasks.spawn(async move {
             #[cfg(feature = "benchmark-evidence")]
             let _task_guard = EvidenceGuard::task();
+            let request_started = Instant::now();
             let node_id = candidate.node_id.clone();
-            match probe_one(&endpoint, &candidate.internal_tag, cutoff).await {
+            let outcome = match probe_one(&endpoint, &candidate.internal_tag, cutoff).await {
                 Ok(delay) => Ok(NodeProbeOutcome::success(node_id, delay)
                     .expect("validated candidate and delay produce a valid outcome")),
                 Err(ProbeError::Outcome(state)) => Ok(NodeProbeOutcome::failed(node_id, state)
                     .expect("validated candidate and failure state produce a valid outcome")),
                 Err(ProbeError::Unauthorized) => Err(()),
-            }
+            }?;
+            Ok(outcome
+                .with_timing(
+                    duration_us(request_started.elapsed()),
+                    duration_us(started.elapsed()),
+                )
+                .expect("monotonic benchmark timing produces a valid outcome"))
         });
     }
+    let candidate_dispatch_us = duration_us(dispatch_started.elapsed());
+    let probe_started = Instant::now();
     let mut outcomes = Vec::with_capacity(tasks.len());
     let mut unauthorized = false;
     loop {
@@ -511,7 +602,15 @@ async fn run_async(run: BenchmarkRun) -> BenchmarkReport {
         }
         let poll_deadline = cutoff.min(TokioInstant::now() + Duration::from_millis(25));
         match tokio::time::timeout_at(poll_deadline, tasks.join_next()).await {
-            Ok(Some(Ok(Ok(outcome)))) => outcomes.push(outcome),
+            Ok(Some(Ok(Ok(outcome)))) => {
+                if let Some(sender) = &progress {
+                    let _ = sender.try_send(outcome.clone());
+                }
+                if let Some(wake) = &wake {
+                    let _ = wake.send(());
+                }
+                outcomes.push(outcome);
+            }
             Ok(Some(Ok(Err(())))) => {
                 unauthorized = true;
                 tasks.shutdown().await;
@@ -526,6 +625,15 @@ async fn run_async(run: BenchmarkRun) -> BenchmarkReport {
             }
         }
     }
+    let probe_us = duration_us(probe_started.elapsed());
+    let probe_finished_at_us = duration_us(started.elapsed());
+    let probe = summarize_probe(
+        &outcomes,
+        candidate_ids.len(),
+        probe_us,
+        probe_finished_at_us,
+    );
+    let assembly_started = Instant::now();
     let mut completed = outcomes
         .drain(..)
         .map(|outcome| (outcome.node_id.clone(), outcome))
@@ -535,15 +643,31 @@ async fn run_async(run: BenchmarkRun) -> BenchmarkReport {
         .map(|node_id| {
             completed.remove(&node_id).unwrap_or_else(|| {
                 NodeProbeOutcome::failed(node_id, NodeProbeState::Timeout)
+                    .and_then(|outcome| {
+                        outcome
+                            .with_timing(probe_us.min(probe_finished_at_us), probe_finished_at_us)
+                    })
                     .expect("validated candidate produces a valid timeout outcome")
             })
         })
         .collect();
-    let mut report = BenchmarkReport::from_outcomes(
+    let result_assembly_us = duration_us(assembly_started.elapsed());
+    let total_us = duration_us(started.elapsed());
+    let elapsed_ms = duration_ms(Duration::from_micros(total_us));
+    let mut report = BenchmarkReport::from_timed_outcomes_with_probe_summary(
         trigger,
         generation,
         bootstrap_ms,
-        duration_ms(started.elapsed()),
+        elapsed_ms,
+        BenchmarkEngineTiming {
+            thread_spawn_us,
+            runtime_init_us,
+            candidate_dispatch_us,
+            probe_us,
+            result_assembly_us,
+            total_us,
+        },
+        probe,
         outcomes,
     )
     .expect("validated benchmark inputs produce a valid report");
@@ -552,6 +676,47 @@ async fn run_async(run: BenchmarkRun) -> BenchmarkReport {
         report.diagnostic = Some(BenchmarkDiagnostic::Unauthorized);
     }
     report
+}
+
+fn summarize_probe(
+    outcomes: &[NodeProbeOutcome],
+    candidate_count: usize,
+    probe_us: u64,
+    probe_finished_at_us: u64,
+) -> BenchmarkProbeSummary {
+    let completed_at = |limit_us| {
+        outcomes
+            .iter()
+            .filter(|outcome| outcome.completed_at_us <= limit_us)
+            .count()
+    };
+    let first_result_us = outcomes.iter().map(|outcome| outcome.completed_at_us).min();
+    let last_result_us = outcomes.iter().map(|outcome| outcome.completed_at_us).max();
+    let last_success_us = outcomes
+        .iter()
+        .filter(|outcome| outcome.state == NodeProbeState::Success)
+        .map(|outcome| outcome.completed_at_us)
+        .max();
+    let cutoff_pending = candidate_count.saturating_sub(outcomes.len());
+    let cutoff_tail_us = if cutoff_pending == 0 {
+        0
+    } else {
+        last_result_us
+            .map(|last| probe_finished_at_us.saturating_sub(last).min(probe_us))
+            .unwrap_or(probe_us)
+    };
+    BenchmarkProbeSummary {
+        first_result_us,
+        last_result_us,
+        last_success_us,
+        completed_within_500ms: completed_at(500_000),
+        completed_within_1s: completed_at(1_000_000),
+        completed_within_2s: completed_at(2_000_000),
+        completed_within_3s: completed_at(3_000_000),
+        completed_before_cutoff: outcomes.len(),
+        cutoff_pending,
+        cutoff_tail_us,
+    }
 }
 
 enum ProbeError {
@@ -674,6 +839,10 @@ fn duration_ms(value: Duration) -> u32 {
     u32::try_from(value.as_millis()).unwrap_or(u32::MAX)
 }
 
+fn duration_us(value: Duration) -> u64 {
+    u64::try_from(value.as_micros()).unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,6 +894,113 @@ mod tests {
     }
 
     #[test]
+    fn fast_selection_policy_is_adaptive_and_fails_closed() {
+        assert_eq!(
+            fast_selection_policy(
+                Duration::from_millis(1_999),
+                64,
+                64,
+                50,
+                CurrentCandidateState::Completed,
+            ),
+            FastSelectionPolicyDecision::Wait
+        );
+        assert_eq!(
+            fast_selection_policy(
+                FAST_SELECTION_EARLIEST,
+                64,
+                43,
+                30,
+                CurrentCandidateState::Completed,
+            ),
+            FastSelectionPolicyDecision::Evaluate
+        );
+        assert_eq!(
+            fast_selection_policy(
+                FAST_SELECTION_EARLIEST,
+                64,
+                42,
+                30,
+                CurrentCandidateState::Completed,
+            ),
+            FastSelectionPolicyDecision::Wait
+        );
+        assert_eq!(
+            fast_selection_policy(
+                FAST_SELECTION_LATEST,
+                64,
+                32,
+                20,
+                CurrentCandidateState::Completed,
+            ),
+            FastSelectionPolicyDecision::Evaluate
+        );
+        assert_eq!(
+            fast_selection_policy(
+                FAST_SELECTION_LATEST,
+                64,
+                31,
+                20,
+                CurrentCandidateState::Completed,
+            ),
+            FastSelectionPolicyDecision::Defer(
+                nethop_protocol::FastSelectionDeferredReason::InsufficientCoverage,
+            )
+        );
+        assert_eq!(
+            fast_selection_policy(
+                FAST_SELECTION_LATEST,
+                64,
+                40,
+                20,
+                CurrentCandidateState::Pending,
+            ),
+            FastSelectionPolicyDecision::Defer(
+                nethop_protocol::FastSelectionDeferredReason::CurrentPending,
+            )
+        );
+        assert_eq!(
+            fast_selection_policy(
+                FAST_SELECTION_LATEST,
+                1,
+                1,
+                0,
+                CurrentCandidateState::NotInPool,
+            ),
+            FastSelectionPolicyDecision::Defer(
+                nethop_protocol::FastSelectionDeferredReason::NoSuccess,
+            )
+        );
+    }
+
+    #[test]
+    fn probe_summary_separates_completion_buckets_from_cutoff_tail() {
+        let outcomes = vec![
+            NodeProbeOutcome::success("nh1s-000000000000000a", 42)
+                .unwrap()
+                .with_timing(80_000, 100_000)
+                .unwrap(),
+            NodeProbeOutcome::failed("nh1s-000000000000000b", NodeProbeState::Unavailable)
+                .unwrap()
+                .with_timing(700_000, 800_000)
+                .unwrap(),
+        ];
+
+        let summary = summarize_probe(&outcomes, 3, 4_500_000, 4_501_000);
+
+        assert_eq!(summary.first_result_us, Some(100_000));
+        assert_eq!(summary.last_result_us, Some(800_000));
+        assert_eq!(summary.last_success_us, Some(100_000));
+        assert_eq!(summary.completed_within_500ms, 1);
+        assert_eq!(summary.completed_within_1s, 2);
+        assert_eq!(summary.completed_within_2s, 2);
+        assert_eq!(summary.completed_within_3s, 2);
+        assert_eq!(summary.completed_before_cutoff, 2);
+        assert_eq!(summary.cutoff_pending, 1);
+        assert_eq!(summary.cutoff_tail_us, 3_701_000);
+    }
+
+    #[test]
     fn candidate_set_is_bounded_unique_and_redacted() {
         let one = BenchmarkCandidate::new("nh1s-0123456789abcdef", "private-terminal").unwrap();
         assert!(!format!("{one:?}").contains("private-terminal"));
@@ -752,6 +1028,8 @@ mod tests {
 
         assert_eq!(report.status, BenchmarkStatus::Success, "{report:?}");
         assert_eq!(report.nodes[0].latency_ms, Some(42));
+        assert!(report.nodes[0].request_elapsed_us > 0);
+        assert!(report.nodes[0].completed_at_us >= report.nodes[0].request_elapsed_us);
         server.join().unwrap();
         let request = &requests.lock().unwrap()[0];
         assert!(request.starts_with("GET /proxies/terminal-0/delay?timeout="));
@@ -818,6 +1096,15 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(5), "count={count}");
             assert_eq!(report.tested, count);
             assert_eq!(report.timed_out, count);
+            assert_eq!(report.probe.completed_before_cutoff, 0);
+            assert_eq!(report.probe.cutoff_pending, count);
+            assert_eq!(report.probe.first_result_us, None);
+            assert_eq!(report.probe.last_result_us, None);
+            assert_eq!(report.probe.last_success_us, None);
+            assert!(report.probe.cutoff_tail_us > 200_000);
+            assert!(report.probe.cutoff_tail_us <= report.timing.probe_us);
+            assert_engine_timing(&report);
+            assert!(report.timing.probe_us > report.timing.candidate_dispatch_us);
             server.join().unwrap();
             assert_eq!(requests.lock().unwrap().len(), count);
         }
@@ -879,6 +1166,30 @@ mod tests {
         assert_eq!(report.nodes[0].latency_ms, Some(20));
         assert_eq!(report.nodes[1].node_id, "nh1s-0000000000000000");
         assert_eq!(report.nodes[1].latency_ms, Some(80));
+        assert_eq!(report.probe.completed_before_cutoff, 2);
+        assert_eq!(report.probe.cutoff_pending, 0);
+        assert!(report.probe.first_result_us.is_some());
+        assert!(report.probe.last_result_us >= report.probe.first_result_us);
+        assert!(report.probe.last_success_us.is_some());
+        assert_engine_timing(&report);
+    }
+
+    fn assert_engine_timing(report: &BenchmarkReport) {
+        let timing = &report.timing;
+        assert_eq!(
+            (timing.thread_spawn_us + timing.runtime_init_us) / 1_000,
+            u64::from(report.bootstrap_ms)
+        );
+        assert_eq!(timing.total_us / 1_000, u64::from(report.elapsed_ms));
+        assert!(
+            timing.thread_spawn_us
+                + timing.runtime_init_us
+                + timing.candidate_dispatch_us
+                + timing.probe_us
+                + timing.result_assembly_us
+                <= timing.total_us
+        );
+        report.validate().unwrap();
     }
 
     #[test]
@@ -992,7 +1303,15 @@ mod tests {
         )
         .unwrap();
         receiver.recv_timeout(Duration::from_secs(1)).unwrap();
-        let report = job.try_complete().expect("wake follows result send");
+        let progress = job.drain_progress();
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0].latency_ms, Some(42));
+        let report = loop {
+            if let Some(report) = job.try_complete() {
+                break report;
+            }
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        };
         assert_eq!(report.status, BenchmarkStatus::Success);
         server.join().unwrap();
 

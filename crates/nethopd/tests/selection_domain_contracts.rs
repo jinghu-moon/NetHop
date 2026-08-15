@@ -1,7 +1,8 @@
+use nethop_core::DisplayTerritoryCode;
 use nethop_subscription::SourceId;
 use nethopd::{
-    NodeListItem, NodeListSnapshot, NodeSelectionIntent, NodeSelectionSnapshot,
-    SelectionDiagnosticCode, StableNodeId,
+    ActiveTerminalSnapshot, NodeListItem, NodeListSnapshot, NodeSelectionIntent,
+    NodeSelectionSnapshot, SelectionDiagnosticCode, StableNodeId,
 };
 
 fn node_id(value: &str) -> StableNodeId {
@@ -31,7 +32,9 @@ fn selection_snapshot_keeps_intent_separate_from_active_terminal() {
     let active = node_id("nh1s-0123456789abcdef");
     let automatic = NodeSelectionSnapshot::new(
         NodeSelectionIntent::Auto,
-        Some(active.clone()),
+        ActiveTerminalSnapshot::Node {
+            node_id: active.clone(),
+        },
         1_786_200_000,
     );
     assert!(automatic.validate().is_ok());
@@ -43,7 +46,7 @@ fn selection_snapshot_keeps_intent_separate_from_active_terminal() {
         NodeSelectionIntent::Manual {
             node_id: requested.clone(),
         },
-        Some(active),
+        ActiveTerminalSnapshot::Node { node_id: active },
         1_786_200_001,
     );
     assert!(matches!(
@@ -72,17 +75,25 @@ fn node_list_has_explicit_requested_and_active_flags_without_group_nodes() {
         Some(true),
         false,
         true,
+        DisplayTerritoryCode::new("JP"),
     )
     .unwrap();
     let list = NodeListSnapshot::new(
         vec![item],
-        NodeSelectionSnapshot::new(NodeSelectionIntent::Auto, Some(id), 1),
+        NodeSelectionSnapshot::new(
+            NodeSelectionIntent::Auto,
+            ActiveTerminalSnapshot::Node { node_id: id },
+            1,
+        ),
     );
     let value = serde_json::to_value(&list).unwrap();
     assert!(value["nodes"][0].get("selected").is_none());
     assert_eq!(value["nodes"][0]["is_requested"], false);
     assert_eq!(value["nodes"][0]["is_active"], true);
+    assert_eq!(value["nodes"][0]["display_territory_code"], "JP");
     assert_eq!(value["selection"]["intent"]["mode"], "auto");
+    assert_eq!(value["selection"]["version"], 2);
+    assert_eq!(value["selection"]["active_terminal"]["kind"], "node");
 }
 
 #[test]
