@@ -131,7 +131,7 @@ describe("private payload and package boundaries", () => {
     const adapter = host(async (request) => {
       requests.push(request);
       const result = request.id === "webui.payload.create" ? { handle: `p_${"b".repeat(32)}` } : { accepted: true };
-      return { errno: 0, stdout: JSON.stringify({ version: 3, request_id: "mock", ok: true, result }), stderr: "" };
+      return { errno: 0, stdout: JSON.stringify({ version: 5, request_id: "mock", ok: true, result }), stderr: "" };
     });
     await uploadPrivatePayload(adapter, "config", "config-apply", "配置".repeat(8_000));
     expect(requests[0]?.id).toBe("webui.payload.create");
@@ -145,7 +145,7 @@ describe("private payload and package boundaries", () => {
       ids.push(request.id);
       if (request.id === "webui.payload.append") throw new Error("fail");
       const result = request.id === "webui.payload.create" ? { handle: `p_${"c".repeat(32)}` } : {};
-      return { errno: 0, stdout: JSON.stringify({ version: 3, request_id: "mock", ok: true, result }), stderr: "" };
+      return { errno: 0, stdout: JSON.stringify({ version: 5, request_id: "mock", ok: true, result }), stderr: "" };
     });
     await expect(uploadPrivatePayload(adapter, "config", "config-apply", "secret")).rejects.toThrow();
     expect(ids.at(-1)).toBe("webui.payload.remove");

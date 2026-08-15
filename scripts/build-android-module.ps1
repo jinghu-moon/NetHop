@@ -238,6 +238,8 @@ Copy-Item -LiteralPath (Join-Path $workspace "LICENSE") -Destination (Join-Path 
 if (-not $SingBoxArchive) {
     Copy-Item -LiteralPath (Join-Path $singBoxSourcePath "LICENSE") -Destination (Join-Path $stage "licenses/sing-box-GPL-3.0.txt")
 }
+Copy-Item -LiteralPath (Join-Path $workspace "licenses/Unicode-3.0.txt") -Destination (Join-Path $stage "licenses/Unicode-3.0.txt")
+Copy-Item -LiteralPath (Join-Path $workspace "licenses/country-flag-icons-MIT.txt") -Destination (Join-Path $stage "licenses/country-flag-icons-MIT.txt")
 Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-sbom.cdx.json") -Destination (Join-Path $stage "licenses/webui-sbom.cdx.json")
 Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-licenses.json") -Destination (Join-Path $stage "licenses/webui-licenses.json")
 Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "production-bundle.json") -Destination (Join-Path $stage "licenses/webui-production-bundle.json")
@@ -267,7 +269,7 @@ $webuiRecords = Get-ChildItem -LiteralPath (Join-Path $stage "webroot") -Recurse
     }
 }
 $webuiMetadataRecords = Get-ChildItem -LiteralPath (Join-Path $stage "licenses") -File | Where-Object {
-    $_.Name -like "webui-*"
+    $_.Name -like "webui-*" -or $_.Name -in @("Unicode-3.0.txt", "country-flag-icons-MIT.txt")
 } | ForEach-Object {
     [ordered]@{
         path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
@@ -347,7 +349,7 @@ $archiveListing = & tar -tf $zipPath
 if ($LASTEXITCODE -ne 0 -or $archiveListing -contains ".gitkeep") {
     throw "module archive layout is invalid"
 }
-foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs", "webroot/index.html", "licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
+foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs", "webroot/index.html", "licenses/Unicode-3.0.txt", "licenses/country-flag-icons-MIT.txt", "licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
     if ($archiveListing -notcontains $required) {
         throw "module archive is missing: $required"
     }

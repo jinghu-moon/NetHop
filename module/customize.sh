@@ -78,7 +78,7 @@ checksum_count=$(wc -l < "$CHECKSUMS" | tr -d ' ')
 while read -r digest relative extra; do
   [ -n "$digest" ] && [ -n "$relative" ] && [ -z "$extra" ] || fail "invalid checksum entry"
   case "$relative" in
-    bin/nethopd|bin/nethopctl|bin/sing-box|rulesets/cn-domain.srs|rulesets/cn-ip.srs|build-manifest.json|licenses/webui-sbom.cdx.json|licenses/webui-licenses.json|licenses/webui-production-bundle.json|licenses/webui-bundle-metafile.json|webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*)
+    bin/nethopd|bin/nethopctl|bin/sing-box|rulesets/cn-domain.srs|rulesets/cn-ip.srs|build-manifest.json|licenses/Unicode-3.0.txt|licenses/country-flag-icons-MIT.txt|licenses/webui-sbom.cdx.json|licenses/webui-licenses.json|licenses/webui-production-bundle.json|licenses/webui-bundle-metafile.json|webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*)
       verify_asset "$relative"
       ;;
     *) fail "unexpected checksum target: $relative" ;;
@@ -89,6 +89,7 @@ for directory in \
   "$DATA_ROOT" \
   "$DATA_ROOT/config" \
   "$DATA_ROOT/generations" \
+  "$DATA_ROOT/subscriptions" \
   "$DATA_ROOT/subscriptions/cache" \
   "$DATA_ROOT/subscriptions/reports" \
   "$DATA_ROOT/rulesets" \

@@ -1,9 +1,10 @@
 import { array, boolean, digest, enumeration, finiteNumber, integer, optionalString, record, safeExtension, string, ValidationError } from "./bounds";
+import { territoryCodes, type TerritoryCode } from "@/generated/territories";
 
 export const RUNTIME_STATES = ["init", "probing", "starting_core", "running_tproxy", "starting_tun", "running_tun", "degraded", "fail_open_direct", "backoff", "circuit_open", "stopping"] as const;
 export const EVENT_KINDS = ["snapshot", "config", "runtime", "subscription", "generation", "network", "traffic", "subscription_mode", "subscription_active_set", "node_selection", "node_active", "node_test", "resync_required", "operation"] as const;
 
-export interface ControlEnvelope<T> { readonly version: 3; readonly requestId: string; readonly generation?: number; readonly result: T }
+export interface ControlEnvelope<T> { readonly version: 5; readonly requestId: string; readonly generation?: number; readonly result: T }
 export interface HelloDto { readonly compatible: boolean; readonly daemonProtocolMin: number; readonly daemonProtocolMax: number; readonly supportedOperations: readonly string[]; readonly supportedFeatures: readonly string[] }
 export interface StatusDto { readonly schemaVersion: number; readonly state: typeof RUNTIME_STATES[number]; readonly generation?: number; readonly lastUpdate: "never" | "succeeded" | "failed"; readonly extension: Readonly<Record<string, unknown>> }
 export interface CapabilityItemDto { readonly key: string; readonly status: "supported" | "unsupported" | "experimental" | "conflict" | "unavailable"; readonly reasonCode: string; readonly applyEffect: string }
@@ -32,18 +33,36 @@ export type SubscriptionModeDto = "single" | "merge";
 export interface SubscriptionDto { readonly id: string; readonly name: string; readonly configured: boolean; readonly active: boolean; readonly nodeCount?: number; readonly autoCandidateCount?: number; readonly state?: string; readonly status?: SourceStatusDto }
 export interface SubscriptionSnapshotDto { readonly mode: SubscriptionModeDto; readonly activeSourceIds: readonly string[]; readonly sources: readonly SubscriptionDto[]; readonly configDigest: string }
 export type NodeSelectionIntentDto = { readonly mode: "auto" } | { readonly mode: "manual"; readonly nodeId: string };
-export interface NodeSelectionDto { readonly version: 1; readonly intent: NodeSelectionIntentDto; readonly activeNodeId?: string; readonly changedAt: number; readonly degradedReason?: string }
-export interface NodeDto { readonly id: string; readonly name: string; readonly protocol: string; readonly latencyMs?: number; readonly alive?: boolean; readonly isRequested: boolean; readonly isActive: boolean; readonly sourceIds: readonly string[] }
+export type ActiveTerminalDto =
+  | { readonly kind: "node"; readonly nodeId: string }
+  | { readonly kind: "direct" }
+  | { readonly kind: "block" }
+  | { readonly kind: "unresolved"; readonly reason: string };
+export interface NodeSelectionDto { readonly version: 2; readonly intent: NodeSelectionIntentDto; readonly activeTerminal: ActiveTerminalDto; readonly changedAt: number }
+export interface NodeDto { readonly id: string; readonly name: string; readonly protocol: string; readonly latencyMs?: number; readonly alive?: boolean; readonly isRequested: boolean; readonly isActive: boolean; readonly sourceIds: readonly string[]; readonly displayTerritoryCode?: TerritoryCode }
 export interface NodeListSnapshotDto { readonly nodes: readonly NodeDto[]; readonly selection: NodeSelectionDto }
 export type LogChannelDto = "service" | "subscription" | "core";
 export interface LogEntryDto { readonly id: string; readonly channel: LogChannelDto; readonly kind: string; readonly message: string; readonly time: string; readonly raw: string }
 export interface RuntimeMetricsDto { readonly runtimeState: string; readonly generation?: number; readonly uptimeSeconds: number; readonly core?: { readonly pid: number; readonly cpuPercent?: number; readonly memoryRssBytes?: number }; readonly uploadBytes?: number; readonly downloadBytes?: number; readonly interface?: string; readonly localAddress?: string; readonly publicIp?: string }
 export interface NodeDelayDto { readonly id: string; readonly latencyMs: number }
 export type NodeProbeStateDto = "success" | "timeout" | "unavailable" | "protocol_error";
-export interface NodeProbeOutcomeDto { readonly id: string; readonly state: NodeProbeStateDto; readonly latencyMs?: number }
-export interface NodeBenchmarkReportDto { readonly status: "success" | "partial" | "failed" | "internal_error" | "superseded"; readonly trigger: "manual" | "periodic"; readonly generation: number; readonly bootstrapMs: number; readonly elapsedMs: number; readonly tested: number; readonly succeeded: number; readonly timedOut: number; readonly failed: number; readonly diagnostic?: "unauthorized"; readonly nodes: readonly NodeProbeOutcomeDto[] }
-export interface NodeBenchmarkAckDto { readonly operationId: string; readonly phase: "running"; readonly joinedExisting: boolean; readonly trigger: "manual" | "periodic"; readonly candidateCount: number; readonly probeCutoffMs: 4500; readonly deadlineMs: 4900 }
-export interface NodeBenchmarkResultDto { readonly operationId: string; readonly phase: "completed"; readonly report: NodeBenchmarkReportDto; readonly selection?: NodeSelectionDto }
+export interface NodeProbeOutcomeDto { readonly id: string; readonly state: NodeProbeStateDto; readonly latencyMs?: number; readonly requestElapsedUs: number; readonly completedAtUs: number }
+export interface NodeBenchmarkProgressDto { readonly operationId: string; readonly phase: "progress"; readonly generation: number; readonly completed: number; readonly candidateCount: number; readonly outcome: NodeProbeOutcomeDto }
+export interface BenchmarkEngineTimingDto { readonly threadSpawnUs: number; readonly runtimeInitUs: number; readonly candidateDispatchUs: number; readonly probeUs: number; readonly resultAssemblyUs: number; readonly totalUs: number }
+export interface BenchmarkProbeSummaryDto { readonly firstResultUs?: number; readonly lastResultUs?: number; readonly lastSuccessUs?: number; readonly completedWithin500ms: number; readonly completedWithin1s: number; readonly completedWithin2s: number; readonly completedWithin3s: number; readonly completedBeforeCutoff: number; readonly cutoffPending: number; readonly cutoffTailUs: number }
+export interface BenchmarkControlTimingDto { readonly intentLoadUs: number; readonly currentSnapshotUs: number; readonly decisionUs: number; readonly targetResolveUs: number; readonly selectorApplyUs: number; readonly finalSnapshotUs: number; readonly totalUs: number }
+export type FastSelectionDeferredReasonDto = "insufficient_coverage" | "current_pending" | "no_success" | "control_error";
+type FastSelectionMetricsDto = { readonly completed: number; readonly candidateCount: number; readonly elapsedUs: number };
+export type NodeBenchmarkFastSelectionDto =
+  | { readonly state: "pending" }
+  | ({ readonly state: "switched"; readonly selection: NodeSelectionDto } & FastSelectionMetricsDto)
+  | ({ readonly state: "kept" | "not_applicable" | "superseded" | "not_needed" } & FastSelectionMetricsDto)
+  | ({ readonly state: "deferred"; readonly reason: FastSelectionDeferredReasonDto } & FastSelectionMetricsDto);
+export interface NodeBenchmarkSelectionDto { readonly operationId: string; readonly phase: "selection"; readonly generation: number; readonly fastSelection: NodeBenchmarkFastSelectionDto }
+export interface BenchmarkTerminalTimingDto { readonly admissionUs: number; readonly workerReapUs: number; readonly fastControl: BenchmarkControlTimingDto; readonly terminalControl: BenchmarkControlTimingDto; readonly operationTotalUs: number }
+export interface NodeBenchmarkReportDto { readonly status: "success" | "partial" | "failed" | "internal_error" | "superseded"; readonly trigger: "manual" | "periodic"; readonly generation: number; readonly bootstrapMs: number; readonly elapsedMs: number; readonly timing: BenchmarkEngineTimingDto; readonly probe: BenchmarkProbeSummaryDto; readonly tested: number; readonly succeeded: number; readonly timedOut: number; readonly failed: number; readonly diagnostic?: "unauthorized"; readonly nodes: readonly NodeProbeOutcomeDto[] }
+export interface NodeBenchmarkAckDto { readonly operationId: string; readonly phase: "running"; readonly joinedExisting: boolean; readonly trigger: "manual" | "periodic"; readonly candidateCount: number; readonly fastSelectionEarliestMs: 2000; readonly fastSelectionLatestMs: 2800; readonly fastSelectionDeadlineMs: 3000; readonly probeCutoffMs: 4500; readonly deadlineMs: 4900; readonly fastSelection: NodeBenchmarkFastSelectionDto }
+export interface NodeBenchmarkResultDto { readonly operationId: string; readonly phase: "completed"; readonly report: NodeBenchmarkReportDto; readonly selection?: NodeSelectionDto; readonly fastSelection: Exclude<NodeBenchmarkFastSelectionDto, { readonly state: "pending" }>; readonly timing: BenchmarkTerminalTimingDto }
 export interface ApplicationDto { readonly packageName: string; readonly uid: number; readonly mode: "all" | "blacklist" | "whitelist"; readonly sharedUid: boolean }
 export interface TrafficDto { readonly up: number; readonly down: number; readonly intervalSeconds: number }
 export interface ConfigSchemaFieldDto { readonly id: string; readonly path: string; readonly valueType: string; readonly title: string; readonly group: string; readonly order: number; readonly advanced: boolean; readonly experimental: boolean; readonly sensitive: boolean; readonly readOnly: boolean; readonly applyImpact: string; readonly riskLevel: string; readonly capabilityKey?: string; readonly options: readonly string[] }
@@ -58,13 +77,13 @@ export interface ErrorDto { readonly code: string; readonly message: string; rea
 
 export function parseControlEnvelope<T>(value: unknown, parseResult: (value: unknown) => T): ControlEnvelope<T> {
   const object = record(value, "$", ["version", "request_id", "ok", "generation", "result", "error"]);
-  if (integer(object.version, "$.version", 3, 3) !== 3) throw new ValidationError("$.version", "unsupported protocol");
+  if (integer(object.version, "$.version", 1, 255) !== 5) throw new ValidationError("$.version", "unsupported protocol");
   const requestId = string(object.request_id, "$.request_id", 96);
   const ok = boolean(object.ok, "$.ok");
   const generation = object.generation === undefined || object.generation === null ? undefined : integer(object.generation, "$.generation", 1);
   if (!ok) throw parseError(object.error);
   if (object.error !== undefined) throw new ValidationError("$.error", "unexpected error");
-  return { version: 3, requestId, ...(generation === undefined ? {} : { generation }), result: parseResult(object.result) };
+  return { version: 5, requestId, ...(generation === undefined ? {} : { generation }), result: parseResult(object.result) };
 }
 
 export function parseError(value: unknown): ValidationError {
@@ -206,8 +225,11 @@ export function parseSubscriptionSnapshot(value: unknown): SubscriptionSnapshotD
 }
 
 export function parseNode(value: unknown): NodeDto {
-  const object = record(value, "$.node", ["id", "name", "protocol", "latency_ms", "alive", "is_requested", "is_active", "source_ids"]);
+  const object = record(value, "$.node", ["id", "name", "protocol", "latency_ms", "alive", "is_requested", "is_active", "source_ids", "display_territory_code"]);
   const alive = object.alive === undefined || object.alive === null ? undefined : boolean(object.alive, "$.node.alive");
+  const displayTerritoryCode = object.display_territory_code === undefined || object.display_territory_code === null
+    ? undefined
+    : enumeration(object.display_territory_code, "$.node.display_territory_code", territoryCodes);
   return {
     id: string(object.id, "$.node.id", 128),
     name: string(object.name, "$.node.name", 512),
@@ -217,19 +239,30 @@ export function parseNode(value: unknown): NodeDto {
     isRequested: boolean(object.is_requested, "$.node.is_requested"),
     isActive: boolean(object.is_active, "$.node.is_active"),
     sourceIds: array(object.source_ids, "$.node.source_ids", 16).map((item, index) => string(item, `$.node.source_ids[${index}]`, 96)),
+    ...(displayTerritoryCode === undefined ? {} : { displayTerritoryCode }),
   };
 }
 
 export function parseNodeSelection(value: unknown): NodeSelectionDto {
-  const object = record(value, "$.selection", ["version", "intent", "active_node_id", "changed_at", "degraded_reason"]);
-  integer(object.version, "$.selection.version", 1, 1);
+  const object = record(value, "$.selection", ["version", "intent", "active_terminal", "changed_at"]);
+  integer(object.version, "$.selection.version", 2, 2);
   const intentObject = record(object.intent, "$.selection.intent", ["mode", "node_id"]);
   const mode = enumeration(intentObject.mode, "$.selection.intent.mode", ["auto", "manual"] as const);
   const nodeId = intentObject.node_id === undefined ? undefined : string(intentObject.node_id, "$.selection.intent.node_id", 128);
   if ((mode === "auto") !== (nodeId === undefined)) throw new ValidationError("$.selection.intent", "invalid selection intent");
-  const activeNodeId = object.active_node_id === undefined || object.active_node_id === null ? undefined : string(object.active_node_id, "$.selection.active_node_id", 128);
-  const degradedReason = object.degraded_reason === undefined || object.degraded_reason === null ? undefined : string(object.degraded_reason, "$.selection.degraded_reason", 96);
-  return { version: 1, intent: mode === "auto" ? { mode } : { mode, nodeId: nodeId! }, ...(activeNodeId === undefined ? {} : { activeNodeId }), changedAt: integer(object.changed_at, "$.selection.changed_at"), ...(degradedReason === undefined ? {} : { degradedReason }) };
+  const terminalObject = record(object.active_terminal, "$.selection.active_terminal", ["kind", "node_id", "reason"]);
+  const kind = enumeration(terminalObject.kind, "$.selection.active_terminal.kind", ["node", "direct", "block", "unresolved"] as const);
+  const nodeIdValue = terminalObject.node_id === undefined ? undefined : string(terminalObject.node_id, "$.selection.active_terminal.node_id", 128);
+  const reasonValue = terminalObject.reason === undefined ? undefined : string(terminalObject.reason, "$.selection.active_terminal.reason", 96);
+  if ((kind === "node") !== (nodeIdValue !== undefined) || (kind === "unresolved") !== (reasonValue !== undefined)) {
+    throw new ValidationError("$.selection.active_terminal", "invalid active terminal");
+  }
+  const activeTerminal: ActiveTerminalDto = kind === "node"
+    ? { kind, nodeId: nodeIdValue! }
+    : kind === "unresolved"
+      ? { kind, reason: reasonValue! }
+      : { kind };
+  return { version: 2, intent: mode === "auto" ? { mode } : { mode, nodeId: nodeId! }, activeTerminal, changedAt: integer(object.changed_at, "$.selection.changed_at") };
 }
 
 export function parseNodeList(value: unknown): NodeListSnapshotDto {
@@ -252,55 +285,232 @@ export function parseNodeDelayList(value: unknown): readonly NodeDelayDto[] {
   });
 }
 
+function parseNodeProbeOutcome(value: unknown, path: string): NodeProbeOutcomeDto {
+  const entry = record(value, path, ["node_id", "state", "latency_ms", "request_elapsed_us", "completed_at_us"]);
+  const id = string(entry.node_id, `${path}.node_id`, 21);
+  if (!/^nh1s-[a-f0-9]{16}$/.test(id)) throw new ValidationError(`${path}.node_id`, "invalid node id");
+  const state = enumeration(entry.state, `${path}.state`, ["success", "timeout", "unavailable", "protocol_error"] as const);
+  const latencyMs = entry.latency_ms === undefined ? undefined : integer(entry.latency_ms, `${path}.latency_ms`, 1, 600_000);
+  if ((state === "success") !== (latencyMs !== undefined)) throw new ValidationError(path, "invalid probe outcome");
+  const requestElapsedUs = timingUs(entry.request_elapsed_us, `${path}.request_elapsed_us`);
+  const completedAtUs = timingUs(entry.completed_at_us, `${path}.completed_at_us`);
+  if (requestElapsedUs > completedAtUs) throw new ValidationError(path, "inconsistent probe timing");
+  return { id, state, ...(latencyMs === undefined ? {} : { latencyMs }), requestElapsedUs, completedAtUs };
+}
+
+export function parseNodeBenchmarkProgress(value: unknown): NodeBenchmarkProgressDto {
+  const object = record(value, "$.result", ["operation_id", "phase", "generation", "completed", "candidate_count", "outcome"]);
+  const operationId = string(object.operation_id, "$.result.operation_id", 35);
+  if (!/^bench_[a-f0-9]{29}$/.test(operationId)) throw new ValidationError("$.result.operation_id", "invalid benchmark operation id");
+  const candidateCount = integer(object.candidate_count, "$.result.candidate_count", 1, 64);
+  const completed = integer(object.completed, "$.result.completed", 1, candidateCount);
+  return {
+    operationId,
+    phase: enumeration(object.phase, "$.result.phase", ["progress"] as const),
+    generation: integer(object.generation, "$.result.generation", 1),
+    completed,
+    candidateCount,
+    outcome: parseNodeProbeOutcome(object.outcome, "$.result.outcome"),
+  };
+}
+
+function parseNodeBenchmarkFastSelection(value: unknown, path: string): NodeBenchmarkFastSelectionDto {
+  const object = record(value, path, ["state", "completed", "candidate_count", "elapsed_us", "selection", "reason"]);
+  const state = enumeration(object.state, `${path}.state`, ["pending", "switched", "kept", "deferred", "not_applicable", "superseded", "not_needed"] as const);
+  if (state === "pending") {
+    if (Object.keys(object).length !== 1) throw new ValidationError(path, "pending fast selection has metrics");
+    return { state };
+  }
+  const candidateCount = integer(object.candidate_count, `${path}.candidate_count`, 1, 64);
+  const completed = integer(object.completed, `${path}.completed`, 0, candidateCount);
+  const elapsedUs = integer(object.elapsed_us, `${path}.elapsed_us`, 0, state === "switched" ? 3_000_000 : 4_900_000);
+  if (state === "switched") {
+    if (object.selection === undefined || object.reason !== undefined) throw new ValidationError(path, "invalid switched fast selection");
+    return { state, completed, candidateCount, elapsedUs, selection: parseNodeSelection(object.selection) };
+  }
+  if (state === "deferred") {
+    if (object.selection !== undefined) throw new ValidationError(path, "deferred fast selection has selection");
+    return {
+      state,
+      completed,
+      candidateCount,
+      elapsedUs,
+      reason: enumeration(object.reason, `${path}.reason`, ["insufficient_coverage", "current_pending", "no_success", "control_error"] as const),
+    };
+  }
+  if (object.selection !== undefined || object.reason !== undefined) throw new ValidationError(path, "unexpected fast selection payload");
+  return { state, completed, candidateCount, elapsedUs };
+}
+
+export function parseNodeBenchmarkSelection(value: unknown): NodeBenchmarkSelectionDto {
+  const object = record(value, "$.result", ["operation_id", "phase", "generation", "fast_selection"]);
+  const operationId = string(object.operation_id, "$.result.operation_id", 35);
+  if (!/^bench_[a-f0-9]{29}$/.test(operationId)) throw new ValidationError("$.result.operation_id", "invalid benchmark operation id");
+  const fastSelection = parseNodeBenchmarkFastSelection(object.fast_selection, "$.result.fast_selection");
+  if (fastSelection.state === "pending") throw new ValidationError("$.result.fast_selection", "selection milestone is pending");
+  return {
+    operationId,
+    phase: enumeration(object.phase, "$.result.phase", ["selection"] as const),
+    generation: integer(object.generation, "$.result.generation", 1),
+    fastSelection,
+  };
+}
+
+const MAX_NODE_BENCHMARK_TIMING_US = 60_000_000;
+
+function timingUs(value: unknown, path: string): number {
+  return integer(value, path, 0, MAX_NODE_BENCHMARK_TIMING_US);
+}
+
+function parseBenchmarkEngineTiming(value: unknown, bootstrapMs: number, elapsedMs: number): BenchmarkEngineTimingDto {
+  const path = "$.result.report.timing";
+  const object = record(value, path, ["thread_spawn_us", "runtime_init_us", "candidate_dispatch_us", "probe_us", "result_assembly_us", "total_us"]);
+  const timing: BenchmarkEngineTimingDto = {
+    threadSpawnUs: timingUs(object.thread_spawn_us, `${path}.thread_spawn_us`),
+    runtimeInitUs: timingUs(object.runtime_init_us, `${path}.runtime_init_us`),
+    candidateDispatchUs: timingUs(object.candidate_dispatch_us, `${path}.candidate_dispatch_us`),
+    probeUs: timingUs(object.probe_us, `${path}.probe_us`),
+    resultAssemblyUs: timingUs(object.result_assembly_us, `${path}.result_assembly_us`),
+    totalUs: timingUs(object.total_us, `${path}.total_us`),
+  };
+  const accounted = timing.threadSpawnUs + timing.runtimeInitUs + timing.candidateDispatchUs + timing.probeUs + timing.resultAssemblyUs;
+  if (accounted > timing.totalUs || Math.floor(timing.totalUs / 1_000) !== elapsedMs || Math.floor((timing.threadSpawnUs + timing.runtimeInitUs) / 1_000) !== bootstrapMs) {
+    throw new ValidationError(path, "inconsistent engine timing");
+  }
+  return timing;
+}
+
+function parseBenchmarkProbeSummary(value: unknown, tested: number, succeeded: number, timing: BenchmarkEngineTimingDto): BenchmarkProbeSummaryDto {
+  const path = "$.result.report.probe";
+  const object = record(value, path, ["first_result_us", "last_result_us", "last_success_us", "completed_within_500ms", "completed_within_1s", "completed_within_2s", "completed_within_3s", "completed_before_cutoff", "cutoff_pending", "cutoff_tail_us"]);
+  const optionalTiming = (entry: unknown, field: string) => entry === undefined ? undefined : timingUs(entry, `${path}.${field}`);
+  const firstResultUs = optionalTiming(object.first_result_us, "first_result_us");
+  const lastResultUs = optionalTiming(object.last_result_us, "last_result_us");
+  const lastSuccessUs = optionalTiming(object.last_success_us, "last_success_us");
+  const summary: BenchmarkProbeSummaryDto = {
+    ...(firstResultUs === undefined ? {} : { firstResultUs }),
+    ...(lastResultUs === undefined ? {} : { lastResultUs }),
+    ...(lastSuccessUs === undefined ? {} : { lastSuccessUs }),
+    completedWithin500ms: integer(object.completed_within_500ms, `${path}.completed_within_500ms`, 0, tested),
+    completedWithin1s: integer(object.completed_within_1s, `${path}.completed_within_1s`, 0, tested),
+    completedWithin2s: integer(object.completed_within_2s, `${path}.completed_within_2s`, 0, tested),
+    completedWithin3s: integer(object.completed_within_3s, `${path}.completed_within_3s`, 0, tested),
+    completedBeforeCutoff: integer(object.completed_before_cutoff, `${path}.completed_before_cutoff`, 0, tested),
+    cutoffPending: integer(object.cutoff_pending, `${path}.cutoff_pending`, 0, tested),
+    cutoffTailUs: timingUs(object.cutoff_tail_us, `${path}.cutoff_tail_us`),
+  };
+  const counts = [summary.completedWithin500ms, summary.completedWithin1s, summary.completedWithin2s, summary.completedWithin3s, summary.completedBeforeCutoff];
+  const hasCompleted = summary.completedBeforeCutoff > 0;
+  if (counts.some((count, index) => index > 0 && counts[index - 1]! > count)
+    || summary.completedBeforeCutoff + summary.cutoffPending !== tested
+    || (summary.firstResultUs !== undefined) !== hasCompleted
+    || (summary.lastResultUs !== undefined) !== hasCompleted
+    || (summary.lastSuccessUs !== undefined) !== (succeeded > 0)
+    || (summary.firstResultUs !== undefined && summary.lastResultUs !== undefined && summary.firstResultUs > summary.lastResultUs)
+    || (summary.lastSuccessUs !== undefined && summary.lastResultUs !== undefined && summary.lastSuccessUs > summary.lastResultUs)
+    || [summary.firstResultUs, summary.lastResultUs, summary.lastSuccessUs].some((entry) => entry !== undefined && entry > timing.totalUs)
+    || summary.cutoffTailUs > timing.probeUs
+    || (summary.cutoffPending === 0 && summary.cutoffTailUs !== 0)
+    || (summary.lastResultUs !== undefined && summary.lastResultUs + summary.cutoffTailUs > timing.totalUs)) {
+    throw new ValidationError(path, "inconsistent probe summary");
+  }
+  return summary;
+}
+
+function parseBenchmarkControlTiming(value: unknown, path: string): BenchmarkControlTimingDto {
+  const object = record(value, path, ["intent_load_us", "current_snapshot_us", "decision_us", "target_resolve_us", "selector_apply_us", "final_snapshot_us", "total_us"]);
+  const timing: BenchmarkControlTimingDto = {
+    intentLoadUs: timingUs(object.intent_load_us, `${path}.intent_load_us`),
+    currentSnapshotUs: timingUs(object.current_snapshot_us, `${path}.current_snapshot_us`),
+    decisionUs: timingUs(object.decision_us, `${path}.decision_us`),
+    targetResolveUs: timingUs(object.target_resolve_us, `${path}.target_resolve_us`),
+    selectorApplyUs: timingUs(object.selector_apply_us, `${path}.selector_apply_us`),
+    finalSnapshotUs: timingUs(object.final_snapshot_us, `${path}.final_snapshot_us`),
+    totalUs: timingUs(object.total_us, `${path}.total_us`),
+  };
+  const accounted = timing.intentLoadUs + timing.currentSnapshotUs + timing.decisionUs + timing.targetResolveUs + timing.selectorApplyUs + timing.finalSnapshotUs;
+  if (accounted > timing.totalUs) throw new ValidationError(path, "inconsistent control timing");
+  return timing;
+}
+
+function parseBenchmarkTerminalTiming(value: unknown, engineTotalUs: number): BenchmarkTerminalTimingDto {
+  const path = "$.result.timing";
+  const object = record(value, path, ["admission_us", "worker_reap_us", "fast_control", "terminal_control", "operation_total_us"]);
+  const timing: BenchmarkTerminalTimingDto = {
+    admissionUs: timingUs(object.admission_us, `${path}.admission_us`),
+    workerReapUs: timingUs(object.worker_reap_us, `${path}.worker_reap_us`),
+    fastControl: parseBenchmarkControlTiming(object.fast_control, `${path}.fast_control`),
+    terminalControl: parseBenchmarkControlTiming(object.terminal_control, `${path}.terminal_control`),
+    operationTotalUs: timingUs(object.operation_total_us, `${path}.operation_total_us`),
+  };
+  if (timing.fastControl.totalUs > timing.operationTotalUs
+    || timing.admissionUs + engineTotalUs + timing.workerReapUs + timing.terminalControl.totalUs > timing.operationTotalUs) {
+    throw new ValidationError(path, "inconsistent operation timing");
+  }
+  return timing;
+}
+
 export function parseNodeBenchmarkResult(value: unknown): NodeBenchmarkResultDto {
-  const object = record(value, "$.result", ["operation_id", "phase", "report", "selection"]);
+  const object = record(value, "$.result", ["operation_id", "phase", "report", "selection", "fast_selection", "timing"]);
   const operationId = string(object.operation_id, "$.result.operation_id", 35);
   if (!/^bench_[a-f0-9]{29}$/.test(operationId)) throw new ValidationError("$.result.operation_id", "invalid benchmark operation id");
   const phase = enumeration(object.phase, "$.result.phase", ["completed"] as const);
-  const report = record(object.report, "$.result.report", ["status", "trigger", "generation", "bootstrap_ms", "elapsed_ms", "tested", "succeeded", "timed_out", "failed", "diagnostic", "nodes"]);
-  const nodes = array(report.nodes, "$.result.report.nodes", 64).map((item, index) => {
-    const entry = record(item, `$.result.report.nodes[${index}]`, ["node_id", "state", "latency_ms"]);
-    const id = string(entry.node_id, `$.result.report.nodes[${index}].node_id`, 21);
-    if (!/^nh1s-[a-f0-9]{16}$/.test(id)) throw new ValidationError(`$.result.report.nodes[${index}].node_id`, "invalid node id");
-    const state = enumeration(entry.state, `$.result.report.nodes[${index}].state`, ["success", "timeout", "unavailable", "protocol_error"] as const);
-    const latencyMs = entry.latency_ms === undefined ? undefined : integer(entry.latency_ms, `$.result.report.nodes[${index}].latency_ms`, 1, 600_000);
-    if ((state === "success") !== (latencyMs !== undefined)) throw new ValidationError(`$.result.report.nodes[${index}]`, "invalid probe outcome");
-    return { id, state, ...(latencyMs === undefined ? {} : { latencyMs }) };
-  });
+  const report = record(object.report, "$.result.report", ["status", "trigger", "generation", "bootstrap_ms", "elapsed_ms", "timing", "probe", "tested", "succeeded", "timed_out", "failed", "diagnostic", "nodes"]);
+  const nodes = array(report.nodes, "$.result.report.nodes", 64).map((item, index) => parseNodeProbeOutcome(item, `$.result.report.nodes[${index}]`));
+  const bootstrapMs = integer(report.bootstrap_ms, "$.result.report.bootstrap_ms", 0, 4_900);
+  const elapsedMs = integer(report.elapsed_ms, "$.result.report.elapsed_ms", 0, 4_900);
+  const engineTiming = parseBenchmarkEngineTiming(report.timing, bootstrapMs, elapsedMs);
+  const tested = integer(report.tested, "$.result.report.tested", 0, 64);
+  const succeeded = integer(report.succeeded, "$.result.report.succeeded", 0, 64);
+  const timedOut = integer(report.timed_out, "$.result.report.timed_out", 0, 64);
+  const failed = integer(report.failed, "$.result.report.failed", 0, 64);
+  const probe = parseBenchmarkProbeSummary(report.probe, tested, succeeded, engineTiming);
   const parsedReport: NodeBenchmarkReportDto = {
     status: enumeration(report.status, "$.result.report.status", ["success", "partial", "failed", "internal_error", "superseded"] as const),
     trigger: enumeration(report.trigger, "$.result.report.trigger", ["manual", "periodic"] as const),
     generation: integer(report.generation, "$.result.report.generation", 1),
-    bootstrapMs: integer(report.bootstrap_ms, "$.result.report.bootstrap_ms", 0, 4_900),
-    elapsedMs: integer(report.elapsed_ms, "$.result.report.elapsed_ms", 0, 4_900),
-    tested: integer(report.tested, "$.result.report.tested", 0, 64),
-    succeeded: integer(report.succeeded, "$.result.report.succeeded", 0, 64),
-    timedOut: integer(report.timed_out, "$.result.report.timed_out", 0, 64),
-    failed: integer(report.failed, "$.result.report.failed", 0, 64),
+    bootstrapMs,
+    elapsedMs,
+    timing: engineTiming,
+    probe,
+    tested,
+    succeeded,
+    timedOut,
+    failed,
     ...(report.diagnostic === undefined ? {} : { diagnostic: enumeration(report.diagnostic, "$.result.report.diagnostic", ["unauthorized"] as const) }),
     nodes,
   };
-  const succeeded = nodes.filter((node) => node.state === "success").length;
-  const timedOut = nodes.filter((node) => node.state === "timeout").length;
-  if (parsedReport.tested !== nodes.length || parsedReport.succeeded !== succeeded || parsedReport.timedOut !== timedOut || parsedReport.failed !== nodes.length - succeeded - timedOut) throw new ValidationError("$.result.report", "inconsistent benchmark counts");
+  const observedSucceeded = nodes.filter((node) => node.state === "success").length;
+  const observedTimedOut = nodes.filter((node) => node.state === "timeout").length;
+  if (parsedReport.tested !== nodes.length || parsedReport.succeeded !== observedSucceeded || parsedReport.timedOut !== observedTimedOut || parsedReport.failed !== nodes.length - observedSucceeded - observedTimedOut) throw new ValidationError("$.result.report", "inconsistent benchmark counts");
   const selection = object.selection === undefined || object.selection === null ? undefined : parseNodeSelection(object.selection);
-  return { operationId, phase, report: parsedReport, ...(selection === undefined ? {} : { selection }) };
+  const fastSelection = parseNodeBenchmarkFastSelection(object.fast_selection, "$.result.fast_selection");
+  if (fastSelection.state === "pending") throw new ValidationError("$.result.fast_selection", "completed benchmark has pending fast selection");
+  const timing = parseBenchmarkTerminalTiming(object.timing, engineTiming.totalUs);
+  return { operationId, phase, report: parsedReport, ...(selection === undefined ? {} : { selection }), fastSelection, timing };
 }
 
 export function parseNodeBenchmarkAck(value: unknown): NodeBenchmarkAckDto {
-  const object = record(value, "$.result", ["operation_id", "phase", "joined_existing", "trigger", "candidate_count", "probe_cutoff_ms", "deadline_ms"]);
+  const object = record(value, "$.result", ["operation_id", "phase", "joined_existing", "trigger", "candidate_count", "fast_selection_earliest_ms", "fast_selection_latest_ms", "fast_selection_deadline_ms", "probe_cutoff_ms", "deadline_ms", "fast_selection"]);
   const operationId = string(object.operation_id, "$.result.operation_id", 35);
   if (!/^bench_[a-f0-9]{29}$/.test(operationId)) throw new ValidationError("$.result.operation_id", "invalid benchmark operation id");
   const probeCutoffMs = integer(object.probe_cutoff_ms, "$.result.probe_cutoff_ms", 4500, 4500);
   const deadlineMs = integer(object.deadline_ms, "$.result.deadline_ms", 4900, 4900);
+  const fastSelectionEarliestMs = integer(object.fast_selection_earliest_ms, "$.result.fast_selection_earliest_ms", 2000, 2000);
+  const fastSelectionLatestMs = integer(object.fast_selection_latest_ms, "$.result.fast_selection_latest_ms", 2800, 2800);
+  const fastSelectionDeadlineMs = integer(object.fast_selection_deadline_ms, "$.result.fast_selection_deadline_ms", 3000, 3000);
   return {
     operationId,
     phase: enumeration(object.phase, "$.result.phase", ["running"] as const),
     joinedExisting: boolean(object.joined_existing, "$.result.joined_existing"),
     trigger: enumeration(object.trigger, "$.result.trigger", ["manual", "periodic"] as const),
     candidateCount: integer(object.candidate_count, "$.result.candidate_count", 1, 64),
+    fastSelectionEarliestMs: fastSelectionEarliestMs as 2000,
+    fastSelectionLatestMs: fastSelectionLatestMs as 2800,
+    fastSelectionDeadlineMs: fastSelectionDeadlineMs as 3000,
     probeCutoffMs: probeCutoffMs as 4500,
     deadlineMs: deadlineMs as 4900,
+    fastSelection: parseNodeBenchmarkFastSelection(object.fast_selection, "$.result.fast_selection"),
   };
 }
 
@@ -370,7 +580,7 @@ export function parseRuntimeMetrics(value: unknown): RuntimeMetricsDto {
 
 export function parseEventFrame(value: unknown): EventFrameDto {
   const object = record(value, "$", ["version", "request_id", "sequence", "kind", "payload", "error"]);
-  integer(object.version, "$.version", 3, 3);
+  if (integer(object.version, "$.version", 1, 255) !== 5) throw new ValidationError("$.version", "unsupported protocol");
   const requestId = string(object.request_id, "$.request_id", 96);
   const sequence = integer(object.sequence, "$.sequence", 1);
   const kind = enumeration(object.kind, "$.kind", ["item", "end", "error"] as const);

@@ -1,5 +1,5 @@
 export const NETHOPCTL_PATH = "/data/adb/modules/nethop/bin/nethopctl";
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 5;
 export const MAX_COMMAND_ARG_BYTES = 16 * 1024;
 export const MAX_JSON_BYTES = 1024 * 1024;
 export const EVENT_SESSION_MAX_RUNTIME_SECONDS = 300;

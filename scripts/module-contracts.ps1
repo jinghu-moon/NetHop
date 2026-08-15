@@ -54,6 +54,7 @@ Assert-True ($service -match 'MODDIR=\$\{0%/\*\}') "service must derive MODDIR f
 Assert-True ($service -match 'exec "\$MODDIR/bin/nethopd" --supervise --root /data/adb/nethop') "service must exec only the supervisor entrypoint"
 
 $customize = Get-Content -LiteralPath (Join-Path $module "customize.sh") -Raw
+$buildScript = Get-Content -LiteralPath (Join-Path $workspace "scripts/build-android-module.ps1") -Raw
 # Root managers source customize.sh into the installer process. Enabling
 # nounset here would leak into the host and break helpers with optional args.
 Assert-True ($customize -notmatch '(?m)^\s*set\s+-[^\r\n#]*u') "installer must not enable nounset in sourced customize.sh"
@@ -65,6 +66,10 @@ Assert-True ($customize.Contains('verify_asset "$relative"')) "installer does no
 Assert-True ($customize.Contains('webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*')) "installer does not constrain WebUI checksum targets"
 foreach ($asset in @("licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
     Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits $asset"
+}
+foreach ($asset in @("licenses/Unicode-3.0.txt", "licenses/country-flag-icons-MIT.txt")) {
+    Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits territory license $asset"
+    Assert-True ($buildScript.Contains($asset.Substring("licenses/".Length))) "build does not package territory license $asset"
 }
 foreach ($asset in @("cn-domain.srs", "cn-ip.srs")) {
     Assert-True ($customize.Contains("publish_persistent_asset `"rulesets/$asset`" `"`$DATA_ROOT/rulesets/$asset`"")) "installer does not publish persistent $asset"
@@ -81,11 +86,11 @@ Assert-True ($customize.Contains('CONFIG_SCHEMA_VERSION=3')) "installer schema A
 Assert-True ($customize.Contains('${CONFIG_SCHEMA_VERSION}[[:space:]]*$')) "installer does not validate the current config ABI"
 Assert-True ($customize.Contains('nethop.toml.pre-v3')) "installer does not preserve one private pre-v3 backup"
 Assert-True ($customize.Contains('chmod 0600 "$DATA_ROOT/config/nethop.toml"')) "installer does not protect the managed config"
+Assert-True ($customize.Contains('  "$DATA_ROOT/subscriptions" \')) "installer does not protect the manual-source parent directory"
 Assert-True ($customize.Contains('ln -s "$DATA_ROOT/config/nethop.toml" "$MODPATH/config/nethop.toml"')) "installer does not publish the controlled config link"
 Assert-True (-not $customize.Contains('nethop.json')) "installer retains the removed JSON worker config"
 Assert-True (-not $customize.Contains('sources.json')) "installer retains the removed JSON source config"
 
-$buildScript = Get-Content -LiteralPath (Join-Path $workspace "scripts/build-android-module.ps1") -Raw
 Assert-True ($buildScript.Contains('scripts/fake-magisk-smoke.ps1')) "build does not run the persistent-config upgrade smoke test"
 Assert-True ($buildScript.Contains('[IO.File]::WriteAllText($checksumPath, (($checksumEntries -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))')) "build does not force an LF-only checksum manifest"
 Assert-True ($buildScript.Contains('$checksumBytes.Contains([byte]0x0D)')) "build does not reject CR bytes in the checksum manifest"

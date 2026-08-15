@@ -78,7 +78,7 @@ const bundlePath = join(artifactRoot, "production-bundle.json");
 await writeFile(bundlePath, `${JSON.stringify(bundleReport, null, 2)}\n`);
 
 const direct = new Set([...Object.keys(packageJson.dependencies), ...Object.keys(packageJson.devDependencies)]);
-const components = Object.entries(lock.packages)
+const packageComponents = Object.entries(lock.packages)
   .filter(([path, metadata]) => path.startsWith("node_modules/") && !metadata.link && metadata.version)
   .map(([path, metadata]) => {
     const name = packageName(path);
@@ -93,6 +93,36 @@ const components = Object.entries(lock.packages)
       properties: [{ name: "nethop:direct", value: String(direct.has(name)) }],
     };
   })
+  .sort((left, right) => left["bom-ref"].localeCompare(right["bom-ref"]));
+const vendoredComponents = [
+  {
+    type: "data",
+    "bom-ref": "vendored:unicode-cldr:48.2.0",
+    name: "Unicode CLDR territory data",
+    version: "48.2.0",
+    scope: "required",
+    purl: "pkg:generic/unicode-cldr@48.2.0",
+    licenses: [{ license: { id: "Unicode-3.0" } }],
+    properties: [
+      { name: "nethop:direct", value: "true" },
+      { name: "nethop:vendored", value: "true" },
+    ],
+  },
+  {
+    type: "library",
+    "bom-ref": "vendored:country-flag-icons:1.6.20",
+    name: "country-flag-icons",
+    version: "1.6.20",
+    scope: "required",
+    purl: "pkg:npm/country-flag-icons@1.6.20",
+    licenses: [{ license: { id: "MIT" } }],
+    properties: [
+      { name: "nethop:direct", value: "true" },
+      { name: "nethop:vendored", value: "true" },
+    ],
+  },
+];
+const components = [...packageComponents, ...vendoredComponents]
   .sort((left, right) => left["bom-ref"].localeCompare(right["bom-ref"]));
 const sbom = {
   bomFormat: "CycloneDX",
@@ -110,7 +140,8 @@ const licenses = {
   packages: components.map((component) => ({
     name: component.name,
     version: component.version,
-    direct: component.properties[0].value === "true",
+    direct: component.properties.some((property) => property.name === "nethop:direct" && property.value === "true"),
+    vendored: component.properties.some((property) => property.name === "nethop:vendored" && property.value === "true"),
     licenses: component.licenses.map((entry) => entry.license.id),
     purl: component.purl,
   })),

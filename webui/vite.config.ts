@@ -72,6 +72,7 @@ export default defineConfig(({ command }) => ({
     target: "chrome105",
     outDir: "../module/webroot",
     emptyOutDir: true,
+    assetsInlineLimit: 0,
     sourcemap: false,
     manifest: true,
     cssCodeSplit: true,

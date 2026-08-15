@@ -1,4 +1,4 @@
-import { parseEventFrame, parseNodeBenchmarkResult, parseNodeSelection, parseSubscriptionSnapshot, type EventPayloadDto, type TrafficDto } from "@/model/dto";
+import { parseEventFrame, parseNodeBenchmarkProgress, parseNodeBenchmarkResult, parseNodeBenchmarkSelection, parseNodeSelection, parseSubscriptionSnapshot, type EventPayloadDto, type TrafficDto } from "@/model/dto";
 import { uiStores, type RuntimeStore } from "./store";
 
 export type StreamPhase = "awaiting_snapshot" | "live" | "resync_required" | "closed";
@@ -90,16 +90,19 @@ export function applyRuntimeEvent(payload: EventPayloadDto, store: RuntimeStore 
   }
   if (payload.kind === "node_test") {
     const result = payload.value.result;
-    const benchmark = parseNodeBenchmarkResult(result);
-    for (const outcome of benchmark.report.nodes) {
-      const node = store.nodesById.value[outcome.id];
-      if (!node) continue;
-      if (outcome.state === "success" && outcome.latencyMs !== undefined) store.upsertNode({ ...node, latencyMs: outcome.latencyMs });
-      else {
-        const { latencyMs: _old, ...withoutLatency } = node;
-        store.upsertNode(withoutLatency);
-      }
+    if (typeof result === "object" && result !== null && !Array.isArray(result) && Reflect.get(result, "phase") === "progress") {
+      const progress = parseNodeBenchmarkProgress(result);
+      store.applyNodeProbeOutcome(progress.outcome);
+      return "applied";
     }
+    if (typeof result === "object" && result !== null && !Array.isArray(result) && Reflect.get(result, "phase") === "selection") {
+      const milestone = parseNodeBenchmarkSelection(result);
+      store.setNodeBenchmarkFastSelection(milestone.fastSelection);
+      if (milestone.fastSelection.state === "switched") store.setSelection(milestone.fastSelection.selection);
+      return "applied";
+    }
+    const benchmark = parseNodeBenchmarkResult(result);
+    store.finishNodeBenchmark(benchmark.report.nodes, benchmark.fastSelection);
     if (benchmark.selection) store.setSelection(benchmark.selection);
     return "applied";
   }

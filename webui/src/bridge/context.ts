@@ -5,7 +5,7 @@ import { createKernelSuHost } from "./kernelsu-host";
 import { createMockHost } from "./mock-host";
 
 const hostKey: InjectionKey<HostAdapter> = Symbol("nethop-host");
-const envelope = (result: unknown): string => JSON.stringify({ version: 3, request_id: "mock", ok: true, result });
+const envelope = (result: unknown): string => JSON.stringify({ version: 5, request_id: "mock", ok: true, result });
 const mockNowSeconds = Math.floor(Date.now() / 1_000);
 
 export function createAppHost(): HostAdapter {
@@ -24,15 +24,15 @@ export function createAppHost(): HostAdapter {
     { id: primaryId, name: "Primary", configured: true, active: mockActiveSourceIds.includes(primaryId), node_count: 48, auto_candidate_count: 48 },
     { id: backupId, name: "Backup", configured: true, active: mockActiveSourceIds.includes(backupId), node_count: 24, auto_candidate_count: 24 },
   ] });
-  const nodeSelection = () => ({ version: 1, intent: mockManualNodeId ? { mode: "manual", node_id: mockManualNodeId } : { mode: "auto" }, active_node_id: mockManualNodeId ?? autoNodeId, changed_at: mockNowSeconds });
+  const nodeSelection = () => ({ version: 2, intent: mockManualNodeId ? { mode: "manual", node_id: mockManualNodeId } : { mode: "auto" }, active_terminal: { kind: "node", node_id: mockManualNodeId ?? autoNodeId }, changed_at: mockNowSeconds });
   const nodeSnapshot = () => ({ nodes: [
-    { id: autoNodeId, name: "新加坡 · 高速", protocol: "vless", latency_ms: 42, alive: true, is_requested: mockManualNodeId === autoNodeId, is_active: (mockManualNodeId ?? autoNodeId) === autoNodeId, source_ids: [primaryId] },
-    { id: manualNodeId, name: "东京 · 低延迟", protocol: "trojan", latency_ms: null, alive: null, is_requested: mockManualNodeId === manualNodeId, is_active: mockManualNodeId === manualNodeId, source_ids: [primaryId] },
-    { id: "nh1s-1111111111111111", name: "洛杉矶 · 备用", protocol: "hysteria2", latency_ms: 31, alive: true, is_requested: false, is_active: false, source_ids: [backupId] },
-    { id: "nh1s-2222222222222222", name: "法兰克福", protocol: "vmess", latency_ms: 180, alive: true, is_requested: false, is_active: false, source_ids: [backupId] },
+    { id: autoNodeId, name: "新加坡 · 高速", protocol: "vless", latency_ms: 42, alive: true, is_requested: mockManualNodeId === autoNodeId, is_active: (mockManualNodeId ?? autoNodeId) === autoNodeId, source_ids: [primaryId], display_territory_code: "SG" },
+    { id: manualNodeId, name: "东京 · 低延迟", protocol: "trojan", latency_ms: null, alive: null, is_requested: mockManualNodeId === manualNodeId, is_active: mockManualNodeId === manualNodeId, source_ids: [primaryId], display_territory_code: "JP" },
+    { id: "nh1s-1111111111111111", name: "洛杉矶 · 备用", protocol: "hysteria2", latency_ms: 31, alive: true, is_requested: false, is_active: false, source_ids: [backupId], display_territory_code: "US" },
+    { id: "nh1s-2222222222222222", name: "法兰克福", protocol: "vmess", latency_ms: 180, alive: true, is_requested: false, is_active: false, source_ids: [backupId], display_territory_code: "DE" },
   ], selection: nodeSelection() });
   return createMockHost({ responses: {
-    hello: { errno: 0, stdout: envelope({ manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 3, daemon_protocol_max: 3, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: ["subscription_selection_v3"] }), stderr: "" },
+    hello: { errno: 0, stdout: envelope({ manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: ["subscription_selection_v3", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1"] }), stderr: "" },
     "status.get": { errno: 0, stdout: envelope({ schema_version: 3, state: "fail_open_direct", generation: null, last_update: "never", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} }), stderr: "" },
     "traffic.get": { errno: 0, stdout: envelope({ kind: "traffic", sample: { up: 0, down: 0 }, interval_seconds: 1 }), stderr: "" },
     "metrics.get": { errno: 0, stdout: envelope({ schema_version: 1, runtime_state: "running_tproxy", generation: 1, uptime_seconds: 3600, core: { pid: 123, cpu_percent: 1.2, memory_rss_bytes: 33554432 }, traffic: { upload_bytes: 1024, download_bytes: 2048 }, outbound: { interface: "wlan0", local_address: "192.0.2.2", public_ip: null } }), stderr: "" },
@@ -90,12 +90,12 @@ export function createAppHost(): HostAdapter {
       mockManualNodeId = request.nodeId;
       return { errno: 0, stdout: envelope(nodeSelection()), stderr: "" };
     },
-    "node.test-all": () => ({ errno: 0, stdout: envelope({ operation_id: `bench_${"1".repeat(29)}`, phase: "completed", report: { status: "success", trigger: "manual", generation: 1, bootstrap_ms: 1, elapsed_ms: 100, tested: 4, succeeded: 4, timed_out: 0, failed: 0, nodes: [
-      { node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 64 },
-      { node_id: "nh1s-fedcba9876543210", state: "success", latency_ms: 91 },
-      { node_id: "nh1s-1111111111111111", state: "success", latency_ms: 48 },
-      { node_id: "nh1s-2222222222222222", state: "success", latency_ms: 188 },
-    ] }, selection: nodeSelection() }), stderr: "" }),
+    "node.test-all": () => ({ errno: 0, stdout: envelope({ operation_id: `bench_${"1".repeat(29)}`, phase: "completed", report: { status: "success", trigger: "manual", generation: 1, bootstrap_ms: 1, elapsed_ms: 100, timing: { thread_spawn_us: 100, runtime_init_us: 900, candidate_dispatch_us: 200, probe_us: 98_000, result_assembly_us: 300, total_us: 100_000 }, probe: { first_result_us: 40_000, last_result_us: 70_000, last_success_us: 70_000, completed_within_500ms: 4, completed_within_1s: 4, completed_within_2s: 4, completed_within_3s: 4, completed_before_cutoff: 4, cutoff_pending: 0, cutoff_tail_us: 0 }, tested: 4, succeeded: 4, timed_out: 0, failed: 0, nodes: [
+      { node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 64, request_elapsed_us: 39_000, completed_at_us: 40_000 },
+      { node_id: "nh1s-fedcba9876543210", state: "success", latency_ms: 91, request_elapsed_us: 49_000, completed_at_us: 50_000 },
+      { node_id: "nh1s-1111111111111111", state: "success", latency_ms: 48, request_elapsed_us: 59_000, completed_at_us: 60_000 },
+      { node_id: "nh1s-2222222222222222", state: "success", latency_ms: 188, request_elapsed_us: 69_000, completed_at_us: 70_000 },
+    ] }, selection: nodeSelection(), fast_selection: { state: "not_needed", completed: 4, candidate_count: 4, elapsed_us: 100_000 }, timing: { admission_us: 500, worker_reap_us: 200, fast_control: { intent_load_us: 0, current_snapshot_us: 0, decision_us: 0, target_resolve_us: 0, selector_apply_us: 0, final_snapshot_us: 0, total_us: 0 }, terminal_control: { intent_load_us: 50, current_snapshot_us: 0, decision_us: 0, target_resolve_us: 0, selector_apply_us: 0, final_snapshot_us: 250, total_us: 400 }, operation_total_us: 101_100 } }), stderr: "" }),
     "connections.get": { errno: 0, stdout: envelope({ connections: [] }), stderr: "" },
     "logs.get": { errno: 0, stdout: envelope({ entries: [{ seq: 1, kind: "runtime", channel: "service", payload: { kind: "service_ready", message: "daemon ready" }, raw: "{\"kind\":\"runtime\",\"payload\":{\"kind\":\"service_ready\"}}" }], channel: "service", newest_first: true }), stderr: "" },
     "topology.get": { errno: 0, stdout: envelope({ capture_mode: "mock", ipv4: "direct", ipv6: "direct" }), stderr: "" },

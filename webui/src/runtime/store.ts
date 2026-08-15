@@ -1,7 +1,7 @@
 import { computed, reactive, readonly, shallowRef, type ComputedRef, type Ref } from "vue";
 
 import type { HostCapability } from "@/bridge/host";
-import type { ApplicationDto, ConfigDto, HelloDto, NodeDto, NodeListSnapshotDto, NodeSelectionDto, StatusDto, SubscriptionDto, SubscriptionModeDto, SubscriptionSnapshotDto } from "@/model/dto";
+import type { ApplicationDto, ConfigDto, HelloDto, NodeBenchmarkFastSelectionDto, NodeDto, NodeListSnapshotDto, NodeProbeOutcomeDto, NodeProbeStateDto, NodeSelectionDto, StatusDto, SubscriptionDto, SubscriptionModeDto, SubscriptionSnapshotDto } from "@/model/dto";
 
 export type SessionPhase = "idle" | "connecting" | "live" | "stale" | "incompatible" | "unavailable" | "closed";
 
@@ -39,6 +39,8 @@ export interface RuntimeStore {
   readonly nodesById: Ref<Readonly<Record<string, NodeDto>>>;
   readonly nodeOrder: Ref<readonly string[]>;
   readonly selection: Ref<NodeSelectionDto | undefined>;
+  readonly nodeProbeStates: Ref<Readonly<Record<string, NodeProbeStateDto | "measuring">>>;
+  readonly nodeBenchmarkFastSelection: Ref<NodeBenchmarkFastSelectionDto | undefined>;
   readonly subscriptionsById: Ref<Readonly<Record<string, SubscriptionDto>>>;
   readonly subscriptionOrder: Ref<readonly string[]>;
   readonly subscriptionMode: Ref<SubscriptionModeDto | undefined>;
@@ -51,6 +53,11 @@ export interface RuntimeStore {
   readonly setSelection: (selection: NodeSelectionDto) => void;
   readonly upsertNode: (node: NodeDto) => void;
   readonly removeNode: (id: string) => void;
+  readonly beginNodeBenchmark: (nodeIds: readonly string[]) => void;
+  readonly applyNodeProbeOutcome: (outcome: NodeProbeOutcomeDto) => void;
+  readonly setNodeBenchmarkFastSelection: (state: NodeBenchmarkFastSelectionDto) => void;
+  readonly finishNodeBenchmark: (outcomes: readonly NodeProbeOutcomeDto[], fastSelection?: NodeBenchmarkFastSelectionDto) => void;
+  readonly clearNodeProbeStates: () => void;
   readonly replaceSubscriptions: (items: readonly SubscriptionDto[]) => void;
   readonly loadSubscriptionSnapshot: (snapshot: SubscriptionSnapshotDto) => void;
   readonly upsertSubscription: (item: SubscriptionDto) => void;
@@ -87,6 +94,8 @@ export function createRuntimeStore(): RuntimeStore {
   const nodesById = shallowRef<Readonly<Record<string, NodeDto>>>({});
   const nodeOrder = shallowRef<readonly string[]>([]);
   const selection = shallowRef<NodeSelectionDto>();
+  const nodeProbeStates = shallowRef<Readonly<Record<string, NodeProbeStateDto | "measuring">>>({});
+  const nodeBenchmarkFastSelection = shallowRef<NodeBenchmarkFastSelectionDto>();
   const subscriptionsById = shallowRef<Readonly<Record<string, SubscriptionDto>>>({});
   const subscriptionOrder = shallowRef<readonly string[]>([]);
   const subscriptionMode = shallowRef<SubscriptionModeDto>();
@@ -95,15 +104,48 @@ export function createRuntimeStore(): RuntimeStore {
   const applicationsByPackage = shallowRef<Readonly<Record<string, ApplicationDto>>>({});
   const applicationOrder = shallowRef<readonly string[]>([]);
   return {
-    nodesById, nodeOrder, selection, subscriptionsById, subscriptionOrder, subscriptionMode, activeSourceIds, subscriptionConfigDigest, applicationsByPackage, applicationOrder,
-    replaceNodes: (items) => replaceEntity(nodesById, nodeOrder, items.map((item) => ({ ...item }))),
+    nodesById, nodeOrder, selection, nodeProbeStates, nodeBenchmarkFastSelection, subscriptionsById, subscriptionOrder, subscriptionMode, activeSourceIds, subscriptionConfigDigest, applicationsByPackage, applicationOrder,
+    replaceNodes: (items) => { replaceEntity(nodesById, nodeOrder, items.map((item) => ({ ...item }))); nodeProbeStates.value = {}; nodeBenchmarkFastSelection.value = undefined; },
     loadNodeSnapshot: (snapshot) => {
       replaceEntity(nodesById, nodeOrder, snapshot.nodes.map((item) => ({ ...item })));
       selection.value = snapshot.selection;
+      nodeProbeStates.value = {};
+      nodeBenchmarkFastSelection.value = undefined;
     },
     setSelection: (value) => { selection.value = value; },
     upsertNode: (item) => upsertEntity(nodesById, nodeOrder, { ...item }),
     removeNode: (id) => removeEntity(nodesById, nodeOrder, id),
+    beginNodeBenchmark: (nodeIds) => {
+      nodeProbeStates.value = Object.fromEntries(nodeIds.filter((id) => id in nodesById.value).map((id) => [id, "measuring" as const]));
+      nodeBenchmarkFastSelection.value = { state: "pending" };
+    },
+    applyNodeProbeOutcome: (outcome) => {
+      const node = nodesById.value[outcome.id];
+      if (!node) return;
+      if (outcome.state === "success" && outcome.latencyMs !== undefined) upsertEntity(nodesById, nodeOrder, { ...node, latencyMs: outcome.latencyMs });
+      else {
+        const { latencyMs: _latencyMs, ...withoutLatency } = node;
+        upsertEntity(nodesById, nodeOrder, withoutLatency);
+      }
+      nodeProbeStates.value = { ...nodeProbeStates.value, [outcome.id]: outcome.state };
+    },
+    setNodeBenchmarkFastSelection: (state) => { nodeBenchmarkFastSelection.value = state; },
+    finishNodeBenchmark: (outcomes, fastSelection) => {
+      const states: Record<string, NodeProbeStateDto> = {};
+      for (const outcome of outcomes) {
+        const node = nodesById.value[outcome.id];
+        if (!node) continue;
+        if (outcome.state === "success" && outcome.latencyMs !== undefined) upsertEntity(nodesById, nodeOrder, { ...node, latencyMs: outcome.latencyMs });
+        else {
+          const { latencyMs: _latencyMs, ...withoutLatency } = node;
+          upsertEntity(nodesById, nodeOrder, withoutLatency);
+        }
+        states[outcome.id] = outcome.state;
+      }
+      nodeProbeStates.value = states;
+      if (fastSelection !== undefined) nodeBenchmarkFastSelection.value = fastSelection;
+    },
+    clearNodeProbeStates: () => { nodeProbeStates.value = {}; nodeBenchmarkFastSelection.value = undefined; },
     replaceSubscriptions: (items) => replaceEntity(subscriptionsById, subscriptionOrder, items.map((item) => ({ ...item }))),
     loadSubscriptionSnapshot: (snapshot) => {
       replaceEntity(subscriptionsById, subscriptionOrder, snapshot.sources.map((item) => ({ ...item })));
@@ -127,7 +169,7 @@ export function createRuntimeStore(): RuntimeStore {
     removeApplication: (packageName) => removeEntity(applicationsByPackage, applicationOrder, packageName),
     reset: () => {
       nodesById.value = {}; nodeOrder.value = [];
-      selection.value = undefined;
+      selection.value = undefined; nodeProbeStates.value = {}; nodeBenchmarkFastSelection.value = undefined;
       subscriptionsById.value = {}; subscriptionOrder.value = [];
       subscriptionMode.value = undefined; activeSourceIds.value = []; subscriptionConfigDigest.value = undefined;
       applicationsByPackage.value = {}; applicationOrder.value = [];

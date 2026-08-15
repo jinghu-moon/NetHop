@@ -18,7 +18,7 @@ function Install-FakeModule {
     param([string]$DataRoot, [string]$ModuleRoot)
 
     $directories = @(
-        "config", "generations", "subscriptions/cache", "subscriptions/reports",
+        "config", "generations", "subscriptions", "subscriptions/cache", "subscriptions/reports",
         "rulesets", "stats", "state", "run", "logs"
     )
     foreach ($relative in $directories) {

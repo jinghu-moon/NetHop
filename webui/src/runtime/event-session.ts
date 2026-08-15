@@ -4,7 +4,7 @@ import { validatedQuery } from "@/model/client";
 import { parseHello } from "@/model/dto";
 import { EventStateMachine } from "./event-state";
 import { browserRetryClock, ReconnectBackoff, type RetryClock } from "./reconnect";
-import type { EventKind } from "@/bridge/operations";
+import { PROTOCOL_VERSION, type EventKind } from "@/bridge/operations";
 
 export interface EventSessionOptions {
   readonly host: HostAdapter;
@@ -58,7 +58,7 @@ export class EventSession {
   private async handshakeAndSubscribe(): Promise<void> {
     try {
       const hello = await validatedQuery(this.options.host, { id: "hello", managerVersion: this.options.managerVersion }, parseHello);
-      if (!hello.compatible || hello.daemonProtocolMin !== 3 || hello.daemonProtocolMax !== 3) {
+      if (!hello.compatible || hello.daemonProtocolMin !== PROTOCOL_VERSION || hello.daemonProtocolMax !== PROTOCOL_VERSION) {
         this.active = false;
         this.status = "incompatible";
         this.emit();

@@ -209,11 +209,12 @@ test("P0-P1 node, application, overlay, cache, log and metrics flows are integra
   await expect(page.locator(".node-source-heading").nth(0)).toContainText("Primary");
   await expect(page.locator(".node-source-heading").nth(1)).toContainText("Backup");
   await page.getByTitle("更多操作").click();
-  await expect(page.getByText("按延迟排序", { exact: true })).toBeVisible();
+  await expect(page.getByText("延迟：低到高", { exact: true })).toBeVisible();
+  await expect(page.getByText("延迟：高到低", { exact: true })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event("nethop:back")));
   await expect(page.locator(".node-actions-sheet")).not.toBeVisible();
   await page.getByTitle("更多操作").click();
-  await page.getByText("按延迟排序", { exact: true }).click();
+  await page.getByText("延迟：低到高", { exact: true }).click();
   await expect(page.locator(".node-grid-row").nth(1).locator(".node-card").first()).toContainText("洛杉矶 · 备用");
 
   await page.goto("/#/applications");

@@ -7,16 +7,21 @@ $contractRoot = Join-Path $workspace "out/webui-release-readiness-contracts"
 $blockedRoot = Join-Path $contractRoot "blocked"
 $readyRoot = Join-Path $contractRoot "ready"
 $requiredAutomatic = @("bundle-metafile.json", "production-bundle.json", "webui-sbom.cdx.json", "webui-licenses.json", "checksums.sha256")
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+function Write-Utf8NoBom([string]$Path, [string]$Value) {
+    [System.IO.File]::WriteAllText($Path, $Value, $utf8NoBom)
+}
 
 function Initialize-AutomaticArtifacts([string]$Root) {
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
     foreach ($name in $requiredAutomatic) {
-        Set-Content -LiteralPath (Join-Path $Root $name) -Value "{}" -Encoding utf8NoBOM
+        Write-Utf8NoBom (Join-Path $Root $name) "{}"
     }
 }
 
 function Write-Json([string]$Path, [hashtable]$Value) {
-    $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM
+    Write-Utf8NoBom $Path ($Value | ConvertTo-Json -Depth 8)
 }
 
 Initialize-AutomaticArtifacts $blockedRoot

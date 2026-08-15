@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $requiredAutomatic = @("bundle-metafile.json", "production-bundle.json", "webui-sbom.cdx.json", "webui-licenses.json", "checksums.sha256")
 $missing = @($requiredAutomatic | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ArtifactRoot $_) -PathType Leaf) })
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Read-Evidence([string]$Name) {
     $path = Join-Path $ArtifactRoot $Name
@@ -54,6 +55,6 @@ $report = [ordered]@{
     blockers = @($blockers)
 }
 New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
-$report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $OutputPath -Encoding utf8NoBOM
+[System.IO.File]::WriteAllText($OutputPath, ($report | ConvertTo-Json -Depth 4), $utf8NoBom)
 $report | ConvertTo-Json -Depth 4
 if ($RequireReady -and -not $ready) { throw "WebUI release readiness is blocked" }

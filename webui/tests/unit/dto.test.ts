@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { safeExtension, ValidationError } from "@/model/bounds";
-import { parseApplication, parseApplicationList, parseCapability, parseConfig, parseConfigSchema, parseControlEnvelope, parseEventFrame, parseHello, parseLogs, parseNode, parseNodeBenchmarkAck, parseNodeBenchmarkResult, parseNodeDelayList, parseNodeList, parseNodeSelection, parseOperational, parseRuntimeMetrics, parseSourceStatus, parseStatus, parseSubscription, parseSubscriptionSnapshot, parseTraffic } from "@/model/dto";
+import { parseApplication, parseApplicationList, parseCapability, parseConfig, parseConfigSchema, parseControlEnvelope, parseEventFrame, parseHello, parseLogs, parseNode, parseNodeBenchmarkAck, parseNodeBenchmarkProgress, parseNodeBenchmarkResult, parseNodeBenchmarkSelection, parseNodeDelayList, parseNodeList, parseNodeSelection, parseOperational, parseRuntimeMetrics, parseSourceStatus, parseStatus, parseSubscription, parseSubscriptionSnapshot, parseTraffic } from "@/model/dto";
 
 const digest = "a".repeat(64);
 
 describe("strict DTO validators", () => {
-  it("negotiates protocol v3 and denies unknown hello fields", () => {
-    const hello = { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 3, daemon_protocol_max: 3, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: ["status.get"], supported_features: ["event_stream"] };
+  it("negotiates protocol v5 and denies unknown hello fields", () => {
+    const hello = { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: ["status.get"], supported_features: ["event_stream", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1"] };
     expect(parseHello(hello).compatible).toBe(true);
     expect(() => parseHello({ ...hello, unknown: true })).toThrow("unknown field");
     expect(() => parseHello({ ...hello, manager_version: "x".repeat(65) })).toThrow();
@@ -15,10 +15,11 @@ describe("strict DTO validators", () => {
 
   it("validates control envelope and status state", () => {
     const status = { schema_version: 1, state: "running_tproxy", generation: 2, last_update: "succeeded", watcher_health: "healthy", runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} };
-    const envelope = { version: 3, request_id: "test", ok: true, generation: 2, result: status };
+    const envelope = { version: 5, request_id: "test", ok: true, generation: 2, result: status };
     expect(parseControlEnvelope(envelope, parseStatus).result.state).toBe("running_tproxy");
     expect(() => parseStatus({ ...status, state: "invented" })).toThrow("invalid enum");
     expect(() => parseControlEnvelope({ ...envelope, extra: true }, parseStatus)).toThrow("unknown field");
+    expect(() => parseControlEnvelope({ ...envelope, version: 3 }, parseStatus)).toThrow("unsupported protocol");
   });
 
   it("validates capability states and evidence bounds", () => {
@@ -72,8 +73,9 @@ describe("strict DTO validators", () => {
   it("rejects source URL leakage and credential-shaped node fields", () => {
     expect(parseSubscription({ id: "src_abc", name: "Primary", configured: true, active: true, url_redacted: "[REDACTED]" }).name).toBe("Primary");
     expect(() => parseSubscription({ id: "src_abc", name: "Primary", configured: true, active: true, url_redacted: "https://secret" })).toThrow("redacted");
-    const node = { id: "nh1s-0123456789abcdef", name: "Tokyo", protocol: "vless", latency_ms: 23, alive: true, is_requested: true, is_active: true, source_ids: ["src_abc"] };
-    expect(parseNode(node).latencyMs).toBe(23);
+    const node = { id: "nh1s-0123456789abcdef", name: "Tokyo", protocol: "vless", latency_ms: 23, alive: true, is_requested: true, is_active: true, source_ids: ["src_abc"], display_territory_code: "JP" };
+    expect(parseNode(node)).toMatchObject({ latencyMs: 23, displayTerritoryCode: "JP" });
+    expect(() => parseNode({ ...node, display_territory_code: "ZZ" })).toThrow("invalid enum");
     expect(() => parseNode({ ...node, password: "secret" })).toThrow("unknown field");
   });
 
@@ -81,10 +83,10 @@ describe("strict DTO validators", () => {
     expect(parseApplication({ package_name: "tv.danmaku.bili", uid: 10123, mode: "blacklist", shared_uid: false }).uid).toBe(10123);
     expect(parseTraffic({ kind: "traffic", sample: { up: 12, down: 34 }, interval_seconds: 1 }).down).toBe(34);
     expect(() => parseTraffic({ sample: { up: -1, down: Number.NaN }, interval_seconds: 1 })).toThrow();
-    const snapshot = { version: 3, request_id: "events", sequence: 1, kind: "item", payload: { kind: "snapshot", runtime: {} } };
+    const snapshot = { version: 5, request_id: "events", sequence: 1, kind: "item", payload: { kind: "snapshot", runtime: {} } };
     expect(parseEventFrame(snapshot).type).toBe("item");
-    expect(parseEventFrame({ version: 3, request_id: "events", sequence: 2, kind: "end" }).type).toBe("end");
-    expect(parseEventFrame({ version: 3, request_id: "events", sequence: 3, kind: "error", error: { code: "NH-CORE-UNAVAILABLE", message: "unavailable" } }).type).toBe("error");
+    expect(parseEventFrame({ version: 5, request_id: "events", sequence: 2, kind: "end" }).type).toBe("end");
+    expect(parseEventFrame({ version: 5, request_id: "events", sequence: 3, kind: "error", error: { code: "NH-CORE-UNAVAILABLE", message: "unavailable" } }).type).toBe("error");
     expect(() => parseEventFrame({ ...snapshot, sequence: 0 })).toThrow();
   });
 
@@ -98,10 +100,13 @@ describe("strict DTO validators", () => {
 
   it("parses non-empty daemon lists without adding wrapper fields", () => {
     expect(parseSubscriptionSnapshot({ mode: "single", active_source_ids: ["src_abc"], config_digest: digest, sources: [{ id: "src_abc", name: "Primary", configured: true, active: true }] }).sources[0]?.name).toBe("Primary");
-    const selection = { version: 1, intent: { mode: "manual", node_id: "nh1s-0123456789abcdef" }, active_node_id: "nh1s-0123456789abcdef", changed_at: 1 };
+    const selection = { version: 2, intent: { mode: "manual", node_id: "nh1s-0123456789abcdef" }, active_terminal: { kind: "node", node_id: "nh1s-0123456789abcdef" }, changed_at: 1 };
     expect(parseNodeList({ nodes: [{ id: "nh1s-0123456789abcdef", name: "Tokyo", protocol: "vless", is_requested: true, is_active: true, source_ids: ["src_abc"] }], selection }).selection.intent.mode).toBe("manual");
     expect(() => parseNode({ id: "nh1s-0123456789abcdef", name: "old", protocol: "vless", selected: true, source_ids: ["src_abc"] })).toThrow("unknown field");
-    expect(parseNodeSelection(selection).activeNodeId).toBe("nh1s-0123456789abcdef");
+    expect(parseNodeSelection({ version: 2, intent: { mode: "auto" }, active_terminal: { kind: "node", node_id: "nh1s-0123456789abcdef" }, changed_at: 1 }).activeTerminal).toEqual({ kind: "node", nodeId: "nh1s-0123456789abcdef" });
+    expect(parseNodeSelection({ version: 2, intent: { mode: "auto" }, active_terminal: { kind: "direct" }, changed_at: 1 }).activeTerminal.kind).toBe("direct");
+    expect(parseNodeSelection({ version: 2, intent: { mode: "auto" }, active_terminal: { kind: "block" }, changed_at: 1 }).activeTerminal.kind).toBe("block");
+    expect(parseNodeSelection({ version: 2, intent: { mode: "auto" }, active_terminal: { kind: "unresolved", reason: "active_node_unresolved" }, changed_at: 1 }).activeTerminal.kind).toBe("unresolved");
     expect(parseApplicationList({ applications: [{ package_name: "tv.danmaku.bili", uid: 10123, mode: "blacklist", shared_uid: false }] })[0]?.packageName).toBe("tv.danmaku.bili");
   });
 
@@ -113,14 +118,47 @@ describe("strict DTO validators", () => {
 
   it("validates benchmark ACK and terminal report invariants", () => {
     const operationId = `bench_${"1".repeat(29)}`;
-    expect(parseNodeBenchmarkAck({ operation_id: operationId, phase: "running", joined_existing: true, trigger: "periodic", candidate_count: 64, probe_cutoff_ms: 4500, deadline_ms: 4900 }).joinedExisting).toBe(true);
-    expect(() => parseNodeBenchmarkAck({ operation_id: operationId, phase: "running", joined_existing: false, trigger: "manual", candidate_count: 65, probe_cutoff_ms: 4500, deadline_ms: 4900 })).toThrow();
-    const terminal = { operation_id: operationId, phase: "completed", report: { status: "partial", trigger: "manual", generation: 7, bootstrap_ms: 1, elapsed_ms: 100, tested: 2, succeeded: 1, timed_out: 1, failed: 0, diagnostic: "unauthorized", nodes: [{ node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 42 }, { node_id: "nh1s-fedcba9876543210", state: "timeout" }] } };
-    expect(parseNodeBenchmarkResult(terminal).report.diagnostic).toBe("unauthorized");
+    const ack = { operation_id: operationId, phase: "running", joined_existing: true, trigger: "periodic", candidate_count: 64, fast_selection_earliest_ms: 2000, fast_selection_latest_ms: 2800, fast_selection_deadline_ms: 3000, probe_cutoff_ms: 4500, deadline_ms: 4900, fast_selection: { state: "pending" } };
+    expect(parseNodeBenchmarkAck(ack)).toMatchObject({ joinedExisting: true, fastSelection: { state: "pending" }, fastSelectionDeadlineMs: 3000 });
+    expect(() => parseNodeBenchmarkAck({ ...ack, candidate_count: 65 })).toThrow();
+    const terminal = {
+      operation_id: operationId,
+      phase: "completed",
+      report: {
+        status: "partial", trigger: "manual", generation: 7, bootstrap_ms: 1, elapsed_ms: 100,
+        timing: { thread_spawn_us: 100, runtime_init_us: 900, candidate_dispatch_us: 200, probe_us: 98_000, result_assembly_us: 300, total_us: 100_000 },
+        probe: { first_result_us: 90_000, last_result_us: 90_000, last_success_us: 90_000, completed_within_500ms: 1, completed_within_1s: 1, completed_within_2s: 1, completed_within_3s: 1, completed_before_cutoff: 1, cutoff_pending: 1, cutoff_tail_us: 10_000 },
+        tested: 2, succeeded: 1, timed_out: 1, failed: 0, diagnostic: "unauthorized",
+        nodes: [{ node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 42, request_elapsed_us: 80_000, completed_at_us: 90_000 }, { node_id: "nh1s-fedcba9876543210", state: "timeout", request_elapsed_us: 98_000, completed_at_us: 100_000 }],
+      },
+      fast_selection: { state: "not_needed", completed: 2, candidate_count: 2, elapsed_us: 100_000 },
+      timing: {
+        admission_us: 500,
+        worker_reap_us: 200,
+        fast_control: { intent_load_us: 0, current_snapshot_us: 0, decision_us: 0, target_resolve_us: 0, selector_apply_us: 0, final_snapshot_us: 0, total_us: 0 },
+        terminal_control: { intent_load_us: 50, current_snapshot_us: 0, decision_us: 0, target_resolve_us: 0, selector_apply_us: 0, final_snapshot_us: 250, total_us: 400 },
+        operation_total_us: 101_100,
+      },
+    };
+    const parsed = parseNodeBenchmarkResult(terminal);
+    expect(parsed.report.diagnostic).toBe("unauthorized");
+    expect(parsed.report.timing.probeUs).toBe(98_000);
+    expect(parsed.report.probe).toMatchObject({ completedWithin500ms: 1, completedBeforeCutoff: 1, cutoffPending: 1, cutoffTailUs: 10_000 });
+    expect(parsed.report.nodes[0]).toMatchObject({ requestElapsedUs: 80_000, completedAtUs: 90_000 });
+    expect(parseNodeBenchmarkResult(terminal).timing.terminalControl.finalSnapshotUs).toBe(250);
+    expect(parseNodeBenchmarkSelection({ operation_id: operationId, phase: "selection", generation: 7, fast_selection: { state: "kept", completed: 43, candidate_count: 64, elapsed_us: 2_000_000 } }).fastSelection.state).toBe("kept");
+    expect(() => parseNodeBenchmarkSelection({ operation_id: operationId, phase: "selection", generation: 7, fast_selection: { state: "pending" } })).toThrow("selection milestone is pending");
+    expect(() => parseNodeBenchmarkSelection({ operation_id: operationId, phase: "selection", generation: 7, fast_selection: { state: "switched", completed: 43, candidate_count: 64, elapsed_us: 3_000_001, selection: { version: 2, intent: { mode: "auto" }, active_terminal: { kind: "node", node_id: "nh1s-0123456789abcdef" }, changed_at: 2 } } })).toThrow();
     expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, succeeded: 2 } })).toThrow("inconsistent benchmark counts");
     expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, elapsed_ms: 4901 } })).toThrow();
+    expect(() => parseNodeBenchmarkResult({ ...terminal, timing: { ...terminal.timing, operation_total_us: 100 } })).toThrow();
     expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, nodes: [{ node_id: "nh1s-0123456789abcdef", state: "success" }], tested: 1, succeeded: 1, timed_out: 0 } })).toThrow("invalid probe outcome");
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, probe: undefined } })).toThrow();
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, probe: { ...terminal.report.probe, completed_within_1s: 0 } } })).toThrow("inconsistent probe summary");
+    expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, nodes: [{ ...terminal.report.nodes[0], request_elapsed_us: 91_000 }, terminal.report.nodes[1]] } })).toThrow("inconsistent probe timing");
     expect(() => parseNodeBenchmarkResult({ ...terminal, report: { ...terminal.report, internal_tag: "private" } })).toThrow("unknown field");
+    expect(parseNodeBenchmarkProgress({ operation_id: operationId, phase: "progress", generation: 7, completed: 1, candidate_count: 2, outcome: { node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 42, request_elapsed_us: 40_000, completed_at_us: 41_000 } }).outcome.latencyMs).toBe(42);
+    expect(() => parseNodeBenchmarkProgress({ operation_id: operationId, phase: "progress", generation: 7, completed: 3, candidate_count: 2, outcome: { node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 42, request_elapsed_us: 40_000, completed_at_us: 41_000 } })).toThrow();
   });
 
   it("bounds operational extensions and 10,000-node corpus", () => {
@@ -142,7 +180,7 @@ describe("bounded corpus", () => {
 
   it("rejects oversized external collections and strings before store admission", () => {
     const node = { id: "nh1s-0123456789abcdef", name: "Node", protocol: "trojan", is_requested: false, is_active: false, source_ids: ["src_abc"] };
-    const selection = { version: 1, intent: { mode: "auto" }, active_node_id: null, changed_at: 0 };
+    const selection = { version: 2, intent: { mode: "auto" }, active_terminal: { kind: "unresolved", reason: "active_node_unresolved" }, changed_at: 0 };
     expect(() => parseNodeList({ nodes: new Array(10_001).fill(node), selection })).toThrow("too many items");
     expect(() => parseNode({ ...node, name: "x".repeat(513) })).toThrow("invalid string");
     expect(() => parseOperational({ logs: new Array(10_001).fill({ message: "bounded" }) }, "logs")).toThrow("too many items");

@@ -3,6 +3,8 @@ import { computed, h, nextTick, onActivated, ref } from "vue";
 import { IconBolt, IconCopy, IconDotsVertical, IconRefresh, IconTrash, IconX } from "@tabler/icons-vue";
 import { ActionSheet as TActionSheet, Button as TButton, PullDownRefresh as TPullDownRefresh } from "tdesign-mobile-vue";
 import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
+import ActiveNodeSummary from "@/components/nodes/ActiveNodeSummary.vue";
+import NodeCard from "@/components/nodes/NodeCard.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
 import PageState from "@/components/PageState.vue";
@@ -12,11 +14,11 @@ import { validatedQuery } from "@/model/client";
 import { parseControlEnvelope, parseNodeBenchmarkResult, parseNodeList, parseNodeSelection, parseSubscriptionSnapshot, type NodeDto } from "@/model/dto";
 import { uiStores } from "@/runtime/store";
 import { createActionLock, createOperationStore } from "@/runtime/operation";
-import { parseNodeSort, sortNodes, type NodeSort } from "@/model/node-view";
+import { activeNodeId, activeNodeView, parseNodeSort, sortNodes, type NodeSort } from "@/model/node-view";
 import { useUiPreference } from "@/runtime/storage";
 import { useBackDismiss } from "@/shell/useBackDispatcher";
 
-type PageAction = "refresh" | "sort-default" | "sort-name" | "sort-latency" | "clear-delay" | "export" | "exclude";
+type PageAction = "refresh" | "sort-default" | "sort-name" | "sort-latency-asc" | "sort-latency-desc" | "clear-delay" | "export" | "exclude";
 type NodeListItem = { readonly kind: "heading"; readonly id: string; readonly label: string; readonly count: number } | { readonly kind: "row"; readonly id: string; readonly nodes: readonly NodeDto[] };
 
 const host = useHost();
@@ -29,12 +31,24 @@ const lock = createActionLock();
 const operations = createOperationStore();
 const refreshing = ref(false);
 const sourceNames = ref<Readonly<Record<string, string>>>({});
+const probeStates = computed(() => uiStores.runtime.nodeProbeStates.value);
+const fastSelection = computed(() => uiStores.runtime.nodeBenchmarkFastSelection.value);
+const backgroundRemaining = computed(() => {
+  const state = fastSelection.value;
+  return state && state.state !== "pending" ? Math.max(0, state.candidateCount - state.completed) : 0;
+});
 const sortPreference = useUiPreference("node-sort", "default");
 const nodeSort = computed(() => parseNodeSort(sortPreference.value));
 
 const allNodes = computed(() => uiStores.runtime.nodeOrder.value.map((id) => uiStores.runtime.nodesById.value[id]).filter((node): node is NodeDto => Boolean(node)));
 const selection = computed(() => uiStores.runtime.selection.value);
 const automatic = computed(() => selection.value?.intent.mode === "auto");
+const activeId = computed(() => activeNodeId(selection.value));
+const serviceRunning = computed(() => {
+  const state = uiStores.session.status.value?.state;
+  return state === undefined || state === "running_tproxy" || state === "running_tun";
+});
+const activeSummary = computed(() => activeNodeView(selection.value, uiStores.runtime.nodesById.value, sourceNames.value, serviceRunning.value));
 const nodeItems = computed<readonly NodeListItem[]>(() => {
   const groups = new Map<string, NodeDto[]>();
   for (const node of allNodes.value) {
@@ -58,7 +72,8 @@ const actionItems = computed(() => [
   { label: "刷新节点列表", icon: () => h(IconRefresh, { size: 20 }) },
   { label: "默认排序", disabled: nodeSort.value === "default" },
   { label: "按名称排序", disabled: nodeSort.value === "name" },
-  { label: "按延迟排序", disabled: nodeSort.value === "latency" },
+  { label: "延迟：低到高", disabled: nodeSort.value === "latency-asc" },
+  { label: "延迟：高到低", disabled: nodeSort.value === "latency-desc" },
   { label: "清除测速结果", icon: () => h(IconX, { size: 20 }), disabled: allNodes.value.every((node) => node.latencyMs === undefined) },
   { label: "导出当前节点", icon: () => h(IconCopy, { size: 20 }), disabled: !selectedNode.value },
   { label: "排除当前节点", icon: () => h(IconTrash, { size: 20 }), color: "var(--nh-danger)", disabled: !selectedNode.value },
@@ -83,22 +98,15 @@ async function testAllNodes(): Promise<void> {
   const operationId = "node-test-all";
   operations.begin(operationId, "node-delay");
   operations.update(operationId, "running", { message: "正在测试全部节点" });
+  uiStores.runtime.beginNodeBenchmark(allNodes.value.map((node) => node.id));
   try {
     const response = await runJson(host, { id: "node.test-all" });
     const result = parseControlEnvelope(response.response, parseNodeBenchmarkResult).result;
-    const outcomes = new Map(result.report.nodes.map((outcome) => [outcome.id, outcome]));
-    for (const node of allNodes.value) {
-      const outcome = outcomes.get(node.id);
-      if (outcome?.state !== "success" || outcome.latencyMs === undefined) {
-        const { latencyMs: _previousLatency, ...withoutLatency } = node;
-        uiStores.runtime.upsertNode(withoutLatency);
-      } else {
-        uiStores.runtime.upsertNode({ ...node, latencyMs: outcome.latencyMs });
-      }
-    }
+    uiStores.runtime.finishNodeBenchmark(result.report.nodes, result.fastSelection);
     if (result.selection) uiStores.runtime.setSelection(result.selection);
     operations.update(operationId, "success", { message: `测速完成：成功 ${result.report.succeeded} / ${result.report.tested}` });
   } catch {
+    uiStores.runtime.clearNodeProbeStates();
     operations.update(operationId, "failure", { message: "节点测速失败" });
   }
 }
@@ -128,13 +136,14 @@ async function exportNode(node: NodeDto): Promise<void> {
   if (envelope.result !== undefined) await navigator.clipboard.writeText(typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result));
 }
 function clearDelays(): void {
+  uiStores.runtime.clearNodeProbeStates();
   for (const node of allNodes.value) {
     const { latencyMs: _latencyMs, ...withoutLatency } = node;
     uiStores.runtime.upsertNode(withoutLatency);
   }
 }
 function selectAction(_selected: unknown, actionIndex: number): void {
-  queuedAction.value = (["refresh", "sort-default", "sort-name", "sort-latency", "clear-delay", "export", "exclude"] as const)[actionIndex];
+  queuedAction.value = (["refresh", "sort-default", "sort-name", "sort-latency-asc", "sort-latency-desc", "clear-delay", "export", "exclude"] as const)[actionIndex];
 }
 function finishActionSheet(): void {
   const action = queuedAction.value;
@@ -166,18 +175,19 @@ useBackDismiss(() => actionSheetOpen.value, () => { actionSheetOpen.value = fals
     <PageState v-else-if="error" kind="error" title="节点加载失败" :detail="error" action-label="重试" @action="load" />
     <PageState v-else-if="allNodes.length === 0" kind="empty" title="没有可用节点" />
     <TPullDownRefresh v-else v-model="refreshing" :disabled="loading" @refresh="pullRefresh">
+    <ActiveNodeSummary :value="activeSummary" />
+    <div v-if="fastSelection?.state === 'switched' && backgroundRemaining > 0" class="node-background-benchmark">
+      已完成快速选优，剩余 {{ backgroundRemaining }} 个节点测速中
+    </div>
     <button type="button" class="node-auto-control" :data-selected="automatic" @click="selectAuto">
       <span><strong>自动优选</strong><small>{{ automatic ? "由 NetHop 定期测速并自动选择" : "点击恢复自动选择" }}</small></span>
-      <span v-if="automatic && selection?.activeNodeId" class="node-auto-active">{{ uiStores.runtime.nodesById.value[selection.activeNodeId]?.name ?? "状态同步中" }}</span>
+      <span v-if="automatic && activeId" class="node-auto-active">{{ uiStores.runtime.nodesById.value[activeId]?.name ?? "状态同步中" }}</span>
     </button>
     <VirtualListViewport :items="nodeItems" :get-item-key="(_index, item) => item.id" :estimate-size="82">
       <template #default="{ item }">
         <div v-if="item.kind === 'heading'" class="node-source-heading"><strong>{{ item.label }}</strong><span>{{ item.count }}</span></div>
         <div v-else class="node-grid-row">
-          <article v-for="node in item.nodes" :key="node.id" class="node-card" :data-requested="node.isRequested" :data-active="node.isActive" @click="!node.isRequested && selectNode(node)">
-            <div class="node-main"><strong :title="node.name">{{ node.name }}</strong><span class="node-protocol">{{ node.protocol }}</span></div>
-            <span class="node-latency" :data-ready="node.latencyMs !== undefined">{{ node.latencyMs === undefined ? '--' : `${node.latencyMs} ms` }}</span>
-          </article>
+          <NodeCard v-for="node in item.nodes" :key="node.id" :node="node" :probe-state="probeStates[node.id]" @select="selectNode" />
         </div>
       </template>
     </VirtualListViewport>
