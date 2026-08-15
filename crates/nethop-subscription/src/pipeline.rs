@@ -105,6 +105,7 @@ pub struct DedupedNode {
     pub node: ProxyNode,
     pub source_refs: Vec<SourceRef>,
     pub aliases: Vec<String>,
+    pub display_territory_code: Option<crate::DisplayTerritoryCode>,
     first_source_order: usize,
     first_item_index: u32,
 }
@@ -178,6 +179,7 @@ pub fn dedupe_sources(
                     node,
                     source_refs,
                     aliases: vec![display],
+                    display_territory_code: None,
                     first_source_order: source_order,
                     first_item_index,
                 });
@@ -185,6 +187,10 @@ pub fn dedupe_sources(
             }
         }
         outcomes.insert(batch.source_id, outcome);
+    }
+    for node in &mut nodes {
+        node.display_territory_code =
+            crate::infer_display_territory(node.aliases.iter().map(String::as_str));
     }
     nodes.sort_by(|a, b| {
         (a.first_source_order, a.first_item_index, a.node_id.as_str()).cmp(&(

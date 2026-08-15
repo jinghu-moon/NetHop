@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    DisplayTerritoryCode,
     composer::ManagedConfig,
     diagnostics::{CoreError, io_error},
 };
 
 const MANIFEST_SCHEMA: &str = "nethop-generation-v1";
-const NODE_REGISTRY_SCHEMA: &str = "nethop-generation-nodes-v2";
+const NODE_REGISTRY_SCHEMA: &str = "nethop-generation-nodes-v3";
 const MAX_GENERATION_NODES: usize = 2_000;
 const MAX_NODE_NAME_BYTES: usize = 128;
 const MAX_TAG_BYTES: usize = 128;
@@ -61,6 +62,8 @@ pub struct GenerationNodeRecord {
     protocol: String,
     source_ids: Vec<String>,
     auto_candidate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_territory_code: Option<DisplayTerritoryCode>,
 }
 
 impl GenerationNodeRecord {
@@ -110,7 +113,13 @@ impl GenerationNodeRecord {
             protocol,
             source_ids,
             auto_candidate,
+            display_territory_code: None,
         })
+    }
+
+    pub fn with_display_territory_code(mut self, code: Option<DisplayTerritoryCode>) -> Self {
+        self.display_territory_code = code;
+        self
     }
 
     pub fn stable_node_id(&self) -> &str {
@@ -135,6 +144,10 @@ impl GenerationNodeRecord {
 
     pub const fn auto_candidate(&self) -> bool {
         self.auto_candidate
+    }
+
+    pub const fn display_territory_code(&self) -> Option<DisplayTerritoryCode> {
+        self.display_territory_code
     }
 }
 

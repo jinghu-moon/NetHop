@@ -5,6 +5,7 @@ pub mod composer;
 pub mod diagnostics;
 pub mod generation;
 pub mod state;
+pub mod territory;
 
 pub use capture::{
     CaptureMode, CapturePolicy, CapturePolicyError, ForwardingPolicy, InterfacePolicy,
@@ -20,3 +21,7 @@ pub use generation::{
     GenerationStore, PreparedCandidate, SealedGeneration,
 };
 pub use state::{RuntimeState, StateTransitionError};
+pub use territory::{
+    DisplayTerritoryCode, InvalidTerritoryCode, TerritoryRecord, territories, territory_by_alpha2,
+    territory_by_alpha3,
+};

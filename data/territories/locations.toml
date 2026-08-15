@@ -1,0 +1,115 @@
+schema = "nethop-territory-locations-v1"
+
+[[locations]]
+territory_code = "JP"
+city_names = ["Tokyo", "东京", "東京", "Osaka", "大阪", "Nagoya", "名古屋", "Fukuoka", "福冈", "福岡"]
+airport_codes = ["NRT", "HND", "KIX", "ITM", "NGO", "FUK"]
+metropolitan_codes = ["TYO", "OSA"]
+
+[[locations]]
+territory_code = "HK"
+city_names = ["Hong Kong", "香港"]
+airport_codes = ["HKG"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "TH"
+city_names = ["Bangkok", "曼谷", "Phuket", "普吉"]
+airport_codes = ["BKK", "DMK", "HKT"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "SG"
+city_names = ["Singapore", "新加坡", "狮城", "獅城"]
+airport_codes = ["SIN"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "TW"
+city_names = ["Taipei", "台北", "Kaohsiung", "高雄"]
+airport_codes = ["TPE", "TSA", "KHH"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "US"
+city_names = ["Los Angeles", "洛杉矶", "洛杉磯", "New York", "纽约", "紐約", "Seattle", "西雅图", "San Jose", "圣何塞"]
+airport_codes = ["LAX", "JFK", "EWR", "SEA", "SJC", "SFO"]
+metropolitan_codes = ["NYC"]
+
+[[locations]]
+territory_code = "GB"
+city_names = ["London", "伦敦", "倫敦", "Manchester", "曼彻斯特"]
+airport_codes = ["LHR", "LGW", "MAN"]
+metropolitan_codes = ["LON"]
+
+[[locations]]
+territory_code = "DE"
+city_names = ["Frankfurt", "法兰克福", "法蘭克福"]
+airport_codes = ["FRA"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "FR"
+city_names = ["Paris", "巴黎"]
+airport_codes = ["CDG", "ORY"]
+metropolitan_codes = ["PAR"]
+
+[[locations]]
+territory_code = "NL"
+city_names = ["Amsterdam", "阿姆斯特丹"]
+airport_codes = ["AMS"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "RO"
+city_names = ["Bucharest", "布加勒斯特"]
+airport_codes = ["OTP"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "ID"
+city_names = ["Jakarta", "雅加达"]
+airport_codes = ["CGK"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "IN"
+city_names = ["Mumbai", "孟买", "Delhi", "德里", "Chennai", "金奈"]
+airport_codes = ["BOM", "DEL", "MAA"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "KR"
+city_names = ["Seoul", "首尔", "首爾"]
+airport_codes = ["ICN", "GMP"]
+metropolitan_codes = ["SEL"]
+
+[[locations]]
+territory_code = "AU"
+city_names = ["Sydney", "悉尼", "Melbourne", "墨尔本"]
+airport_codes = ["SYD", "MEL"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "CA"
+city_names = ["Toronto", "多伦多", "Vancouver", "温哥华"]
+airport_codes = ["YYZ", "YVR"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "MY"
+city_names = ["Kuala Lumpur", "吉隆坡"]
+airport_codes = ["KUL"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "PH"
+city_names = ["Manila", "马尼拉"]
+airport_codes = ["MNL"]
+metropolitan_codes = []
+
+[[locations]]
+territory_code = "AE"
+city_names = ["Dubai", "迪拜"]
+airport_codes = ["DXB"]
+metropolitan_codes = []

@@ -79,6 +79,8 @@ test-reports/
 *.tar
 *.tar.gz
 *.tgz
+# Fixed upstream input required by the offline territory generator.
+!data/territories/upstream/country-flag-icons-1.6.20.tgz
 *.dSYM/
 *.so
 *.dll

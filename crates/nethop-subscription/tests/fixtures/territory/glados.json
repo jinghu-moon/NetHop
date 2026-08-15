@@ -1,0 +1,288 @@
+{
+  "schema": "nethop-territory-name-fixture-v1",
+  "sample_id": "glados",
+  "source_sha256": "c11cf3d105c53f3a9e37be68f9296bcbc592cfe9c6d2d81929c4951fa00b2290",
+  "format": "clash_yaml",
+  "nodes": [
+    {
+      "name": "Fast-B2-1",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B2-2",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B2-3",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B2-4",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B1-1",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B1-2",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B1-3",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Fast-B1-4",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Balancer-B1-1",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Balancer-B1-2",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Balancer-B1-3",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "Balancer-B1-4",
+      "expected_territory_code": null,
+      "information_node": false
+    },
+    {
+      "name": "US-D1-1",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-D1-2",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-D1-3",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-D1-4",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P2-1",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P2-2",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P2-3",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P2-4",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P1-1",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P1-2",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P1-3",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-IPv6-P1-4",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "US-Balancer-N1-1",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Balancer-N1-2",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Balancer-N1-3",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Balancer-N1-4",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Netflix-N2-1",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Netflix-N2-2",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Netflix-N2-3",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Netflix-N2-4",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Dedicated-P1-1",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Dedicated-P1-2",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Dedicated-P1-3",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Dedicated-P1-4",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "JP-Dedicated-P1-1",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "JP-Dedicated-P1-2",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "JP-Dedicated-P1-3",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "JP-Dedicated-P1-4",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "US-X1-1",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-X1-2",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-X1-3",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-X1-4",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "JP-X5-1",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "JP-X5-2",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "JP-X5-3",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "JP-X5-4",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "TW-X1-1",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-X1-2",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-X1-3",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "TW-X1-4",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "SG-X5-1",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "SG-X5-2",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "SG-X5-3",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "SG-X5-4",
+      "expected_territory_code": "SG",
+      "information_node": false
+    }
+  ]
+}

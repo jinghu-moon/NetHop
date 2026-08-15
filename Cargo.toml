@@ -7,6 +7,7 @@ members = [
     "crates/nethop-subscription",
     "crates/nethopctl",
     "crates/nethopd",
+    "tools/territory-generator",
 ]
 exclude = ["crates/nethop-subscription/fuzz"]
 

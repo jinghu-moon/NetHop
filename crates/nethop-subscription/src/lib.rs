@@ -24,6 +24,7 @@ pub mod singbox_json;
 pub mod source_url;
 #[cfg(feature = "format-surfboard")]
 pub mod surfboard;
+pub mod territory;
 pub mod uri;
 
 pub use adapter::{AdapterNodeResult, AdapterOutput};
@@ -95,6 +96,10 @@ pub use singbox_json::{SingboxJsonError, parse_singbox_json};
 pub use source_url::{SourceUrlError, validate_source_url};
 #[cfg(feature = "format-surfboard")]
 pub use surfboard::{SurfboardIniError, parse_surfboard_ini};
+pub use territory::{
+    DisplayTerritoryCode, InvalidTerritoryCode, TerritoryRecord, infer_display_territory,
+    territories, territory_by_alpha2, territory_by_alpha3,
+};
 pub use uri::{
     UriContainerError, UriNodeCandidate, UriNodeResult, UriQueryParameter, UriScheme,
     decode_vmess_inner_json, parse_uri_line, parse_uri_list, percent_decode_field,

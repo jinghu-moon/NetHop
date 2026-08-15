@@ -1,0 +1,228 @@
+{
+  "schema": "nethop-territory-name-fixture-v1",
+  "sample_id": "magic-ring",
+  "source_sha256": "c68dcaf9c2d2cf4dcb8a7cdee13693b9d356468f4d592b5c8d89a27a032df647",
+  "format": "clash_yaml",
+  "nodes": [
+    {
+      "name": "剩余流量：388.64 GB",
+      "expected_territory_code": null,
+      "information_node": true
+    },
+    {
+      "name": "套餐到期：长期有效",
+      "expected_territory_code": null,
+      "information_node": true
+    },
+    {
+      "name": "日本JP-A",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "日本JP-HY2",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "日本-优化",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "日本-优化2",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "日本-优化3",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "新加坡SG-HY2",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "新加坡SG-A-Gemini",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "新加坡-优化-Gemini-GPT",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "新加坡-优化2-Gemini-GPT",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "新加坡-优化3-Gemini",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "香港HK-A-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港HKT-A",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港HK-HY2",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港-优化-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港-优化2-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港-优化3-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港WAP-优化-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港WAP-优化2-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "香港WAP-优化3-Gemini",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "韩国KR-HY2",
+      "expected_territory_code": "KR",
+      "information_node": false
+    },
+    {
+      "name": "印度-优化",
+      "expected_territory_code": "IN",
+      "information_node": false
+    },
+    {
+      "name": "台湾-优化",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "台湾-优化2-GPT",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "台湾-优化3",
+      "expected_territory_code": "TW",
+      "information_node": false
+    },
+    {
+      "name": "美国USLA-A",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "美国LA-优化-GPT",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "美国LA-优化2-GPT",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "美国LA-优化3-GPT",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "加拿大-优化",
+      "expected_territory_code": "CA",
+      "information_node": false
+    },
+    {
+      "name": "加拿大-优化2",
+      "expected_territory_code": "CA",
+      "information_node": false
+    },
+    {
+      "name": "加拿大-优化3",
+      "expected_territory_code": "CA",
+      "information_node": false
+    },
+    {
+      "name": "法国FR-A",
+      "expected_territory_code": "FR",
+      "information_node": false
+    },
+    {
+      "name": "德国-优化",
+      "expected_territory_code": "DE",
+      "information_node": false
+    },
+    {
+      "name": "德国-优化2",
+      "expected_territory_code": "DE",
+      "information_node": false
+    },
+    {
+      "name": "英国-优化-GPT",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "英国-优化2",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "英国-优化3",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "越南VN-A",
+      "expected_territory_code": "VN",
+      "information_node": false
+    },
+    {
+      "name": "俄罗斯RU-A",
+      "expected_territory_code": "RU",
+      "information_node": false
+    },
+    {
+      "name": "乌克兰UA-A",
+      "expected_territory_code": "UA",
+      "information_node": false
+    },
+    {
+      "name": "土耳其TR-A",
+      "expected_territory_code": "TR",
+      "information_node": false
+    },
+    {
+      "name": "尼日利亚NG-A",
+      "expected_territory_code": "NG",
+      "information_node": false
+    }
+  ]
+}

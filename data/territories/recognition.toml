@@ -1,0 +1,52 @@
+schema = "nethop-territory-recognition-v1"
+
+[[territories]]
+code = "GB"
+code_aliases = ["UK"]
+english_aliases = ["Britain", "Great Britain"]
+chinese_aliases = ["英國"]
+
+[[territories]]
+code = "US"
+english_aliases = ["United States of America", "America"]
+chinese_aliases = ["美利坚合众国", "美國"]
+
+[[territories]]
+code = "CN"
+english_aliases = ["Mainland China", "China Mainland"]
+chinese_aliases = ["中国大陆", "中國大陸", "中國"]
+
+[[territories]]
+code = "HK"
+english_aliases = ["Hongkong"]
+chinese_aliases = ["香港", "香港特区", "香港特別行政區"]
+
+[[territories]]
+code = "TW"
+chinese_aliases = ["台灣"]
+
+[[territories]]
+code = "MO"
+english_aliases = ["Macao"]
+chinese_aliases = ["澳门", "澳門"]
+
+[[territories]]
+code = "KR"
+english_aliases = ["Republic of Korea"]
+chinese_aliases = ["韓國", "南韩", "南韓"]
+
+[[territories]]
+code = "KP"
+chinese_aliases = ["北韓"]
+
+[[territories]]
+code = "JP"
+chinese_aliases = ["日本国"]
+
+[[territories]]
+code = "RU"
+chinese_aliases = ["俄羅斯"]
+
+[[territories]]
+code = "VN"
+english_aliases = ["Viet Nam"]

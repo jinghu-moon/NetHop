@@ -1,0 +1,8 @@
+schema = "nethop-territory-identity-supplements-v1"
+
+# UN M49 does not publish an alpha-code row for Taiwan. This explicit entry is
+# checked against CLDR 48.2 codeMappings and canonical locale names.
+[[territories]]
+code = "TW"
+alpha3 = "TWN"
+source_id = "cldr-code-mappings"

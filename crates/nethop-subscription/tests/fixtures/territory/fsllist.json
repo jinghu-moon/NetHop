@@ -1,0 +1,263 @@
+{
+  "schema": "nethop-territory-name-fixture-v1",
+  "sample_id": "fsllist",
+  "source_sha256": "ccf80ff917a7ccfbb2ace6b90ee15d2ef84ff87c52c029a786cfe7137c7e4d8d",
+  "format": "clash_yaml",
+  "nodes": [
+    {
+      "name": "GB-Canary Wharf-51415624-gtdc",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "US-New York-6146591-ggbs",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "IN-Mumbai-720275-glbx",
+      "expected_territory_code": "IN",
+      "information_node": false
+    },
+    {
+      "name": "JP-Minamishinagawa-3175981-gvsl",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-435916-gtvs",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394922-ggbb",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "RO-Bucharest-3176843-gvtb",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "HK-Hong Kong-239984-glxs",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "US-Santa Clara-311019217-gtlc",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-San Jose-2151714-gtvt",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-81993520-ggll",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-New York-6146593-gvlc",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Seattle-41682158-gltb",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-San Jose-24713719-gvsb",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-22493624-gvcj",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "JP-Tokyo-1825022-gvjb",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "ID-Surabaya-62371118-glxd",
+      "expected_territory_code": "ID",
+      "information_node": false
+    },
+    {
+      "name": "GB-Canary Wharf-51415624-ggvv",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "JP-Minamishinagawa-3175981-glxx",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-435915-gtlb",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394921-ggbt",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "NL-Amsterdam-7717010-gljx",
+      "expected_territory_code": "NL",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-435920-gtvb",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394916-gglj",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "NL-Haarlem-15922519-ggvt",
+      "expected_territory_code": "NL",
+      "information_node": false
+    },
+    {
+      "name": "US-Chicago-5211994-glld",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394923-ggtc",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "GB-London-721722222-gvsg",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-2249363-gvcx",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "NL-Amsterdam-124521715-gltl",
+      "expected_territory_code": "NL",
+      "information_node": false
+    },
+    {
+      "name": "SG-Singapore-884214-gvcd",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "US-Phoenix-91465724-glvd",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "GB-Canary Wharf-51415624-gvbs",
+      "expected_territory_code": "GB",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-239495-gggj",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "SG-Singapore-82531205-gtgd",
+      "expected_territory_code": "SG",
+      "information_node": false
+    },
+    {
+      "name": "HK-Tsuen Wan-285532-glxl",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "US-Los Angeles-81993520-ggcg",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "RO-Bucharest-3176841-gggd",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "JP-Tokyo-1372379-gvxs",
+      "expected_territory_code": "JP",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394919-ggcc",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "HK-Hong Kong-4010012-gvjc",
+      "expected_territory_code": "HK",
+      "information_node": false
+    },
+    {
+      "name": "US-New York-6146593-glgg",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "NL-Amsterdam-85247-gtdl",
+      "expected_territory_code": "NL",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394919-ggbc",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "US-Phoenix-71316025-gtxx",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "US-New York-544661-gtjv",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2391414-gglb",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "US-New York-6146592-gbxt",
+      "expected_territory_code": "US",
+      "information_node": false
+    },
+    {
+      "name": "FR-Paris-23725015-gllx",
+      "expected_territory_code": "FR",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394924-glcl",
+      "expected_territory_code": "RO",
+      "information_node": false
+    },
+    {
+      "name": "RO-Voluntari-2394921-ggtl",
+      "expected_territory_code": "RO",
+      "information_node": false
+    }
+  ]
+}
