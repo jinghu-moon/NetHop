@@ -41,6 +41,8 @@ captures/
 *.apks
 *.jks
 *.keystore
+companion/local.properties
+companion/.kotlin/
 
 # JavaScript / web build output
 node_modules/
@@ -94,6 +96,9 @@ out/android-arm64/
 # Reproducible WebUI release reports and device-local evidence.
 # CI and module builds regenerate these from the lockfile and production bundle.
 artifacts/webui/
+
+# Machine-local Companion gate and device evidence.
+artifacts/companion/
 
 # Local node benchmark evidence is valid only when regenerated from a clean
 # revision with the required Android release gates.

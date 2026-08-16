@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "control_protocol_version": 5,
+  "status_document_schema_version": 1,
+  "webui_host_kinds": [
+    "apatch",
+    "browser",
+    "kernelsu"
+  ],
+  "typed_operations": [
+    "service.start",
+    "service.stop",
+    "status.get"
+  ],
+  "module_contains_companion": false
+}

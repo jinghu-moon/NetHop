@@ -4,6 +4,8 @@ DATA_ROOT=/data/adb/nethop
 CONFIG_SCHEMA_VERSION=3
 CHECKSUMS="$MODPATH/checksums.sha256"
 BUILD_MANIFEST="$MODPATH/build-manifest.json"
+COMPANION_APK="$MODPATH/companion/nethop-companion.apk"
+COMPANION_PACKAGE=com.jinghumoon.nethop.companion
 
 fail() {
   abort "! NetHop: $1"
@@ -66,6 +68,79 @@ publish_persistent_asset() {
   mv -f "$temporary" "$destination" || fail "could not publish persistent asset: ${destination##*/}"
 }
 
+read_volume_key_once() {
+  if command -v timeout >/dev/null 2>&1; then
+    key_event=$(timeout 1 getevent -qlc 1 2>/dev/null)
+  elif command -v busybox >/dev/null 2>&1; then
+    key_event=$(busybox timeout 1 getevent -qlc 1 2>/dev/null)
+  else
+    sleep 1
+    key_event=
+  fi
+  case "$key_event" in
+    *KEY_VOLUMEUP*DOWN*) COMPANION_CHOICE=install ;;
+    *KEY_VOLUMEDOWN*DOWN*) COMPANION_CHOICE=skip ;;
+  esac
+}
+
+wait_companion_choice() {
+  COMPANION_CHOICE=timeout
+  remaining=10
+  while [ "$remaining" -gt 0 ]; do
+    if [ "${NETHOP_INSTALLER_LINE_MODE:-0}" = 1 ]; then
+      ui_print "- Waiting for input: $remaining seconds"
+    else
+      printf '\r- Waiting for input: %2d seconds' "$remaining"
+    fi
+    COMPANION_CHOICE=
+    read_volume_key_once
+    [ -z "$COMPANION_CHOICE" ] || break
+    remaining=$((remaining - 1))
+  done
+  if [ -z "$COMPANION_CHOICE" ]; then
+    COMPANION_CHOICE=timeout
+  fi
+  if [ "${NETHOP_INSTALLER_LINE_MODE:-0}" = 1 ]; then
+    ui_print "- Waiting for input: 0 seconds"
+  else
+    printf '\r- Waiting for input:  0 seconds\n'
+  fi
+}
+
+companion_installed() {
+  command -v pm >/dev/null 2>&1 && pm path --user 0 "$COMPANION_PACKAGE" >/dev/null 2>&1
+}
+
+install_companion() {
+  if ! command -v pm >/dev/null 2>&1; then
+    ui_print "! NetHop Companion skipped: PackageManager unavailable"
+    return
+  fi
+  if pm install -r --user 0 "$COMPANION_APK" >/dev/null 2>&1 && companion_installed; then
+    ui_print "- NetHop Companion installed"
+  else
+    ui_print "! NetHop Companion installation failed; NetHop module remains installed"
+  fi
+}
+
+handle_companion_install() {
+  if companion_installed; then
+    ui_print "- Updating installed NetHop Companion"
+    install_companion
+  else
+    ui_print "- Install NetHop Quick Settings Tile?"
+    ui_print "  [Volume +] Install"
+    ui_print "  [Volume -] Skip"
+    wait_companion_choice
+    if [ "$COMPANION_CHOICE" = install ]; then
+      install_companion
+    else
+      ui_print "- NetHop Companion skipped"
+    fi
+  fi
+  rm -f "$COMPANION_APK" >/dev/null 2>&1 || ui_print "! NetHop Companion staging APK could not be removed"
+}
+
 [ "${API:-0}" -ge 33 ] || fail "Android API 33 or later is required"
 [ "${ARCH:-}" = "arm64" ] || fail "only arm64 is supported"
 if [ -z "${MAGISK_VER_CODE:-}" ] && [ -z "${KSU_VER_CODE:-}" ] && [ "${KSU:-false}" != "true" ]; then
@@ -78,7 +153,7 @@ checksum_count=$(wc -l < "$CHECKSUMS" | tr -d ' ')
 while read -r digest relative extra; do
   [ -n "$digest" ] && [ -n "$relative" ] && [ -z "$extra" ] || fail "invalid checksum entry"
   case "$relative" in
-    bin/nethopd|bin/nethopctl|bin/sing-box|rulesets/cn-domain.srs|rulesets/cn-ip.srs|build-manifest.json|licenses/Unicode-3.0.txt|licenses/country-flag-icons-MIT.txt|licenses/webui-sbom.cdx.json|licenses/webui-licenses.json|licenses/webui-production-bundle.json|licenses/webui-bundle-metafile.json|webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*)
+    bin/nethopd|bin/nethopctl|bin/sing-box|companion/nethop-companion.apk|rulesets/cn-domain.srs|rulesets/cn-ip.srs|build-manifest.json|licenses/Unicode-3.0.txt|licenses/country-flag-icons-MIT.txt|licenses/webui-sbom.cdx.json|licenses/webui-licenses.json|licenses/webui-production-bundle.json|licenses/webui-bundle-metafile.json|licenses/webui-asset-manifest.json|licenses/companion-sbom.cdx.json|licenses/companion-licenses.json|licenses/companion-provenance.json|webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*)
       verify_asset "$relative"
       ;;
     *) fail "unexpected checksum target: $relative" ;;
@@ -148,3 +223,4 @@ set_perm "$BUILD_MANIFEST" 0 0 0644
 set_perm "$CHECKSUMS" 0 0 0644
 
 ui_print "- NetHop package integrity and persistent layout verified"
+handle_companion_install

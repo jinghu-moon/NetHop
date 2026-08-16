@@ -3,6 +3,7 @@ param(
     [string]$SingBoxSource = "refer/sing-box-v1.13.15",
     [string]$SingBoxArchive,
     [string]$NdkVersion = "29.0.14206865",
+    [string]$BuildToolsVersion = "36.0.0",
     [string]$OutputDirectory = "out/android-arm64",
     [switch]$AllowGoVersionMismatch
 )
@@ -12,6 +13,7 @@ $workspace = Split-Path -Parent $PSScriptRoot
 $mappingPath = Join-Path $workspace "crates/nethop-subscription/manifests/sing-box-1.13.15-mapping.json"
 $moduleTemplate = Join-Path $workspace "module"
 $webui = Join-Path $workspace "webui"
+$companion = Join-Path $workspace "companion"
 $outputRoot = [IO.Path]::GetFullPath((Join-Path $workspace $OutputDirectory))
 $workspaceRoot = [IO.Path]::GetFullPath($workspace).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $outputRoot.StartsWith($workspaceRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -23,6 +25,7 @@ $clang = Join-Path $ndk "bin/aarch64-linux-android23-clang.cmd"
 $clangxx = Join-Path $ndk "bin/aarch64-linux-android23-clang++.cmd"
 $ar = Join-Path $ndk "bin/llvm-ar.exe"
 $readelf = Join-Path $ndk "bin/llvm-readelf.exe"
+$apksigner = Join-Path $env:LOCALAPPDATA "Android/Sdk/build-tools/$BuildToolsVersion/apksigner.bat"
 $target = "aarch64-linux-android"
 
 function Invoke-Checked {
@@ -72,7 +75,7 @@ function Get-TreeSha256 {
     [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
-foreach ($required in @($mappingPath, $moduleTemplate, (Join-Path $webui "package.json"), (Join-Path $webui "package-lock.json"), $clang, $clangxx, $ar, $readelf)) {
+foreach ($required in @($mappingPath, $moduleTemplate, (Join-Path $webui "package.json"), (Join-Path $webui "package-lock.json"), (Join-Path $companion "gradlew.bat"), $clang, $clangxx, $ar, $readelf, $apksigner)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "required build input is missing: $required"
     }
@@ -93,11 +96,36 @@ $webuiSourceSha256 = Get-TreeSha256 -Paths @(
 ) -Root $workspace
 $webuiPackage = Get-Content -LiteralPath (Join-Path $webui "package.json") -Raw | ConvertFrom-Json
 $webuiArtifactRoot = Join-Path $workspace "artifacts/webui"
-foreach ($requiredArtifact in @("production-bundle.json", "bundle-metafile.json", "webui-sbom.cdx.json", "webui-licenses.json")) {
+foreach ($requiredArtifact in @("production-bundle.json", "bundle-metafile.json", "webui-sbom.cdx.json", "webui-licenses.json", "webui-asset-manifest.json")) {
     if (-not (Test-Path -LiteralPath (Join-Path $webuiArtifactRoot $requiredArtifact) -PathType Leaf)) {
         throw "WebUI release artifact is missing: $requiredArtifact"
     }
 }
+$releaseSigningConfigured = @(
+    $env:NETHOP_COMPANION_KEYSTORE_PATH,
+    $env:NETHOP_COMPANION_KEYSTORE_PASSWORD,
+    $env:NETHOP_COMPANION_KEY_ALIAS,
+    $env:NETHOP_COMPANION_KEY_PASSWORD
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+$companionPublishable = $releaseSigningConfigured.Count -eq 4
+Invoke-Checked (Join-Path $companion "gradlew.bat") @(
+    "--no-configuration-cache",
+    "testDebugUnitTest",
+    "assembleDebugAndroidTest",
+    "lintRelease",
+    "assembleRelease",
+    "writeReleaseRuntimeComponents"
+) $companion
+$companionApkSource = Join-Path $companion "app/build/outputs/apk/release/app-release.apk"
+if (-not (Test-Path -LiteralPath $companionApkSource -PathType Leaf)) {
+    throw "Companion release APK was not produced"
+}
+Invoke-Checked $apksigner @("verify", "--verbose", $companionApkSource)
+$companionRuntimeComponentsPath = Join-Path $companion "app/build/reports/release-runtime-components.txt"
+if (-not (Test-Path -LiteralPath $companionRuntimeComponentsPath -PathType Leaf)) {
+    throw "Companion runtime component inventory was not produced"
+}
+$companionAssetManifest = Get-Content -LiteralPath (Join-Path $webuiArtifactRoot "webui-asset-manifest.json") -Raw | ConvertFrom-Json
 
 $singBoxSourcePath = (Resolve-Path -LiteralPath (Join-Path $workspace $SingBoxSource)).Path
 $mapping = Get-Content -LiteralPath $mappingPath -Raw | ConvertFrom-Json
@@ -139,7 +167,9 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 Copy-Item -Path (Join-Path $moduleTemplate "*") -Destination $stage -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $stage "bin") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stage "licenses") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stage "companion") -Force | Out-Null
 Get-ChildItem -LiteralPath $stage -Recurse -Force -Filter ".gitkeep" | Remove-Item -Force
+Copy-Item -LiteralPath $companionApkSource -Destination (Join-Path $stage "companion/nethop-companion.apk")
 
 $env:CC_aarch64_linux_android = $clang
 $env:CXX_aarch64_linux_android = $clangxx
@@ -244,6 +274,78 @@ Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-sbom.cdx.json") -Des
 Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-licenses.json") -Destination (Join-Path $stage "licenses/webui-licenses.json")
 Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "production-bundle.json") -Destination (Join-Path $stage "licenses/webui-production-bundle.json")
 Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "bundle-metafile.json") -Destination (Join-Path $stage "licenses/webui-bundle-metafile.json")
+Copy-Item -LiteralPath (Join-Path $webuiArtifactRoot "webui-asset-manifest.json") -Destination (Join-Path $stage "licenses/webui-asset-manifest.json")
+
+$companionApkPath = Join-Path $stage "companion/nethop-companion.apk"
+$companionApkSha256 = Get-Sha256 $companionApkPath
+$companionRuntimeComponents = @(
+    Get-Content -LiteralPath $companionRuntimeComponentsPath | Where-Object { $_ } | ForEach-Object {
+        $parts = $_ -split ':', 3
+        if ($parts.Count -ne 3) {
+            throw "invalid Companion runtime component: $_"
+        }
+        [ordered]@{
+            group = $parts[0]
+            name = $parts[1]
+            version = $parts[2]
+            purl = "pkg:maven/$($parts[0])/$($parts[1])@$($parts[2])"
+            license = "Apache-2.0"
+        }
+    }
+)
+$companionLicensesPath = Join-Path $stage "licenses/companion-licenses.json"
+[ordered]@{
+    schema = "nethop.companion.licenses.v1"
+    generated_from = "companion/gradle/libs.versions.toml"
+    components = @($companionRuntimeComponents)
+} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $companionLicensesPath -Encoding utf8NoBOM
+$companionSbomPath = Join-Path $stage "licenses/companion-sbom.cdx.json"
+[ordered]@{
+    bomFormat = "CycloneDX"
+    specVersion = "1.5"
+    version = 1
+    metadata = [ordered]@{
+        component = [ordered]@{
+            type = "application"
+            name = "nethop-companion"
+            version = "0.1.0"
+            hashes = @([ordered]@{ alg = "SHA-256"; content = $companionApkSha256 })
+        }
+    }
+    components = @($companionRuntimeComponents | ForEach-Object {
+        [ordered]@{
+            type = "library"
+            group = $_.group
+            name = $_.name
+            version = $_.version
+            purl = $_.purl
+            licenses = @([ordered]@{ license = [ordered]@{ id = $_.license } })
+        }
+    })
+} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $companionSbomPath -Encoding utf8NoBOM
+$companionProvenancePath = Join-Path $stage "licenses/companion-provenance.json"
+[ordered]@{
+    schema = "nethop.companion.provenance.v1"
+    package = "com.jinghumoon.nethop.companion"
+    variant = "release"
+    publishable = $companionPublishable
+    apk_sha256 = $companionApkSha256
+    webui_identity_sha256 = $companionAssetManifest.identity_sha256
+    daemon_protocol_min = 5
+    daemon_protocol_max = 5
+    toolchain = [ordered]@{
+        gradle = "9.5.0"
+        agp = "9.3.1"
+        kotlin = "2.4.0"
+        jdk = "21"
+        android_compile_sdk = 36
+        android_build_tools = $BuildToolsVersion
+    }
+    upstream = @(
+        [ordered]@{ name = "libsu"; version = "6.0.0"; source = "https://github.com/topjohnwu/libsu"; license = "Apache-2.0" },
+        [ordered]@{ name = "androidx.webkit"; version = "1.17.0"; source = "https://android.googlesource.com/platform/frameworks/support"; license = "Apache-2.0" }
+    )
+} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $companionProvenancePath -Encoding utf8NoBOM
 
 $binaryRecords = foreach ($binary in @("nethopd", "nethopctl", "sing-box")) {
     $path = Join-Path $stage "bin/$binary"
@@ -276,6 +378,27 @@ $webuiMetadataRecords = Get-ChildItem -LiteralPath (Join-Path $stage "licenses")
         bytes = $_.Length
         sha256 = Get-Sha256 $_.FullName
     }
+}
+$companionRecords = @(
+    [ordered]@{
+        path = "companion/nethop-companion.apk"
+        bytes = (Get-Item -LiteralPath $companionApkPath).Length
+        sha256 = $companionApkSha256
+    }
+)
+foreach ($path in @($companionSbomPath, $companionLicensesPath, $companionProvenancePath)) {
+    $companionRecords += [ordered]@{
+        path = [IO.Path]::GetRelativePath($stage, $path).Replace('\', '/')
+        bytes = (Get-Item -LiteralPath $path).Length
+        sha256 = Get-Sha256 $path
+    }
+}
+[long]$companionIncrementBytes = 0
+foreach ($record in $companionRecords) {
+    $companionIncrementBytes += [long]$record.bytes
+}
+if ($companionIncrementBytes -gt 3MB) {
+    throw "Companion module increment exceeds 3 MiB: $companionIncrementBytes"
 }
 $manifest = [ordered]@{
     schema = "nethop.android-build.v1"
@@ -314,6 +437,20 @@ $manifest = [ordered]@{
         assets = @($webuiRecords)
         release_metadata = @($webuiMetadataRecords)
     }
+    companion = [ordered]@{
+        package = "com.jinghumoon.nethop.companion"
+        variant = "release"
+        publishable = $companionPublishable
+        version_code = 1
+        version_name = "0.1.0"
+        daemon_protocol_min = 5
+        daemon_protocol_max = 5
+        webui_identity_sha256 = $companionAssetManifest.identity_sha256
+        apk = $companionRecords[0]
+        release_metadata = @($companionRecords | Select-Object -Skip 1)
+        runtime_components = @($companionRuntimeComponents)
+        module_increment_bytes = $companionIncrementBytes
+    }
 }
 $manifestPath = Join-Path $stage "build-manifest.json"
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
@@ -322,6 +459,7 @@ $checksumEntries = @($binaryRecords | ForEach-Object { "$($_.sha256)  $($_.path)
 $checksumEntries += @($ruleSetRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
 $checksumEntries += @($webuiRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
 $checksumEntries += @($webuiMetadataRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
+$checksumEntries += @($companionRecords | ForEach-Object { "$($_.sha256)  $($_.path)" })
 $checksumEntries += "$(Get-Sha256 $manifestPath)  build-manifest.json"
 $checksumPath = Join-Path $stage "checksums.sha256"
 [IO.File]::WriteAllText($checksumPath, (($checksumEntries -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
@@ -341,6 +479,7 @@ foreach ($entry in $checksumEntries) {
 
 Invoke-Checked pwsh @("-NoProfile", "-File", (Join-Path $workspace "scripts/module-contracts.ps1"))
 Invoke-Checked pwsh @("-NoProfile", "-File", (Join-Path $workspace "scripts/fake-magisk-smoke.ps1"))
+Invoke-Checked pwsh @("-NoProfile", "-File", (Join-Path $workspace "scripts/companion-installer-contracts.ps1"))
 
 $zipPath = Join-Path $outputRoot "NetHop-$rustCommit-arm64.zip"
 $archiveInputs = Get-ChildItem -LiteralPath $stage -Force | ForEach-Object { $_.FullName }
@@ -349,15 +488,19 @@ $archiveListing = & tar -tf $zipPath
 if ($LASTEXITCODE -ne 0 -or $archiveListing -contains ".gitkeep") {
     throw "module archive layout is invalid"
 }
-foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs", "webroot/index.html", "licenses/Unicode-3.0.txt", "licenses/country-flag-icons-MIT.txt", "licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
-    if ($archiveListing -notcontains $required) {
-        throw "module archive is missing: $required"
+foreach ($required in @("module.prop", "customize.sh", "service.sh", "action.sh", "uninstall.sh", "build-manifest.json", "checksums.sha256", "bin/nethopd", "bin/nethopctl", "bin/sing-box", "companion/nethop-companion.apk", "rulesets/cn-domain.srs", "rulesets/cn-ip.srs", "webroot/index.html", "licenses/Unicode-3.0.txt", "licenses/country-flag-icons-MIT.txt", "licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json", "licenses/webui-asset-manifest.json", "licenses/companion-sbom.cdx.json", "licenses/companion-licenses.json", "licenses/companion-provenance.json")) {
+    if (@($archiveListing | Where-Object { $_ -ceq $required }).Count -ne 1) {
+        throw "module archive entry must occur exactly once: $required"
     }
+}
+if (@($archiveListing | Where-Object { $_ -match '(?i)\.apk$' }).Count -ne 1) {
+    throw "module archive must contain exactly one APK"
 }
 $summary = [ordered]@{
     module_zip = $zipPath
     module_zip_sha256 = Get-Sha256 $zipPath
     module_bytes = (Get-Item -LiteralPath $zipPath).Length
+    companion_increment_bytes = $companionIncrementBytes
     reproducible = $manifest.reproducible
 }
 $summary | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot "package-summary.json") -Encoding utf8NoBOM

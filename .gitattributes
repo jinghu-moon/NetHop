@@ -1,4 +1,7 @@
 module/*.sh text eol=lf
 module/defaults/*.json text eol=lf
 module/module.prop text eol=lf
-
+companion/gradlew text eol=lf
+companion/gradlew.bat text eol=crlf
+companion/**/*.gradle.kts text eol=lf
+companion/**/*.xml text eol=lf

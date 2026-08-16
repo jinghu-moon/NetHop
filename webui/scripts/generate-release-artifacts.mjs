@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve } from "node:path";
 
 const projectRoot = resolve(new URL("..", import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, (value) => value.slice(1)));
 const workspace = resolve(projectRoot, "..");
 const webroot = resolve(workspace, "module/webroot");
 const artifactRoot = resolve(workspace, "artifacts/webui");
+const companionManifest = resolve(workspace, "companion/app/src/main/assets/webui-asset-manifest.json");
 const lock = JSON.parse(await readFile(join(projectRoot, "package-lock.json"), "utf8"));
 const packageJson = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8"));
 const metafile = JSON.parse(await readFile(join(artifactRoot, "bundle-metafile.json"), "utf8"));
@@ -23,6 +24,24 @@ async function walk(directory) {
 
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+const mimeByExtension = new Map([
+  [".html", "text/html"],
+  [".js", "text/javascript"],
+  [".css", "text/css"],
+  [".json", "application/json"],
+  [".svg", "image/svg+xml"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+  [".ico", "image/x-icon"],
+  [".woff2", "font/woff2"],
+]);
+
+function assetMime(path) {
+  const mime = mimeByExtension.get(extname(path).toLowerCase());
+  if (!mime) throw new Error(`unsupported WebUI asset MIME: ${path}`);
+  return mime;
 }
 
 function packageName(path) {
@@ -46,10 +65,31 @@ for (const path of await walk(webroot)) {
     path: name,
     bytes: (await stat(path)).size,
     sha256: sha256(content),
+    mime: assetMime(name),
     ...(name.endsWith(".js") || name.endsWith(".css") ? { gzip_bytes: gzipSync(content, { level: 9 }).length } : {}),
   });
 }
-assets.sort((left, right) => left.path.localeCompare(right.path));
+assets.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+
+const manifestAssets = assets.map(({ path, bytes, sha256: digest, mime }) => ({ path, bytes, sha256: digest, mime }));
+const manifestIdentityInput = JSON.stringify({
+  schema: "nethop.webui.asset-manifest.v1",
+  origin: "https://appassets.androidplatform.net",
+  root_path: "/nethop/",
+  assets: manifestAssets,
+});
+const assetManifest = {
+  schema: "nethop.webui.asset-manifest.v1",
+  origin: "https://appassets.androidplatform.net",
+  root_path: "/nethop/",
+  identity_sha256: sha256(manifestIdentityInput),
+  assets: manifestAssets,
+};
+const assetManifestBytes = `${JSON.stringify(assetManifest, null, 2)}\n`;
+const assetManifestPath = join(artifactRoot, "webui-asset-manifest.json");
+await writeFile(assetManifestPath, assetManifestBytes);
+await mkdir(resolve(companionManifest, ".."), { recursive: true });
+await writeFile(companionManifest, assetManifestBytes);
 
 const moduleBytes = new Map();
 for (const chunk of metafile.chunks) {
@@ -149,7 +189,7 @@ const licenses = {
 const licensesPath = join(artifactRoot, "webui-licenses.json");
 await writeFile(licensesPath, `${JSON.stringify(licenses, null, 2)}\n`);
 
-const checksumPaths = [bundlePath, join(artifactRoot, "bundle-metafile.json"), sbomPath, licensesPath];
+const checksumPaths = [bundlePath, join(artifactRoot, "bundle-metafile.json"), sbomPath, licensesPath, assetManifestPath];
 const checksums = [];
 for (const path of checksumPaths) checksums.push(`${sha256(await readFile(path))}  ${basename(path)}`);
 await writeFile(join(artifactRoot, "checksums.sha256"), `${checksums.join("\n")}\n`, "ascii");

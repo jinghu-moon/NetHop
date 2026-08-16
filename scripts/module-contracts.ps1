@@ -64,9 +64,22 @@ foreach ($asset in @("bin/nethopd", "bin/nethopctl", "bin/sing-box", "rulesets/c
 }
 Assert-True ($customize.Contains('verify_asset "$relative"')) "installer does not verify each allowed checksum target"
 Assert-True ($customize.Contains('webroot/index.html|webroot/.vite/manifest.json|webroot/assets/*')) "installer does not constrain WebUI checksum targets"
-foreach ($asset in @("licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json")) {
+foreach ($asset in @("licenses/webui-sbom.cdx.json", "licenses/webui-licenses.json", "licenses/webui-production-bundle.json", "licenses/webui-bundle-metafile.json", "licenses/webui-asset-manifest.json")) {
     Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits $asset"
 }
+foreach ($asset in @("companion/nethop-companion.apk", "licenses/companion-sbom.cdx.json", "licenses/companion-licenses.json", "licenses/companion-provenance.json")) {
+    Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits $asset"
+    Assert-True ($buildScript.Contains($asset)) "build does not package $asset"
+}
+Assert-True ($customize.Contains("remaining=10")) "Companion prompt does not start at 10 seconds"
+Assert-True ($customize.Contains('remaining=$((remaining - 1))')) "Companion prompt does not count down"
+Assert-True ($customize.Contains("printf '\r- Waiting for input: %2d seconds'")) "Companion prompt does not prefer carriage-return refresh"
+Assert-True ($customize.Contains("timeout 1 getevent -qlc 1")) "Companion key read is not bounded to one second"
+Assert-True ($customize.Contains("*KEY_VOLUMEUP*DOWN*")) "Companion installer does not require Volume+ key-down"
+Assert-True ($customize.Contains("*KEY_VOLUMEDOWN*DOWN*")) "Companion installer does not require Volume- key-down"
+Assert-True ($customize.Contains('pm install -r --user 0 "$COMPANION_APK"')) "Companion installer does not use user-0 replacement"
+Assert-True ($customize.Contains('if companion_installed; then')) "Companion installer does not update an existing package"
+Assert-True ($customize.Contains('rm -f "$COMPANION_APK"')) "Companion staging APK is not removed"
 foreach ($asset in @("licenses/Unicode-3.0.txt", "licenses/country-flag-icons-MIT.txt")) {
     Assert-True ($customize.Contains($asset)) "installer checksum allowlist omits territory license $asset"
     Assert-True ($buildScript.Contains($asset.Substring("licenses/".Length))) "build does not package territory license $asset"
@@ -95,6 +108,14 @@ Assert-True ($buildScript.Contains('scripts/fake-magisk-smoke.ps1')) "build does
 Assert-True ($buildScript.Contains('[IO.File]::WriteAllText($checksumPath, (($checksumEntries -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))')) "build does not force an LF-only checksum manifest"
 Assert-True ($buildScript.Contains('$checksumBytes.Contains([byte]0x0D)')) "build does not reject CR bytes in the checksum manifest"
 Assert-True ($buildScript.Contains('$checksumBytes[0] -eq 0xEF')) "build does not reject a UTF-8 BOM in the checksum manifest"
+Assert-True ($buildScript.Contains('"lintRelease"')) "module build does not run Companion release lint"
+Assert-True ($buildScript.Contains('"assembleRelease"')) "module build does not create the minified Companion APK"
+Assert-True ($buildScript.Contains('"assembleDebugAndroidTest"')) "module build does not compile Companion instrumentation tests"
+Assert-True ($buildScript.Contains('apksigner')) "module build does not verify Companion signing"
+Assert-True ($buildScript.Contains('webui_identity_sha256')) "module manifest does not bind Companion to the WebUI identity"
+Assert-True ($buildScript.Contains('$companionIncrementBytes -gt 3MB')) "module build does not enforce the Companion ZIP increment budget"
+Assert-True ($buildScript.Contains('module archive entry must occur exactly once')) "module build does not reject duplicate release entries"
+Assert-True ($buildScript.Contains('module archive must contain exactly one APK')) "module build does not reject extra APK payloads"
 
 $action = Get-Content -LiteralPath (Join-Path $module "action.sh") -Raw
 Assert-True ($action.Contains('"$CTL" config reload')) "action does not force a config reload"
@@ -106,6 +127,7 @@ $uninstall = Get-Content -LiteralPath (Join-Path $module "uninstall.sh") -Raw
 Assert-True ($uninstall.Contains('stat_fields=${stat_line##*) }')) "uninstaller does not isolate proc stat fields"
 Assert-True ($uninstall.Contains("awk '{print `$20}'")) "uninstaller does not verify process start time"
 Assert-True ($uninstall.Contains('rm -rf "$DATA_ROOT"')) "uninstaller does not remove the exact persistent root"
+Assert-True (-not $uninstall.Contains("pm uninstall")) "module uninstall must not uninstall Companion"
 
 $allShell = Get-ChildItem -LiteralPath $module -Filter "*.sh" | ForEach-Object {
     Get-Content -LiteralPath $_.FullName -Raw
