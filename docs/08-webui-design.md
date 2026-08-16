@@ -591,7 +591,7 @@ backoff
 
 - 通过 KernelSU/APatch API 获取包名和应用信息；
 - 用户应用优先，系统应用单独筛选；
-- 应用图标使用宿主 `ksu://icon/<package>` 能力，失败显示 Tabler 占位图标；
+- 应用图标按 [`19-webui-application-icon-acquisition-and-display-design.md`](./19-webui-application-icon-acquisition-and-display-design.md) 提供“手机主题图标/应用自带图标”展示偏好；主题 provider 缺失或单包未命中时回退宿主原始图标能力，最终失败显示稳定占位；
 - 搜索按应用名和包名匹配；
 - 大列表分批读取 package info；
 - 应用列表达到虚拟化阈值后使用与节点页相同的 `useBoundedVirtualizer`，key 固定为 package name；

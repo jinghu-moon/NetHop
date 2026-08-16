@@ -1,8 +1,8 @@
 # NetHop 快捷设置磁贴 Companion APK TDD 测试开发任务清单
 
-> 状态：待实施
+> 状态：实施中（核心 host 实现、事件流回收和发布构建已完成；SystemUI 磁贴与锁屏矩阵待验收）
 >
-> 日期：2026-08-15
+> 日期：2026-08-16
 >
 > 设计来源：[`17-quick-settings-tile-companion-design.md`](./17-quick-settings-tile-companion-design.md)
 >
@@ -13,6 +13,18 @@
 > 目标基线：control protocol v5、`status.get` document schema v2、WebUI host 增加 `android`、可选安装的 Kotlin Companion APK
 >
 > 影响范围：`nethopd`、`nethop-protocol`、`nethopctl`、WebUI、Companion Android 工程、模块构建/安装器、发布清单、SBOM、许可证与真机验收
+
+截至 2026-08-16 的验证事实：Companion JVM tests、Android instrumentation 3/3、WebUI unit/browser/E2E、Rust contracts、module/fake-Magisk/installer contracts、R8/lint/release APK 和完整 arm64 模块构建均通过。修复后的候选 ZIP 为 `NetHop-8cefc9fd6afcf3de4abfbf3592ace79254f23651-arm64.zip`，SHA-256 为 `76bb5125c0c1b17b26e03e65f19d7142dfddb0122242bbcd5a824a333a1505df`，大小为 19,221,822 bytes；Companion 模块增量为 444,218 bytes。该 ZIP 已传送至真机 `/sdcard/Download/NetHop-8cefc9f-companion-fix1-arm64.zip`，手机端 SHA-256 与本地一致。
+
+新增真机证据（设备 `dc39c31d`，M2012K11AC/alioth，Root 模块已重启）：
+
+- 模块保持 `running_tproxy`，`capture.active=true`，`candidate_count=65`，无 Companion 崩溃日志。
+- `ACTION_QS_TILE_PREFERENCES` 打开固定 WebUI 后，稳定只存在一个 `nethopctl events --jsonl` session；返回关闭后 5 秒内事件进程回到 0。
+- 重复打开/关闭循环的已采样结果为 `1→0、1→0、1→0`；额外延长采样确认 Activity resumed 时仍只有一个事件 session。
+- Companion 进程退出后仅保留系统缓存进程，未发现 `nethopctl events`、Root event child 或额外 nethop shell 残留。
+- `sysui_qs_tiles` 前后未变化，尚未执行磁贴添加、点按启停和锁屏测试。
+
+未勾选项不是遗漏：Root Manager 安装 UI 的 10..0/Volume+/Volume-、SystemUI Tile、锁屏取消、模块内 WebRoot、TPROXY/TUN、100 次生命周期资源压力和正式 release key 必须由 N 阶段继续签署。当前 APK 使用本机 Android debug certificate，`publishable=false`，不得作为正式发布签名。
 
 ## 1. 目的与完成边界
 
@@ -202,7 +214,7 @@ flowchart TD
 
 ## 7. 阶段 A：重构前基线与证据护栏
 
-- [ ] **A001 冻结 daemon/protocol/CLI before 基线**
+- [x] **A001 冻结 daemon/protocol/CLI before 基线**
   - `depends_on`: none；`parallel_with`: A002,A003,A004,A005
   - `scope`: `crates/nethop-protocol/tests/`、`crates/nethopd/tests/`、`crates/nethopctl/tests/`、before fixture。
   - `RED`: inventory 缺 protocol v5、status schema v1、start/stop/status golden 任一项时失败。
@@ -210,7 +222,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 复用现有 envelope/request builders；运行三 crate 相关 contracts。
   - `done`: before manifest 可独立证明当前控制面输入、输出和版本。
 
-- [ ] **A002 冻结 WebUI HostAdapter 与主要页面 before 基线**
+- [x] **A002 冻结 WebUI HostAdapter 与主要页面 before 基线**
   - `depends_on`: none；`parallel_with`: A001,A003,A004,A005
   - `scope`: `webui/tests/unit/`、`webui/tests/browser/`、`webui/tests/e2e/`。
   - `RED`: host kind、typed operation、event child、应用枚举或核心页面证据缺失时失败。
@@ -226,7 +238,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 输出排序后的 entry/hash/permission manifest。
   - `done`: 能精确对比加入 Companion 前后的 ZIP 和安装行为。
 
-- [ ] **A004 建立 Companion evidence schema 与 secret gate**
+- [x] **A004 建立 Companion evidence schema 与 secret gate**
   - `depends_on`: none；`parallel_with`: A001,A002,A003,A005
   - `scope`: `scripts/companion-evidence-contracts.ps1`、`tests/companion/fixtures/`。
   - `RED`: 缺 phase/command/result/hash 或包含 token、订阅 URL、SSID、签名值时仍通过。
@@ -234,7 +246,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 复用仓库已有敏感信息扫描规则，避免第二套正则集合。
   - `done`: 有效/无效 fixture 均被稳定判定。
 
-- [ ] **A005 建立阶段总门禁入口**
+- [x] **A005 建立阶段总门禁入口**
   - `depends_on`: A001,A002,A003,A004；`parallel_with`: none
   - `scope`: `scripts/companion-phase-gate.ps1`、证据 manifest。
   - `RED`: 任一 before 证据缺失或 hash 漂移时失败。
@@ -244,7 +256,7 @@ flowchart TD
 
 ## 8. 阶段 B：`status.get` service summary 契约
 
-- [ ] **B001 用 RED 冻结 status document schema v2**
+- [x] **B001 用 RED 冻结 status document schema v2**
   - `depends_on`: A005；`parallel_with`: B002
   - `scope`: `crates/nethopd/tests/worker_application_contracts.rs`、status v2 golden。
   - `RED`: 当前响应因缺 `service`、`diagnostic_code` 或 schema 仍为 v1 失败。
@@ -252,7 +264,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 覆盖 enabled/disabled、TPROXY/TUN、starting/stopping、degraded 和 scene override。
   - `done`: v2 期望值和敏感字段负面断言完整。
 
-- [ ] **B002 建立 configured/effective/override 纯映射测试**
+- [x] **B002 建立 configured/effective/override 纯映射测试**
   - `depends_on`: A005；`parallel_with`: B001
   - `scope`: `crates/nethopd/src/` 内窄 status projection、对应 unit tests。
   - `RED`: Wi-Fi scene 临时停用被错误映射为持久 disabled，或输出 SSID/BSSID。
@@ -260,7 +272,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: projection 不读完整 TOML、不复制 runtime transition 逻辑。
   - `done`: 同一输入始终产生稳定封闭值，日志无网络标识符。
 
-- [ ] **B003 发布 status schema v2**
+- [x] **B003 发布 status schema v2**
   - `depends_on`: B001,B002；`parallel_with`: B004
   - `scope`: `crates/nethopd/src/worker_application.rs`、status contract tests。
   - `RED`: v2 golden 对当前 worker 失败。
@@ -268,7 +280,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 删除 v1 兼容默认；control envelope protocol 保持 v5。
   - `done`: daemon 所有状态矩阵均通过，输出不包含完整 config 或自由错误文本。
 
-- [ ] **B004 更新 protocol/CLI golden 而不新增控制方法**
+- [x] **B004 更新 protocol/CLI golden 而不新增控制方法**
   - `depends_on`: B001,B002；`parallel_with`: B003
   - `scope`: `crates/nethop-protocol/tests/`、`crates/nethopctl/tests/`、v5 golden。
   - `RED`: CLI status 无法保真输出 v2 或 protocol inventory 误判版本。
@@ -276,7 +288,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: start/stop/status 原 argv、退出码和 envelope 回归全部通过。
   - `done`: protocol v5 + status document v2 的边界被明确测试。
 
-- [ ] **B005 更新 WebUI strict DTO 和 mock**
+- [x] **B005 更新 WebUI strict DTO 和 mock**
   - `depends_on`: B003,B004；`parallel_with`: none
   - `scope`: `webui/src/model/dto.ts`、`webui/src/bridge/context.ts`、对应 unit tests。
   - `RED`: v2 service summary 被 strict allowlist 拒绝，或 mock schema 3 漂移未被发现。
@@ -284,7 +296,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 未知字段、未知 override、错误类型和敏感自由文本 fail-closed。
   - `done`: WebUI 当前页面回归通过且 status schema 不再漂移。
 
-- [ ] **B006 status v2 阶段门禁**
+- [x] **B006 status v2 阶段门禁**
   - `depends_on`: B003,B004,B005；`parallel_with`: none
   - `scope`: backend/WebUI evidence 聚合。
   - `RED`: 任一状态矩阵、CLI before/after 或 DTO 负面测试缺失时失败。
@@ -294,7 +306,7 @@ flowchart TD
 
 ## 9. 阶段 C：Companion Android 工程与供应链骨架
 
-- [ ] **C001 创建可独立构建的最小 Android 工程**
+- [x] **C001 创建可独立构建的最小 Android 工程**
   - `depends_on`: A005；`parallel_with`: C002,C003
   - `scope`: `companion/settings.gradle.kts`、根 `build.gradle.kts`、Gradle Wrapper。
   - `RED`: 仓库不存在 `companion/`，基线构建检查失败。
@@ -302,7 +314,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: JDK/Gradle/旧 Kotlin Android plugin 不匹配时 fail-fast。
   - `done`: `assembleDebug` 和空 JVM test 可在固定工具链通过。
 
-- [ ] **C002 冻结 Version Catalog 与最小仓库边界**
+- [x] **C002 冻结 Version Catalog 与最小仓库边界**
   - `depends_on`: A005；`parallel_with`: C001,C003
   - `scope`: `companion/gradle/libs.versions.toml`、`settings.gradle.kts`、repository tests。
   - `RED`: dynamic/snapshot 版本、项目级仓库或 JitPack 通用 fallback 被接受。
@@ -310,7 +322,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: `FAIL_ON_PROJECT_REPOS`；无 Compose/Material/Room/Media3/Firebase。
   - `done`: repository/版本静态 gate 对有效和无效 fixture 均生效。
 
-- [ ] **C003 创建 framework-first app 模块与 Manifest 最小权限**
+- [x] **C003 创建 framework-first app 模块与 Manifest 最小权限**
   - `depends_on`: A005；`parallel_with`: C001,C002
   - `scope`: `companion/app/build.gradle.kts`、`AndroidManifest.xml`、基础 resources。
   - `RED`: min/target/compile SDK、applicationId、权限或组件声明不满足 D17 时失败。
@@ -318,7 +330,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 明确拒绝 `INTERNET`、安装包、通知、位置、VPN、辅助功能等权限；不声明 launcher Activity。
   - `done`: merged Manifest 与 APK inventory 通过最小权限 gate。
 
-- [ ] **C004 冻结 dependency verification**
+- [x] **C004 冻结 dependency verification**
   - `depends_on`: C001,C002；`parallel_with`: C005
   - `scope`: `companion/gradle/verification-metadata.xml`、dependency verification tests。
   - `RED`: 修改 libsu AAR/POM/module metadata 或传递依赖后构建仍成功。
@@ -326,7 +338,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 验证 core/io/nio，拒绝 `libsu-service`；记录 checksum 来源。
   - `done`: tampered/missing/extra artifact 均 fail-closed。
 
-- [ ] **C005 建立 release、R8、lint 与签名输入骨架**
+- [x] **C005 建立 release、R8、lint 与签名输入骨架**
   - `depends_on`: C001,C003；`parallel_with`: C004
   - `scope`: `companion/app/build.gradle.kts`、`proguard-rules.pro`、build tests。
   - `RED`: release 未压缩、可调试、签名值硬编码或 warnings 未失败。
@@ -334,7 +346,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 无 release key 时只能生成明确标记的不可发布产物。
   - `done`: debug/release 行为和发布签名门禁可重复验证。
 
-- [ ] **C006 Android 工程阶段门禁**
+- [x] **C006 Android 工程阶段门禁**
   - `depends_on`: C003,C004,C005；`parallel_with`: none
   - `scope`: `scripts/companion-android-gate.ps1`、Gradle reports。
   - `RED`: 工具链、依赖树、Manifest、verification 或 release 任一证据缺失时失败。
@@ -344,7 +356,7 @@ flowchart TD
 
 ## 10. 阶段 D：Kotlin typed control core
 
-- [ ] **D001 定义 strict Kotlin status/envelope DTO**
+- [x] **D001 定义 strict Kotlin status/envelope DTO**
   - `depends_on`: B006,C006；`parallel_with`: D002,D003
   - `scope`: `StatusDecoder.kt`、DTO、JVM tests。
   - `RED`: 缺字段、未知字段、schema/version 错误、超大字符串或非法 enum 被接受。
@@ -352,7 +364,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不解析 human text，不复制 WebUI 的 TypeScript validator 代码。
   - `done`: 正常/边界/恶意 fixture 全部确定性通过或拒绝。
 
-- [ ] **D002 实现 `TileStateMapper` 纯函数**
+- [x] **D002 实现 `TileStateMapper` 纯函数**
   - `depends_on`: B006,C006；`parallel_with`: D001,D003
   - `scope`: `TileStateMapper.kt`、table-driven JVM tests。
   - `RED`: enabled/disabled、TUN/TPROXY、scene pause、transitional、degraded 和 unavailable 映射不完整。
@@ -360,7 +372,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: Wi-Fi scene 暂停仍为 ACTIVE，subtitle 表达有效状态。
   - `done`: 所有 daemon fact 组合都有唯一 tile state/action。
 
-- [ ] **D003 定义封闭 operation -> argv 映射**
+- [x] **D003 定义封闭 operation -> argv 映射**
   - `depends_on`: B006,C006；`parallel_with`: D001,D002
   - `scope`: `RootOperation.kt`、`RootCommandSpec.kt`、JVM property tests。
   - `RED`: 任意 command、任意 executable、换行、NUL 或 shell metachar 可进入 argv。
@@ -368,7 +380,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: executable 固定绝对路径，超时/stdout/stderr 上限随 operation 定义。
   - `done`: 无公开 `exec(String)`/`runShell(String)` 接口。
 
-- [ ] **D004 实现有界 `RootCommandExecutor`**
+- [x] **D004 实现有界 `RootCommandExecutor`**
   - `depends_on`: D001,D003；`parallel_with`: D005
   - `scope`: `RootCommandExecutor.kt`、process abstraction、JVM tests。
   - `RED`: 非零退出、stdout/stderr 超限、timeout、取消或销毁后 child 仍被当成功。
@@ -376,7 +388,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不 kill daemon/core；错误只返回稳定 code 和截断诊断。
   - `done`: process fake 覆盖 stdout/stderr/exit/timeout/cancel 全矩阵。
 
-- [ ] **D005 实现操作序列与 stale-result reducer**
+- [x] **D005 实现操作序列与 stale-result reducer**
   - `depends_on`: D002,D003；`parallel_with`: D004
   - `scope`: `TileOperationCoordinator.kt`、coroutines-test。
   - `RED`: 较早 status refresh 能覆盖较新 click 结果，或重复 click 产生两次 mutation。
@@ -384,7 +396,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不使用 SharedPreferences 保存事实；进程重建只重查 status。
   - `done`: 可控调度器下所有交错顺序均确定性通过。
 
-- [ ] **D006 typed control 阶段门禁**
+- [x] **D006 typed control 阶段门禁**
   - `depends_on`: D004,D005；`parallel_with`: none
   - `scope`: JVM test report、API surface scanner。
   - `RED`: decoder、mapper、argv、process、sequence 任一负面证据缺失时失败。
@@ -394,7 +406,7 @@ flowchart TD
 
 ## 11. 阶段 E：`NetHopTileService` 生命周期与点按事务
 
-- [ ] **E001 冻结 Manifest TileService 契约**
+- [x] **E001 冻结 Manifest TileService 契约**
   - `depends_on`: C006,D006；`parallel_with`: E002
   - `scope`: `AndroidManifest.xml`、merged Manifest tests。
   - `RED`: 缺 BIND permission/QS action/toggleable metadata，或错误声明 active tile。
@@ -418,7 +430,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不申请设备管理/生物识别权限，不自绘密码界面。
   - `done`: locked/unlocked/cancelled/repeated callback 矩阵通过。
 
-- [ ] **E004 实现 read -> explicit start/stop -> final read**
+- [x] **E004 实现 read -> explicit start/stop -> final read**
   - `depends_on`: E001,E002；`parallel_with`: E003
   - `scope`: `TileOperationCoordinator.kt`、TileService integration tests。
   - `RED`: 使用旧 `qsTile.state` toggle、成功后不重查、失败后盲信 operation ACK。
@@ -434,7 +446,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: state 映射统一走 `TileStateMapper`，不在 Service 重复分支。
   - `done`: 生命周期排列组合和失败矩阵无 crash、无残留 child。
 
-- [ ] **E006 Tile 文案、图标与 SystemUI 约束**
+- [x] **E006 Tile 文案、图标与 SystemUI 约束**
   - `depends_on`: E003,E004；`parallel_with`: E005
   - `scope`: vector drawable、strings、Tile rendering tests。
   - `RED`: 图标非 24dp 白色透明 VectorDrawable，或 label/subtitle 与 mapper 不一致。
@@ -452,7 +464,7 @@ flowchart TD
 
 ## 12. 阶段 F：唯一 WebUI 产物与 release identity
 
-- [ ] **F001 冻结现有 WebUI release manifest 输入输出**
+- [x] **F001 冻结现有 WebUI release manifest 输入输出**
   - `depends_on`: A005；`parallel_with`: F002
   - `scope`: `webui/scripts/generate-release-artifacts.mjs`、release fixture。
   - `RED`: 当前产物无法提供每个 path 的相对路径、bytes、SHA-256、MIME 和整体 digest。
@@ -460,7 +472,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 路径稳定排序、无时间戳、无绝对路径。
   - `done`: 同一 webroot 两次生成 byte-identical manifest。
 
-- [ ] **F002 定义 Companion 所需最小 asset manifest**
+- [x] **F002 定义 Companion 所需最小 asset manifest**
   - `depends_on`: A005；`parallel_with`: F001
   - `scope`: manifest schema、validator tests。
   - `RED`: 重复/绝对/`.`/`..`/反斜杠路径、非法 MIME、错误 digest、超限 bytes 被接受。
@@ -468,7 +480,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不包含文件正文、订阅数据或构建机路径。
   - `done`: 有效/恶意 fixture 均稳定判定。
 
-- [ ] **F003 单一生成器同时发布模块与 APK identity**
+- [x] **F003 单一生成器同时发布模块与 APK identity**
   - `depends_on`: F001,F002；`parallel_with`: F004
   - `scope`: WebUI release generator、module staging、Companion generated resource。
   - `RED`: 模块 manifest 和 APK 预期 identity 可由不同输入生成而仍通过。
@@ -476,7 +488,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: APK 只携带 metadata，不复制 JS/CSS/font/image 正文。
   - `done`: 同一 build ID 和整体 digest 在两个消费者中完全一致。
 
-- [ ] **F004 将 manifest identity 纳入 checksum/SBOM/provenance**
+- [x] **F004 将 manifest identity 纳入 checksum/SBOM/provenance**
   - `depends_on`: F001,F002；`parallel_with`: F003
   - `scope`: release readiness scripts、build manifest/SBOM tests。
   - `RED`: 删除 identity、许可证或 provenance 后 release 仍通过。
@@ -484,7 +496,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 复用当前 webui release readiness，不增加第二套 SBOM 生成器。
   - `done`: 每个新增 metadata artifact 可从 build manifest 追溯。
 
-- [ ] **F005 WebUI identity 阶段门禁**
+- [x] **F005 WebUI identity 阶段门禁**
   - `depends_on`: F003,F004；`parallel_with`: none
   - `scope`: reproducibility/APK inventory gate。
   - `RED`: APK 含完整 webroot、manifest 不一致或生成不稳定时失败。
@@ -502,7 +514,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 每个 session 一个 shell；所有 SuFile 显式 `setShell()`。
   - `done`: non-root/dead/unreadable/close timeout 全部 fail-closed。
 
-- [ ] **G002 实现单次 decode 的 path validator**
+- [x] **G002 实现单次 decode 的 path validator**
   - `depends_on`: C006,F005；`parallel_with`: G001,G003
   - `scope`: `WebRootPathValidator.kt`、table/property tests。
   - `RED`: NUL、反斜杠、绝对路径、空段、`.`、`..`、双重编码或 malformed percent 逃逸。
@@ -510,7 +522,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不使用字符串 prefix 代替 canonical 边界。
   - `done`: traversal corpus 和 property tests 无可达反例。
 
-- [ ] **G003 实现 manifest allowlist 与文件类型门禁**
+- [x] **G003 实现 manifest allowlist 与文件类型门禁**
   - `depends_on`: C006,F005；`parallel_with`: G001,G002
   - `scope`: `WebRootManifest.kt`、Root file metadata facade、tests。
   - `RED`: symlink、目录、FIFO、socket、device、未知路径或长度不符被允许。
@@ -518,7 +530,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不按扩展名猜可执行 MIME，不跟随 symlink。
   - `done`: 全文件类型矩阵和未知路径测试通过。
 
-- [ ] **G004 实现并发有界 `RootWebRootPathHandler`**
+- [x] **G004 实现并发有界 `RootWebRootPathHandler`**
   - `depends_on`: G001,G002,G003；`parallel_with`: G005
   - `scope`: `RootWebRootPathHandler.kt`、stream registry、component tests。
   - `RED`: 并发 handle 竞态、每请求新 shell、非法路径返回 `null` 或越过 stream/bytes/request 上限。
@@ -526,7 +538,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: handler 阻塞区最小；不允许网络 fallback。
   - `done`: 并发压力下计数正确，无 deadlock、越界或 null response。
 
-- [ ] **G005 入口 manifest/digest 与错误页门禁**
+- [x] **G005 入口 manifest/digest 与错误页门禁**
   - `depends_on`: G001,G002,G003；`parallel_with`: G004
   - `scope`: session bootstrap、fallback asset、tests。
   - `RED`: module/APK manifest identity 不符或 index digest 错误时仍安装 bridge。
@@ -552,7 +564,7 @@ flowchart TD
 
 ## 14. 阶段 H：Android WebMessage HostAdapter 与事件生命周期
 
-- [ ] **H001 冻结 Android bridge wire schema**
+- [x] **H001 冻结 Android bridge wire schema**
   - `depends_on`: D006,F005；`parallel_with`: H002
   - `scope`: bridge request/reply/event JSON schema、Kotlin tests。
   - `RED`: 未知 operation、字段、过长 payload、错误 request ID 或嵌套任意 command 被接受。
@@ -560,7 +572,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不创建第二套业务 operation 名称。
   - `done`: TypeScript/Kotlin golden byte/semantic 对齐。
 
-- [ ] **H002 建立精确 origin/main-frame gate**
+- [x] **H002 建立精确 origin/main-frame gate**
   - `depends_on`: D006,F005；`parallel_with`: H001
   - `scope`: `TrustedWebOrigin.kt`、WebMessage listener tests。
   - `RED`: wildcard、HTTP、子域、端口漂移、iframe 或伪造 sourceOrigin 可调用 bridge。
@@ -568,7 +580,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 即使来源可信仍完整验证 payload。
   - `done`: origin/iframe/navigation adversarial matrix 全部拒绝。
 
-- [ ] **H003 实现 `run()` 与有界 reply**
+- [x] **H003 实现 `run()` 与有界 reply**
   - `depends_on`: H001,H002；`parallel_with`: H004
   - `scope`: `AndroidWebUiBridge.kt`、RootCommandExecutor adapter、tests。
   - `RED`: 任意 executable/args、重复 reply、销毁后 reply 或超限输出通过。
@@ -576,7 +588,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 错误映射与 Tile 共用 executor contract，不共用生命周期实例。
   - `done`: WebUI command tests 与 Kotlin bridge golden 一致。
 
-- [ ] **H004 实现 `spawn()`/event child 生命周期**
+- [x] **H004 实现 `spawn()`/event child 生命周期**
   - `depends_on`: H001,H002；`parallel_with`: H003
   - `scope`: `EventProcess.kt`、bridge event adapter、tests。
   - `RED`: 任意 event kind、JSONL 超限、异常退出、terminate 后仍发事件或 child 残留。
@@ -584,7 +596,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 复用 WebUI event-session 协议，不发明 Android 私有事件格式。
   - `done`: start/data/error/exit/terminate/destroy 全矩阵通过。
 
-- [ ] **H005 bridge detach 与 fallback 隔离**
+- [x] **H005 bridge detach 与 fallback 隔离**
   - `depends_on`: H003,H004；`parallel_with`: none
   - `scope`: bridge lifecycle owner、tests。
   - `RED`: fallback 页面或 Activity destroy 后 bridge 仍可执行 Root operation。
@@ -592,7 +604,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: release WebView debugging 关闭，日志只保留稳定 code。
   - `done`: fallback、external navigation、destroy 后调用全部 fail-closed。
 
-- [ ] **H006 Android bridge 阶段门禁**
+- [x] **H006 Android bridge 阶段门禁**
   - `depends_on`: H005；`parallel_with`: none
   - `scope`: wire/origin/event/lifecycle evidence。
   - `RED`: exact origin、main frame、fixed operation、event cleanup 任一证据缺失时失败。
@@ -602,7 +614,7 @@ flowchart TD
 
 ## 15. 阶段 I：Android PackageManager 应用枚举
 
-- [ ] **I001 定义现有 `PackageInfo` 契约的 Kotlin 映射**
+- [x] **I001 定义现有 `PackageInfo` 契约的 Kotlin 映射**
   - `depends_on`: C006；`parallel_with`: I002
   - `scope`: `PackageRecord.kt`、mapping JVM tests。
   - `RED`: packageName/label/version/uid/system 字段丢失，或可选指标被伪造为 0。
@@ -610,7 +622,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不把 icon binary 放进 JSON DTO。
   - `done`: Kotlin/TypeScript golden 一致。
 
-- [ ] **I002 实现有界查询、过滤与批处理**
+- [x] **I002 实现有界查询、过滤与批处理**
   - `depends_on`: C006；`parallel_with`: I001
   - `scope`: `AndroidPackageAdapter.kt`、PackageManager facade tests。
   - `RED`: 任意 package 列表、超大 batch、重复项、卸载竞态或 SecurityException 导致崩溃。
@@ -618,7 +630,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 页面退出释放 icon/临时对象；不缓存全量应用事实。
   - `done`: 0/1/large/missing/concurrent package 矩阵通过。
 
-- [ ] **I003 可选排序指标保持能力缺失语义**
+- [x] **I003 可选排序指标保持能力缺失语义**
   - `depends_on`: I001,I002；`parallel_with`: I004
   - `scope`: package metadata provider、tests。
   - `RED`: 未授权 Usage Access 时强制请求权限、后台观察或填充虚假值。
@@ -626,7 +638,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不引入 usage observer、辅助功能或常驻 service。
   - `done`: 权限有/无场景均满足 WebUI 排序降级。
 
-- [ ] **I004 `QUERY_ALL_PACKAGES` 使用边界测试**
+- [x] **I004 `QUERY_ALL_PACKAGES` 使用边界测试**
   - `depends_on`: I001,I002；`parallel_with`: I003
   - `scope`: merged Manifest、privacy/log tests。
   - `RED`: 应用列表写日志、发送网络或在 Activity 外常驻缓存。
@@ -634,7 +646,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: APK 无 INTERNET，日志 scanner 无 package 全量 dump。
   - `done`: R09 应用选择能力与 R14 权限边界成立。
 
-- [ ] **I005 PackageManager 阶段门禁**
+- [x] **I005 PackageManager 阶段门禁**
   - `depends_on`: I003,I004；`parallel_with`: none
   - `scope`: JVM/component/Manifest evidence。
   - `RED`: DTO、batch、optional metric、privacy 任一证据缺失时失败。
@@ -644,7 +656,7 @@ flowchart TD
 
 ## 16. 阶段 J：`WebUiEntryActivity` 安全宿主
 
-- [ ] **J001 冻结 `ACTION_QS_TILE_PREFERENCES` 与外部 Intent 边界**
+- [x] **J001 冻结 `ACTION_QS_TILE_PREFERENCES` 与外部 Intent 边界**
   - `depends_on`: G007,H006,I005；`parallel_with`: J002
   - `scope`: `AndroidManifest.xml`、`WebUiEntryActivity.kt`、Intent tests。
   - `RED`: 长按 action 无法解析，或外部 data/extras/nested Intent 改变路径、operation、URL。
@@ -652,7 +664,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 外部显式启动不自动执行任何 Root mutation。
   - `done`: hostile Intent corpus 无法扩展能力。
 
-- [ ] **J002 建立 WebView hardened settings**
+- [x] **J002 建立 WebView hardened settings**
   - `depends_on`: G007,H006,I005；`parallel_with`: J001
   - `scope`: `WebUiEntryActivity.kt`、WebView factory、component tests。
   - `RED`: file/content access、mixed content、third-party cookie、debugging 或非本地导航可用。
@@ -694,7 +706,7 @@ flowchart TD
 
 ## 17. 阶段 K：模块 APK 打包与可选安装
 
-- [ ] **K001 将签名 APK 纳入唯一模块构建链**
+- [x] **K001 将签名 APK 纳入唯一模块构建链**
   - `depends_on`: C006,F005；`parallel_with`: K002
   - `scope`: `scripts/build-android-module.ps1`、ZIP inventory、build manifest tests。
   - `RED`: APK 未进入 `companion/`、checksum、manifest、SBOM/license/provenance 或出现多次。
@@ -702,7 +714,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: APK 是非 symlink 普通文件且 digest 唯一。
   - `done`: 发布 ZIP 可追溯到 Companion release artifact 和签名 identity。
 
-- [ ] **K002 先写安装选择状态机与 fake input RED tests**
+- [x] **K002 先写安装选择状态机与 fake input RED tests**
   - `depends_on`: C006,F005；`parallel_with`: K001
   - `scope`: shell helper、fake getevent/clock/TTY harness。
   - `RED`: 音量加/减、其他键、key release、10 秒超时或读取失败行为不确定。
@@ -710,7 +722,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 同一个 10 秒预算，不先等待再倒计时。
   - `done`: 所有输入序列和边界秒数有确定结果。
 
-- [ ] **K003 实现 10..0 倒计时与输出降级**
+- [x] **K003 实现 10..0 倒计时与输出降级**
   - `depends_on`: K002；`parallel_with`: K004
   - `scope`: `module/customize.sh` countdown helper、output tests。
   - `RED`: 秒序列缺失/重复、总耗时超限、`` 破坏 OUTFD 或非 TTY 无可读输出。
@@ -726,7 +738,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: PackageManager 输出有界脱敏；不打开商店或网络 URL。
   - `done`: missing pm/failure/conflict/downgrade/success/update 全矩阵通过。
 
-- [ ] **K005 实现 APK 清理和卸载非联动**
+- [x] **K005 实现 APK 清理和卸载非联动**
   - `depends_on`: K003,K004；`parallel_with`: K006
   - `scope`: customize/uninstall scripts、module contract tests。
   - `RED`: 安装/跳过/失败后展开模块仍保留 APK，或 uninstall 调用 `pm uninstall`。
@@ -734,7 +746,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 清理目标固定且已验证在模块目录内。
   - `done`: 生命周期矩阵无错误删除、无跨产品事务。
 
-- [ ] **K006 未安装 Companion 的模块 before/after 对比**
+- [x] **K006 未安装 Companion 的模块 before/after 对比**
   - `depends_on`: K003,K004；`parallel_with`: K005
   - `scope`: fake Magisk/KernelSU smoke、before/after evidence。
   - `RED`: 选择 skip 后配置、daemon、WebUI、权限或 ZIP 安装结果与 before 不同。
@@ -752,7 +764,7 @@ flowchart TD
 
 ## 18. 阶段 L：WebUI Android host 消费链与完整回归
 
-- [ ] **L001 扩展 `HostKind` 和 host 检测为 `android`**
+- [x] **L001 扩展 `HostKind` 和 host 检测为 `android`**
   - `depends_on`: H006,I005,J006；`parallel_with`: L002
   - `scope`: `webui/src/bridge/host.ts`、`context.ts`、unit tests。
   - `RED`: Android bridge 被误判 KernelSU/APatch/browser，或缺方法时仍 available。
@@ -760,7 +772,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不在页面写 `if (android)` 业务分支。
   - `done`: 四类 host 的 available/missing/unavailable 矩阵通过。
 
-- [ ] **L002 实现 TypeScript `android-host.ts`**
+- [x] **L002 实现 TypeScript `android-host.ts`**
   - `depends_on`: H006,I005,J006；`parallel_with`: L001
   - `scope`: `webui/src/bridge/android-host.ts`、bridge tests。
   - `RED`: run/spawn/package/toast/edge-to-edge/exit 无法满足现有 HostAdapter。
@@ -768,7 +780,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: operation builder 仍是唯一 argv 语义来源，不复制 KernelSU host 业务逻辑。
   - `done`: HostAdapter 全方法的成功/失败/timeout/terminate 测试通过。
 
-- [ ] **L003 Android host 事件与页面 resync**
+- [x] **L003 Android host 事件与页面 resync**
   - `depends_on`: L001,L002；`parallel_with`: L004
   - `scope`: event runtime/store tests、Android host fixture。
   - `RED`: event child 退出后页面卡死、重复 listener、destroy 后仍更新 store。
@@ -776,7 +788,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不增加 Android 私有 polling。
   - `done`: runtime/traffic/operation event 回归与 KSU host 一致。
 
-- [ ] **L004 Android PackageManager 驱动应用页面**
+- [x] **L004 Android PackageManager 驱动应用页面**
   - `depends_on`: L001,L002；`parallel_with`: L003
   - `scope`: package adapter/application view tests。
   - `RED`: Android host 下应用枚举、批量详情、搜索/排序/选择任一闭环失败。
@@ -784,7 +796,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: optional metrics 缺失时稳定降级。
   - `done`: 现有应用页功能在 Android fixture 全部通过。
 
-- [ ] **L005 完整 WebUI 页面与操作回归**
+- [x] **L005 完整 WebUI 页面与操作回归**
   - `depends_on`: L003,L004；`parallel_with`: L006
   - `scope`: WebUI unit/browser/e2e suite、Android host fixtures。
   - `RED`: 概览、订阅、节点、应用、设置、运维任一页在 Android host 失败。
@@ -792,7 +804,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: service start/stop、节点测速/选择、订阅 mutation、config、events 均走既有 typed operations。
   - `done`: Android/KSU/browser mock 三宿主的共享页面回归通过。
 
-- [ ] **L006 APK 不含完整 WebUI 的集成证明**
+- [x] **L006 APK 不含完整 WebUI 的集成证明**
   - `depends_on`: L003,L004；`parallel_with`: L005
   - `scope`: APK analyzer/inventory、module WebRoot integration test。
   - `RED`: APK 中出现生产 index、Vue chunks、完整 CSS/font/flag bundle 或模块 webroot 第二副本。
@@ -800,7 +812,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 页面正文始终由 Root PathHandler 从模块唯一 webroot 提供。
   - `done`: R06 有构建产物级证据。
 
-- [ ] **L007 WebUI Android host 阶段门禁**
+- [x] **L007 WebUI Android host 阶段门禁**
   - `depends_on`: L005,L006；`parallel_with`: none
   - `scope`: WebUI test/release artifact evidence。
   - `RED`: host、events、packages、全页面、no-bundle 任一证据缺失时失败。
@@ -810,7 +822,7 @@ flowchart TD
 
 ## 19. 阶段 M：安全、供应链、体积与性能门禁
 
-- [ ] **M001 Manifest、Intent、bridge 与命令攻击面总审计**
+- [x] **M001 Manifest、Intent、bridge 与命令攻击面总审计**
   - `depends_on`: E007,K007,L007；`parallel_with`: M002,M003,M004
   - `scope`: release APK/Manifest/API scanner、安全 tests。
   - `RED`: INTERNET、未知 exported 组件、wildcard origin、addJavascriptInterface、任意 shell/path/Intent API 任一出现。
@@ -818,7 +830,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 外部 Activity Intent 不产生 mutation；fallback 无 bridge。
   - `done`: R08、R14 的 release artifact 审计通过。
 
-- [ ] **M002 Gradle/依赖/SBOM/license/provenance 总门禁**
+- [x] **M002 Gradle/依赖/SBOM/license/provenance 总门禁**
   - `depends_on`: E007,K007,L007；`parallel_with`: M001,M003,M004
   - `scope`: dependency verification、SBOM、license、provenance reports。
   - `RED`: 未固定 artifact、JitPack 越界、libsu-service、缺许可证或篡改 metadata 仍发布。
@@ -826,7 +838,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: checksum 只证明完整性，provenance 另记录审核来源和 revision。
   - `done`: release 依赖可离线复现且全部可追溯。
 
-- [ ] **M003 R8 与 APK/ZIP 体积门禁**
+- [x] **M003 R8 与 APK/ZIP 体积门禁**
   - `depends_on`: E007,K007,L007；`parallel_with`: M001,M002,M004
   - `scope`: release APK analyzer、R8 mapping、size comparison。
   - `RED`: APK >2.5 MiB、ZIP 增量 >3 MiB、含完整 WebUI 或未使用依赖。
@@ -963,6 +975,8 @@ cargo test -p nethopctl --test cli_contracts
 # Companion JVM / Android
 & "companion/gradlew.bat" -p "companion" testDebugUnitTest
 & "companion/gradlew.bat" -p "companion" connectedDebugAndroidTest
+# 对禁止普通 ADB 安装但已授权 Root 测试的设备
+pwsh -File "scripts/companion-android-test.ps1" -Serial <adb-serial>
 & "companion/gradlew.bat" -p "companion" lintRelease assembleRelease
 & "companion/gradlew.bat" -p "companion" dependencies --configuration releaseRuntimeClasspath
 
