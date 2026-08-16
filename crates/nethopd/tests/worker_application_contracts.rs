@@ -854,8 +854,12 @@ fn missing_current_generation_stays_available_in_fail_open_direct() {
 
     let status = application.handle(request("status", ControlMethod::StatusGet));
     let status = status.result().unwrap();
-    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["schema_version"], 2);
     assert_eq!(status["state"], "fail_open_direct");
+    assert_eq!(status["service"]["configured_enabled"], false);
+    assert_eq!(status["service"]["effective_enabled"], false);
+    assert_eq!(status["service"]["override"], serde_json::Value::Null);
+    assert_eq!(status["diagnostic_code"], "config_unavailable");
     assert_eq!(status["runtime"]["process_health"], "stopped");
     assert_eq!(status["capture"]["active"], false);
     assert_eq!(status["capture"]["dns_guard"], "inactive");
@@ -2056,6 +2060,16 @@ fn wifi_scene_can_transiently_disable_but_never_override_the_persistent_master_s
     assert!(!encoded.contains("Trusted Home"));
     assert!(!encoded.contains("aa:bb:cc"));
     assert!(encoded.contains("ssid_configured"));
+    let status = application.handle(request("wifi-status", ControlMethod::StatusGet));
+    let status = status.result().unwrap();
+    assert_eq!(status["schema_version"], 2);
+    assert_eq!(status["service"]["configured_enabled"], true);
+    assert_eq!(status["service"]["effective_enabled"], false);
+    assert_eq!(status["service"]["override"], "wifi_scene");
+    assert_eq!(status["diagnostic_code"], "fail_open_direct");
+    let encoded = serde_json::to_string(status).unwrap();
+    assert!(!encoded.contains("Trusted Home"));
+    assert!(!encoded.contains("aa:bb:cc"));
 }
 
 #[test]

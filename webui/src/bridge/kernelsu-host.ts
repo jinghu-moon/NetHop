@@ -50,8 +50,8 @@ export function createKernelSuHost(): HostAdapter {
       const command = buildCommand(request);
       return wrapChild(spawn(command.executable, [...command.args]), request);
     },
-    listPackages(type) { return listPackages(type) as readonly string[]; },
-    getPackagesInfo(packages) { return getPackagesInfo([...packages]) as readonly PackageInfo[]; },
+    async listPackages(type) { return listPackages(type) as readonly string[]; },
+    async getPackagesInfo(packages) { return getPackagesInfo([...packages]) as readonly PackageInfo[]; },
     toast,
     enableEdgeToEdge,
     exit,

@@ -10,6 +10,7 @@ import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
 import PageState from "@/components/PageState.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
 import { useHost } from "@/bridge/context";
+import { packageIconSource } from "@/bridge/package-icon";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { readPackages } from "@/bridge/package-adapter";
 import { validatedQuery } from "@/model/client";
@@ -95,7 +96,7 @@ async function load(): Promise<void> {
   try {
     const [config, packageList] = await Promise.all([
       validatedQuery(host, { id: "config.get" }, parseConfig),
-      Promise.resolve().then(() => readPackages(host, "all").slice(0, 2_000)),
+      readPackages(host, "all").then((items) => items.slice(0, 2_000)),
     ]);
     uiStores.config.load(config);
     applyPolicy(config.document);
@@ -252,7 +253,7 @@ onBeforeUnmount(() => {
           <TPullDownRefresh v-else v-model="refreshing" :disabled="loading || saving" @refresh="pullRefresh">
           <div class="application-list">
             <VirtualListViewport :items="rows" :get-item-key="(_index, app) => app.packageName" :estimate-size="78" :style="{ height: `min(58dvh, ${rows.length * 78}px)` }">
-              <template #default="{ item: app }"><div class="app-row" :data-selected="app.selected"><div class="app-icon"><span>{{ (app.appLabel || app.packageName).slice(0, 1).toUpperCase() }}</span><img v-if="host.capability.kind !== 'browser'" :src="`ksu://icon/${encodeURIComponent(app.packageName)}`" @error="($event.target as HTMLImageElement).hidden = true" /></div><div class="app-main"><div class="app-title"><strong>{{ app.appLabel || app.packageName }}</strong><TTag v-if="app.isSystem" size="small" variant="light">系统</TTag></div><small>{{ app.packageName }}</small><em v-if="app.sharedCount > 1">共享 UID，同时影响 {{ app.sharedCount }} 个应用</em><em v-if="app.uid === 0">root UID 受保护</em></div><TSwitch size="small" :value="app.selected" :disabled="app.uid === 0" @change="(value) => toggle(app, value)" /></div></template>
+              <template #default="{ item: app }"><div class="app-row" :data-selected="app.selected"><div class="app-icon"><span>{{ (app.appLabel || app.packageName).slice(0, 1).toUpperCase() }}</span><img v-if="packageIconSource(host.capability.kind, app.packageName)" :src="packageIconSource(host.capability.kind, app.packageName)" @error="($event.target as HTMLImageElement).hidden = true" /></div><div class="app-main"><div class="app-title"><strong>{{ app.appLabel || app.packageName }}</strong><TTag v-if="app.isSystem" size="small" variant="light">系统</TTag></div><small>{{ app.packageName }}</small><em v-if="app.sharedCount > 1">共享 UID，同时影响 {{ app.sharedCount }} 个应用</em><em v-if="app.uid === 0">root UID 受保护</em></div><TSwitch size="small" :value="app.selected" :disabled="app.uid === 0" @change="(value) => toggle(app, value)" /></div></template>
             </VirtualListViewport>
           </div>
           </TPullDownRefresh>

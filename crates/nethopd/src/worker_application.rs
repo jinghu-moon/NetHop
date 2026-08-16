@@ -2796,6 +2796,19 @@ where
             let request_id = request.request_id().clone();
             let snapshot = self.snapshot();
             let generation = snapshot.generation.map(GenerationId::get);
+            #[cfg(feature = "subscription-update")]
+            let configured_enabled = self
+                .config
+                .as_ref()
+                .map(|config| config.current().effective().service_enabled());
+            #[cfg(not(feature = "subscription-update"))]
+            let configured_enabled = None;
+            #[cfg(feature = "subscription-update")]
+            let wifi_scene_override = self.wifi_scene_override;
+            #[cfg(not(feature = "subscription-update"))]
+            let wifi_scene_override = None;
+            let (service, diagnostic_code) =
+                service_status_document(configured_enabled, wifi_scene_override, snapshot.state);
             let operational = self.operational_control.as_mut().map_or_else(
                 || {
                     json!({
@@ -2855,10 +2868,12 @@ where
                 request_id,
                 generation,
                 json!({
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "state": state_wire_for_event(snapshot.state),
                     "generation": generation,
                     "last_update": snapshot.last_update.as_str(),
+                    "service": service,
+                    "diagnostic_code": diagnostic_code,
                     "watcher_health": self.watcher_health_wire(),
                     "runtime": {
                         "state": state_wire_for_event(snapshot.state),
@@ -3880,6 +3895,38 @@ fn captures_traffic(state: RuntimeState) -> bool {
     matches!(
         state,
         RuntimeState::RunningTproxy | RuntimeState::RunningTun | RuntimeState::Degraded
+    )
+}
+
+fn service_status_document(
+    configured_enabled: Option<bool>,
+    wifi_scene_override: Option<bool>,
+    state: RuntimeState,
+) -> (serde_json::Value, Option<&'static str>) {
+    let has_configuration = configured_enabled.is_some();
+    let configured_enabled = configured_enabled.unwrap_or(false);
+    let effective_enabled = configured_enabled && wifi_scene_override.unwrap_or(true);
+    let override_kind = wifi_scene_override.map(|_| "wifi_scene");
+    let diagnostic_code = if configured_enabled {
+        match state {
+            RuntimeState::Degraded => Some("runtime_degraded"),
+            RuntimeState::FailOpenDirect => Some("fail_open_direct"),
+            RuntimeState::Backoff => Some("runtime_backoff"),
+            RuntimeState::CircuitOpen => Some("runtime_circuit_open"),
+            _ => None,
+        }
+    } else if !has_configuration {
+        Some("config_unavailable")
+    } else {
+        None
+    };
+    (
+        json!({
+            "configured_enabled": configured_enabled,
+            "effective_enabled": effective_enabled,
+            "override": override_kind,
+        }),
+        diagnostic_code,
     )
 }
 

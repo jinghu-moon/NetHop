@@ -2,6 +2,7 @@ import { inject, provide, type InjectionKey } from "vue";
 import type { HostAdapter } from "./host";
 import { detectHostCapability } from "./host";
 import { createKernelSuHost } from "./kernelsu-host";
+import { createAndroidHost } from "./android-host";
 import { createMockHost } from "./mock-host";
 
 const hostKey: InjectionKey<HostAdapter> = Symbol("nethop-host");
@@ -10,6 +11,7 @@ const mockNowSeconds = Math.floor(Date.now() / 1_000);
 
 export function createAppHost(): HostAdapter {
   const capability = detectHostCapability();
+  if (capability.available && capability.kind === "android") return createAndroidHost();
   if (capability.available && capability.kind !== "browser") return createKernelSuHost();
   const primaryId = "src_11111111111111111111111111111111";
   const backupId = "src_22222222222222222222222222222222";
@@ -33,7 +35,7 @@ export function createAppHost(): HostAdapter {
   ], selection: nodeSelection() });
   return createMockHost({ responses: {
     hello: { errno: 0, stdout: envelope({ manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: ["subscription_selection_v3", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1"] }), stderr: "" },
-    "status.get": { errno: 0, stdout: envelope({ schema_version: 3, state: "fail_open_direct", generation: null, last_update: "never", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} }), stderr: "" },
+    "status.get": { errno: 0, stdout: envelope({ schema_version: 2, state: "fail_open_direct", generation: null, last_update: "never", service: { configured_enabled: true, effective_enabled: true, override: null }, diagnostic_code: "fail_open_direct", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} }), stderr: "" },
     "traffic.get": { errno: 0, stdout: envelope({ kind: "traffic", sample: { up: 0, down: 0 }, interval_seconds: 1 }), stderr: "" },
     "metrics.get": { errno: 0, stdout: envelope({ schema_version: 1, runtime_state: "running_tproxy", generation: 1, uptime_seconds: 3600, core: { pid: 123, cpu_percent: 1.2, memory_rss_bytes: 33554432 }, traffic: { upload_bytes: 1024, download_bytes: 2048 }, outbound: { interface: "wlan0", local_address: "192.0.2.2", public_ip: null } }), stderr: "" },
     "subscription.list": { errno: 0, stdout: envelope({ subscriptions: [

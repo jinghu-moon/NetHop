@@ -5,6 +5,7 @@ import { createMockHost } from "@/bridge/mock-host";
 import { EventSession } from "@/runtime/event-session";
 import { ReconnectBackoff } from "@/runtime/reconnect";
 import { TrafficCoalescer, TrafficRing, type FrameScheduler } from "@/runtime/traffic-ring";
+import type { HostAdapter } from "@/bridge/host";
 
 const frame = (sequence: number, kind: string, extra: Record<string, unknown> = {}): unknown => ({ version: 5, request_id: "events", sequence, kind: "item", payload: { kind, ...extra } });
 
@@ -82,6 +83,59 @@ describe("bounded reconnect and traffic", () => {
     expect(session.sessionStatus()).toBe("live");
     session.setVisible(false);
     expect(session.state.value().stale).toBe(true);
+    session.stop();
+    vi.useRealTimers();
+  });
+
+  it("coalesces the initial visible notification into one handshake and one event child", async () => {
+    vi.useFakeTimers();
+    const delegate = createMockHost({
+      responses: {
+        hello: { errno: 0, stderr: "", stdout: JSON.stringify({ version: 5, request_id: "hello", ok: true, result: { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: [] } }) },
+      },
+      streams: { "events.subscribe": [] },
+      latencyMs: 10,
+      closeStreams: false,
+    });
+    let helloCount = 0;
+    let spawnCount = 0;
+    const host: HostAdapter = {
+      ...delegate,
+      async run(request) { if (request.id === "hello") helloCount += 1; return delegate.run(request); },
+      spawn(request) { spawnCount += 1; return delegate.spawn(request); },
+    };
+    const session = new EventSession({ host, kinds: ["runtime"], managerVersion: "webui-0.1.0" });
+
+    session.start();
+    session.setVisible(true);
+    session.setVisible(true);
+    await vi.runAllTimersAsync();
+
+    expect(helloCount).toBe(1);
+    expect(spawnCount).toBe(1);
+    session.stop();
+    vi.useRealTimers();
+  });
+
+  it("does not spawn a stale event child when hidden during handshake", async () => {
+    vi.useFakeTimers();
+    const delegate = createMockHost({
+      responses: {
+        hello: { errno: 0, stderr: "", stdout: JSON.stringify({ version: 5, request_id: "hello", ok: true, result: { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: [] } }) },
+      },
+      latencyMs: 10,
+      closeStreams: false,
+    });
+    let spawnCount = 0;
+    const host: HostAdapter = { ...delegate, spawn(request) { spawnCount += 1; return delegate.spawn(request); } };
+    const session = new EventSession({ host, kinds: ["runtime"], managerVersion: "webui-0.1.0" });
+
+    session.start();
+    session.setVisible(false);
+    await vi.runAllTimersAsync();
+
+    expect(spawnCount).toBe(0);
+    expect(session.sessionStatus()).toBe("stale");
     session.stop();
     vi.useRealTimers();
   });

@@ -14,10 +14,14 @@ describe("strict DTO validators", () => {
   });
 
   it("validates control envelope and status state", () => {
-    const status = { schema_version: 1, state: "running_tproxy", generation: 2, last_update: "succeeded", watcher_health: "healthy", runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} };
+    const status = { schema_version: 2, state: "running_tproxy", generation: 2, last_update: "succeeded", service: { configured_enabled: true, effective_enabled: true, override: null }, diagnostic_code: null, watcher_health: "healthy", runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} };
     const envelope = { version: 5, request_id: "test", ok: true, generation: 2, result: status };
-    expect(parseControlEnvelope(envelope, parseStatus).result.state).toBe("running_tproxy");
+    expect(parseControlEnvelope(envelope, parseStatus).result).toMatchObject({ state: "running_tproxy", service: { configuredEnabled: true, effectiveEnabled: true } });
     expect(() => parseStatus({ ...status, state: "invented" })).toThrow("invalid enum");
+    expect(() => parseStatus({ ...status, schema_version: 1 })).toThrow();
+    expect(() => parseStatus({ ...status, service: { ...status.service, override: "ssid:secret" } })).toThrow("invalid enum");
+    expect(() => parseStatus({ ...status, diagnostic_code: "free_text" })).toThrow("invalid enum");
+    expect(() => parseStatus({ ...status, service: { ...status.service, ssid: "private" } })).toThrow("unknown field");
     expect(() => parseControlEnvelope({ ...envelope, extra: true }, parseStatus)).toThrow("unknown field");
     expect(() => parseControlEnvelope({ ...envelope, version: 3 }, parseStatus)).toThrow("unsupported protocol");
   });

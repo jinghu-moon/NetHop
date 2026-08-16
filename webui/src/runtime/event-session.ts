@@ -24,6 +24,8 @@ export class EventSession {
   private readonly backoff = new ReconnectBackoff();
   private process: EventProcess | undefined;
   private retryHandle: unknown;
+  private connectionEpoch = 0;
+  private connecting = false;
   private active = false;
   private visible = true;
   private manualStop = false;
@@ -43,22 +45,27 @@ export class EventSession {
     if (!this.options.host.capability.available) { this.active = false; this.status = "unavailable"; this.emit(); return; }
     this.connect(0);
   }
-  stop(): void { this.manualStop = true; this.active = false; this.cancelRetry(); this.disposeProcess(); this.state.close(); this.status = "closed"; this.emit(); }
+  stop(): void { this.manualStop = true; this.active = false; this.invalidateConnection(); this.state.close(); this.status = "closed"; this.emit(); }
   setVisible(visible: boolean): void {
+    if (this.visible === visible) return;
     this.visible = visible;
-    if (!visible) { this.cancelRetry(); this.disposeProcess(); this.state.markStale(); this.status = "stale"; this.emit(); return; }
+    if (!visible) { this.invalidateConnection(); this.state.markStale(); this.status = "stale"; this.emit(); return; }
     if (this.active) { this.state.reset(); this.status = "connecting"; this.connect(0); }
   }
   private connect(delayMs: number): void {
     this.cancelRetry();
-    if (!this.active || !this.visible) return;
+    if (!this.active || !this.visible || this.connecting || this.process) return;
     if (delayMs > 0) { this.retryHandle = this.clock.setTimeout(() => { this.retryHandle = undefined; this.connect(0); }, delayMs); return; }
-    void this.handshakeAndSubscribe();
+    this.connecting = true;
+    const epoch = ++this.connectionEpoch;
+    void this.handshakeAndSubscribe(epoch);
   }
-  private async handshakeAndSubscribe(): Promise<void> {
+  private async handshakeAndSubscribe(epoch: number): Promise<void> {
     try {
       const hello = await validatedQuery(this.options.host, { id: "hello", managerVersion: this.options.managerVersion }, parseHello);
+      if (epoch !== this.connectionEpoch || !this.active || !this.visible || this.manualStop) return;
       if (!hello.compatible || hello.daemonProtocolMin !== PROTOCOL_VERSION || hello.daemonProtocolMax !== PROTOCOL_VERSION) {
+        this.connecting = false;
         this.active = false;
         this.status = "incompatible";
         this.emit();
@@ -66,8 +73,11 @@ export class EventSession {
       }
       this.backoff.reset();
       this.state.reset();
+      this.connecting = false;
       this.process = startEventProcess(this.options.host, this.streamKinds, (raw) => this.receive(raw), (error) => this.failed(error));
-    } catch (error) { this.failed(error); }
+    } catch (error) {
+      if (epoch === this.connectionEpoch) { this.connecting = false; this.failed(error); }
+    }
   }
   private receive(raw: unknown): void {
     try {
@@ -90,6 +100,7 @@ export class EventSession {
   private scheduleRetry(delayMs: number): void { this.connect(delayMs); }
   private cancelRetry(): void { if (this.retryHandle !== undefined) { this.clock.clearTimeout(this.retryHandle); this.retryHandle = undefined; } }
   private disposeProcess(): void { this.process?.stop(); this.process = undefined; }
+  private invalidateConnection(): void { this.connectionEpoch += 1; this.connecting = false; this.cancelRetry(); this.disposeProcess(); }
   private emit(): void { this.options.onState?.(this.state.value()); }
   sessionStatus(): typeof this.status { return this.status; }
 }

@@ -49,8 +49,8 @@ export function createMockHost(script: MockHostScript = {}): HostAdapter {
       buildCommand(request);
       return new MockChild(script.streams?.["events.subscribe"] ?? [], script.latencyMs ?? 0, script.closeStreams ?? true);
     },
-    listPackages: (type) => (type === "all" ? script.packages ?? [] : (script.packages ?? []).filter((item) => type === "system" ? item.isSystem : !item.isSystem)).map((item) => item.packageName),
-    getPackagesInfo: (packages) => (script.packages ?? []).filter((item) => packages.includes(item.packageName)),
+    listPackages: async (type) => (type === "all" ? script.packages ?? [] : (script.packages ?? []).filter((item) => type === "system" ? item.isSystem : !item.isSystem)).map((item) => item.packageName),
+    getPackagesInfo: async (packages) => (script.packages ?? []).filter((item) => packages.includes(item.packageName)),
     toast: () => undefined,
     enableEdgeToEdge: () => undefined,
     exit: () => undefined,

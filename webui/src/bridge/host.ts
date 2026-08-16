@@ -1,6 +1,6 @@
 import type { OperationRequest } from "./operations";
 
-export type HostKind = "browser" | "kernelsu" | "apatch";
+export type HostKind = "browser" | "kernelsu" | "apatch" | "android";
 
 export interface HostCapability {
   readonly kind: HostKind;
@@ -41,19 +41,25 @@ export interface HostAdapter {
   readonly capability: HostCapability;
   run(request: OperationRequest): Promise<ExecResult>;
   spawn(request: OperationRequest): HostChild;
-  listPackages(type: "user" | "system" | "all"): readonly string[];
-  getPackagesInfo(packages: readonly string[]): readonly PackageInfo[];
+  listPackages(type: "user" | "system" | "all"): Promise<readonly string[]>;
+  getPackagesInfo(packages: readonly string[]): Promise<readonly PackageInfo[]>;
   toast(message: string): void;
   enableEdgeToEdge(enabled: boolean): void;
   exit(): void;
 }
 
-export interface HostBridgeCandidates { readonly ksu?: Record<string, unknown>; readonly apatch?: Record<string, unknown> }
+export interface HostBridgeCandidates { readonly ksu?: Record<string, unknown>; readonly apatch?: Record<string, unknown>; readonly nethopAndroid?: Record<string, unknown> }
 
 export function detectHostCapability(
   candidates: HostBridgeCandidates = globalThis as HostBridgeCandidates,
   allowBrowserMock = import.meta.env.DEV,
 ): HostCapability {
+  if (candidates.nethopAndroid) {
+    const methods = ["postMessage"].filter((key) => typeof candidates.nethopAndroid?.[key] === "function");
+    return methods.length === 1
+      ? { kind: "android", available: true, methods: ["run", "spawn", "toast", "listPackages", "getPackagesInfo", "enableEdgeToEdge", "exit"] }
+      : { kind: "android", available: false, methods, reason: "missing_api" };
+  }
   const required = ["exec", "spawn"] as const;
   for (const [kind, candidate] of [["kernelsu", candidates.ksu], ["apatch", candidates.apatch]] as const) {
     if (!candidate) continue;

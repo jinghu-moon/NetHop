@@ -9,6 +9,7 @@ import { parseSingleJsonEnvelope } from "@/bridge/json";
 import { createEventSessionId } from "@/bridge/event-process";
 import { buildCommand, EVENT_SESSION_MAX_RUNTIME_SECONDS, NETHOPCTL_PATH, redactCommand, type OperationRequest } from "@/bridge/operations";
 import { readPackages } from "@/bridge/package-adapter";
+import { packageIconSource } from "@/bridge/package-icon";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { validatedQuery } from "@/model/client";
 import { parseConfig, parseNodeList, parseStatus, parseTraffic } from "@/model/dto";
@@ -20,7 +21,7 @@ function host(run: (request: OperationRequest) => Promise<ExecResult>, packages:
   };
   return {
     capability: { kind: "browser", available: true, methods: ["mock"] }, run, spawn: () => child,
-    listPackages: () => packages.map((item) => item.packageName), getPackagesInfo: () => packages,
+    listPackages: async () => packages.map((item) => item.packageName), getPackagesInfo: async () => packages,
     toast: () => undefined, enableEdgeToEdge: () => undefined, exit: () => undefined,
   };
 }
@@ -47,6 +48,14 @@ describe("operation allowlist", () => {
 });
 
 describe("host capability", () => {
+  it("uses host-owned package icon transports without exposing Android files", () => {
+    const localOrigin = "https://appassets.androidplatform.net";
+    expect(packageIconSource("android", "com.example.app", localOrigin)).toBe(`${localOrigin}/package-icons/com.example.app`);
+    expect(packageIconSource("kernelsu", "com.example.app")).toBe("ksu://icon/com.example.app");
+    expect(packageIconSource("apatch", "com.example.app")).toBe("ksu://icon/com.example.app");
+    expect(packageIconSource("browser", "com.example.app")).toBeUndefined();
+    expect(packageIconSource("android", "com.example/a b", localOrigin)).toBe(`${localOrigin}/package-icons/com.example%2Fa%20b`);
+  });
   it("supports stateful typed mock responses without bypassing command validation", async () => {
     let mode: "single" | "merge" = "single";
     const adapter = createMockHost({ responses: {
@@ -151,12 +160,12 @@ describe("private payload and package boundaries", () => {
     expect(ids.at(-1)).toBe("webui.payload.remove");
   });
 
-  it("uses host package APIs and rejects invalid package names", () => {
+  it("uses host package APIs and rejects invalid package names", async () => {
     const packages: PackageInfo[] = [{ packageName: "tv.danmaku.bili", versionName: "1", versionCode: 1, appLabel: "Bilibili", isSystem: false, uid: 10123, lastUpdateTimeMs: 2_000_000_000_000, storageBytes: 640_000_000, lastUsedTimeMs: 2_000_000_100_000 }];
-    expect(readPackages(host(async () => ({ errno: 0, stdout: "{}", stderr: "" }), packages), "all")).toEqual(packages);
+    await expect(readPackages(host(async () => ({ errno: 0, stdout: "{}", stderr: "" }), packages), "all")).resolves.toEqual(packages);
     const invalid = [{ ...packages[0]!, packageName: "bad;package" }];
-    expect(() => readPackages(host(async () => ({ errno: 0, stdout: "{}", stderr: "" }), invalid), "all")).toThrow("package name");
+    await expect(readPackages(host(async () => ({ errno: 0, stdout: "{}", stderr: "" }), invalid), "all")).rejects.toThrow("package name");
     const invalidMetric = [{ ...packages[0]!, storageBytes: -1 }];
-    expect(readPackages(host(async () => ({ errno: 0, stdout: "{}", stderr: "" }), invalidMetric), "all")).toEqual([]);
+    await expect(readPackages(host(async () => ({ errno: 0, stdout: "{}", stderr: "" }), invalidMetric), "all")).resolves.toEqual([]);
   });
 });

@@ -6,7 +6,10 @@ export const EVENT_KINDS = ["snapshot", "config", "runtime", "subscription", "ge
 
 export interface ControlEnvelope<T> { readonly version: 5; readonly requestId: string; readonly generation?: number; readonly result: T }
 export interface HelloDto { readonly compatible: boolean; readonly daemonProtocolMin: number; readonly daemonProtocolMax: number; readonly supportedOperations: readonly string[]; readonly supportedFeatures: readonly string[] }
-export interface StatusDto { readonly schemaVersion: number; readonly state: typeof RUNTIME_STATES[number]; readonly generation?: number; readonly lastUpdate: "never" | "succeeded" | "failed"; readonly extension: Readonly<Record<string, unknown>> }
+export type ServiceOverrideDto = "wifi_scene";
+export type StatusDiagnosticCodeDto = "config_unavailable" | "fail_open_direct" | "runtime_degraded" | "runtime_backoff" | "runtime_circuit_open";
+export interface ServiceStatusDto { readonly configuredEnabled: boolean; readonly effectiveEnabled: boolean; readonly override?: ServiceOverrideDto }
+export interface StatusDto { readonly schemaVersion: 2; readonly state: typeof RUNTIME_STATES[number]; readonly generation?: number; readonly lastUpdate: "never" | "succeeded" | "failed"; readonly service: ServiceStatusDto; readonly diagnosticCode?: StatusDiagnosticCodeDto; readonly extension: Readonly<Record<string, unknown>> }
 export interface CapabilityItemDto { readonly key: string; readonly status: "supported" | "unsupported" | "experimental" | "conflict" | "unavailable"; readonly reasonCode: string; readonly applyEffect: string }
 export interface CapabilityDto { readonly schemaVersion: number; readonly probeId: string; readonly observedAtMonotonicMs: number; readonly reportDigest: string; readonly items: readonly CapabilityItemDto[] }
 export type SubscriptionHealth = "never" | "healthy" | "degraded" | "failed";
@@ -113,14 +116,29 @@ export function parseHello(value: unknown): HelloDto {
 }
 
 export function parseStatus(value: unknown): StatusDto {
-  const allowed = ["schema_version", "state", "generation", "last_update", "watcher_health", "runtime", "subscription", "core_update", "rule_set", "dns_split", "capture", "operational"];
+  const allowed = ["schema_version", "state", "generation", "last_update", "service", "diagnostic_code", "watcher_health", "runtime", "subscription", "core_update", "rule_set", "dns_split", "capture", "operational"];
   const object = record(value, "$.result", allowed);
-  const extension = Object.fromEntries(allowed.slice(4).map((key) => [key, safeExtension(object[key], `$.result.${key}`)]));
+  const service = record(object.service, "$.result.service", ["configured_enabled", "effective_enabled", "override"]);
+  const override = service.override === null || service.override === undefined
+    ? undefined
+    : enumeration(service.override, "$.result.service.override", ["wifi_scene"] as const);
+  const diagnosticCode = object.diagnostic_code === null || object.diagnostic_code === undefined
+    ? undefined
+    : enumeration(object.diagnostic_code, "$.result.diagnostic_code", ["config_unavailable", "fail_open_direct", "runtime_degraded", "runtime_backoff", "runtime_circuit_open"] as const);
+  const extensionKeys = allowed.slice(6);
+  const extension = Object.fromEntries(extensionKeys.map((key) => [key, safeExtension(object[key], `$.result.${key}`)]));
+  const schemaVersion = integer(object.schema_version, "$.result.schema_version", 2, 2);
   return {
-    schemaVersion: integer(object.schema_version, "$.result.schema_version", 1, 255),
+    schemaVersion: schemaVersion as 2,
     state: enumeration(object.state, "$.result.state", RUNTIME_STATES),
     ...(object.generation === undefined || object.generation === null ? {} : { generation: integer(object.generation, "$.result.generation", 1) }),
     lastUpdate: enumeration(object.last_update, "$.result.last_update", ["never", "succeeded", "failed"] as const),
+    service: {
+      configuredEnabled: boolean(service.configured_enabled, "$.result.service.configured_enabled"),
+      effectiveEnabled: boolean(service.effective_enabled, "$.result.service.effective_enabled"),
+      ...(override === undefined ? {} : { override }),
+    },
+    ...(diagnosticCode === undefined ? {} : { diagnosticCode }),
     extension,
   };
 }
