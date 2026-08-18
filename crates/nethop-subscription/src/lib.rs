@@ -38,7 +38,8 @@ pub use capability::{
 #[cfg(feature = "format-clash-yaml")]
 pub use clash_yaml::{ClashYamlError, parse_clash_yaml, yaml_options};
 pub use core_adapter::{
-    TerminalOutboundAdapterError, adapt_terminal_outbound, adapt_terminal_outbounds,
+    TerminalOutboundAdapterError, adapt_terminal_outbound, adapt_terminal_outbound_value,
+    adapt_terminal_outbounds,
 };
 pub use detect::{
     Base64Alphabet, Base64Details, Base64Padding, DetectionError, DetectionResult,

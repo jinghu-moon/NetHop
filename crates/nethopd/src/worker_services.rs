@@ -12,7 +12,8 @@ use nethop_protocol::{
 };
 #[cfg(feature = "subscription-update")]
 use nethop_subscription::{
-    SourceId, StableConversion, TerminalOutboundAdapterError, adapt_terminal_outbounds,
+    SourceId, StableConversion, TerminalOutboundAdapterError, adapt_terminal_outbound,
+    infer_display_territory,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -81,6 +82,8 @@ pub enum BuildCandidateError {
     Attribution(#[from] crate::SourceRegistryError),
     #[error("generation node registry rejected the conversion")]
     Registry(#[from] nethop_core::CoreError),
+    #[error("node override was rejected")]
+    Override(#[from] crate::NodeOverrideError),
 }
 
 #[cfg(feature = "subscription-update")]
@@ -90,6 +93,25 @@ pub fn build_candidate(
     profile: CandidateBuildProfile,
     subscription_mode: SubscriptionMode,
     active_source_ids: &[SourceId],
+) -> Result<Candidate, BuildCandidateError> {
+    build_candidate_with_overrides(
+        generation,
+        conversion,
+        profile,
+        subscription_mode,
+        active_source_ids,
+        &crate::NodeOverrideSet::default(),
+    )
+}
+
+#[cfg(feature = "subscription-update")]
+pub fn build_candidate_with_overrides(
+    generation: GenerationId,
+    conversion: &StableConversion,
+    profile: CandidateBuildProfile,
+    subscription_mode: SubscriptionMode,
+    active_source_ids: &[SourceId],
+    overrides: &crate::NodeOverrideSet,
 ) -> Result<Candidate, BuildCandidateError> {
     if conversion.nodes.is_empty() || !conversion.report.summary.source_success {
         return Err(BuildCandidateError::EmptyConversion);
@@ -119,7 +141,17 @@ pub fn build_candidate(
         .iter()
         .map(|node_id| node_id.as_str().to_owned())
         .collect::<Vec<_>>();
-    let outbounds = adapt_terminal_outbounds(&conversion.nodes)?;
+    let outbounds = conversion
+        .nodes
+        .iter()
+        .map(|node| {
+            let node_id = StableNodeId::new(node.node_id.as_str())?;
+            overrides.get(&node_id).map_or_else(
+                || adapt_terminal_outbound(node).map_err(BuildCandidateError::from),
+                |value| value.terminal_outbound().map_err(BuildCandidateError::from),
+            )
+        })
+        .collect::<Result<Vec<_>, BuildCandidateError>>()?;
     let managed = ManagedProfile::new(
         profile.capture,
         outbounds,
@@ -138,11 +170,23 @@ pub fn build_candidate(
         .nodes
         .iter()
         .map(|node| {
+            let node_id = StableNodeId::new(node.node_id.as_str())?;
+            let node_override = overrides.get(&node_id);
+            let display_name = node_override.map_or_else(
+                || node.node.display_name().as_str(),
+                |value| value.display_name(),
+            );
+            let protocol = node_override
+                .map_or_else(|| node.node.protocol().as_str(), |value| value.protocol());
+            let display_territory_code = node_override
+                .map_or(node.display_territory_code, |value| {
+                    infer_display_territory([value.display_name()])
+                });
             GenerationNodeRecord::new(
                 node.node_id.as_str(),
                 node.node_id.as_str(),
-                bounded_display_name(node.node.display_name().as_str()),
-                node.node.protocol().as_str(),
+                bounded_display_name(display_name),
+                protocol,
                 NodeAttribution::new(
                     node.source_refs
                         .iter()
@@ -154,7 +198,7 @@ pub fn build_candidate(
                 .collect(),
                 auto_ids.contains(node.node_id.as_str()),
             )
-            .map(|record| record.with_display_territory_code(node.display_territory_code))
+            .map(|record| record.with_display_territory_code(display_territory_code))
             .map_err(BuildCandidateError::from)
         })
         .collect::<Result<Vec<_>, BuildCandidateError>>()?;
@@ -434,6 +478,9 @@ impl ControlRequestHandler for WorkerControlHandler {
             | ControlMethod::NodeSelectAuto
             | ControlMethod::NodeSelectManual
             | ControlMethod::NodeExport
+            | ControlMethod::NodeOverrideGet
+            | ControlMethod::NodeOverrideApply
+            | ControlMethod::NodeOverrideRemove
             | ControlMethod::ConnectionsGet
             | ControlMethod::ConnectionClose
             | ControlMethod::ConnectionsCloseAll

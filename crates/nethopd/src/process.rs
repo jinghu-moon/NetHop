@@ -17,6 +17,7 @@ const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_OUTPUT_LIMIT: usize = 64 * 1024;
 const MAX_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT_LIMIT: usize = 1024 * 1024;
+const MAX_RUNTIME_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,8 @@ pub enum ProcessDiagnosticCode {
     SpawnFailed,
     ObserveFailed,
     OutputReadFailed,
+    ReloadUnsupported,
+    ReloadFailed,
     StopFailed,
 }
 
@@ -39,6 +42,8 @@ impl ProcessDiagnosticCode {
             Self::SpawnFailed => "core_process_spawn_failed",
             Self::ObserveFailed => "core_process_observe_failed",
             Self::OutputReadFailed => "core_process_output_read_failed",
+            Self::ReloadUnsupported => "core_process_reload_unsupported",
+            Self::ReloadFailed => "core_process_reload_failed",
             Self::StopFailed => "core_process_stop_failed",
         }
     }
@@ -164,6 +169,10 @@ pub enum ProcessError {
     ObserveFailed,
     #[error("sing-box core output could not be drained")]
     OutputReadFailed,
+    #[error("sing-box core does not support an in-place reload on this platform")]
+    ReloadUnsupported,
+    #[error("sing-box core could not reload the staged generation")]
+    ReloadFailed,
     #[error("sing-box core could not be stopped")]
     StopFailed,
 }
@@ -177,6 +186,8 @@ impl ProcessError {
             Self::SpawnFailed => ProcessDiagnosticCode::SpawnFailed,
             Self::ObserveFailed => ProcessDiagnosticCode::ObserveFailed,
             Self::OutputReadFailed => ProcessDiagnosticCode::OutputReadFailed,
+            Self::ReloadUnsupported => ProcessDiagnosticCode::ReloadUnsupported,
+            Self::ReloadFailed => ProcessDiagnosticCode::ReloadFailed,
             Self::StopFailed => ProcessDiagnosticCode::StopFailed,
         }
     }
@@ -186,6 +197,7 @@ impl ProcessError {
 pub struct CoreProcessRunner {
     binary: PathBuf,
     generations_root: PathBuf,
+    runtime_config: PathBuf,
     limits: CoreProcessLimits,
 }
 
@@ -209,21 +221,31 @@ impl CoreProcessRunner {
         let generations_root = generations_root
             .canonicalize()
             .map_err(|_| ProcessError::InvalidGenerationPath)?;
+        let runtime_config = generations_root
+            .parent()
+            .ok_or(ProcessError::InvalidGenerationPath)?
+            .join("core-active.json");
         Ok(Self {
             binary,
             generations_root,
+            runtime_config,
             limits,
         })
     }
 
     pub fn start(&self, config_path: &Path) -> Result<RunningCore, ProcessError> {
-        let config_path = self.validate_generation_path(config_path)?;
+        let source_config_path = self.validate_generation_path(config_path)?;
+        publish_runtime_config(&source_config_path, &self.runtime_config)?;
         let mut command = Command::new(&self.binary);
         command
             .arg("run")
             .arg("-c")
-            .arg(&config_path)
-            .current_dir(config_path.parent().expect("validated config has parent"))
+            .arg(&self.runtime_config)
+            .current_dir(
+                self.runtime_config
+                    .parent()
+                    .expect("runtime config has parent"),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -262,7 +284,9 @@ impl CoreProcessRunner {
         Ok(RunningCore {
             child: Some(child),
             identity,
-            config_path,
+            config_path: self.runtime_config.clone(),
+            generations_root: self.generations_root.clone(),
+            pending_reload: None,
             stdout_reader: Some(stdout_reader),
             stderr_reader: Some(stderr_reader),
             stop_timeout: self.limits.stop_timeout,
@@ -271,26 +295,7 @@ impl CoreProcessRunner {
     }
 
     fn validate_generation_path(&self, config_path: &Path) -> Result<PathBuf, ProcessError> {
-        if !config_path.is_absolute() || config_path.file_name() != Some(OsStr::new("config.json"))
-        {
-            return Err(ProcessError::InvalidGenerationPath);
-        }
-        let canonical =
-            checked_regular_file(config_path.to_path_buf(), RunnerError::InvalidCandidatePath)
-                .map_err(|_| ProcessError::InvalidGenerationPath)?;
-        let generation_dir = canonical
-            .parent()
-            .ok_or(ProcessError::InvalidGenerationPath)?;
-        let generation = generation_dir
-            .file_name()
-            .and_then(OsStr::to_str)
-            .and_then(|value| value.parse::<u64>().ok());
-        if generation.is_none_or(|value| value == 0)
-            || generation_dir.parent() != Some(self.generations_root.as_path())
-        {
-            return Err(ProcessError::InvalidGenerationPath);
-        }
-        Ok(canonical)
+        validate_generation_path(&self.generations_root, config_path)
     }
 
     #[cfg(test)]
@@ -298,13 +303,46 @@ impl CoreProcessRunner {
         &self,
         config_path: &Path,
     ) -> Result<Vec<std::ffi::OsString>, ProcessError> {
-        let config_path = self.validate_generation_path(config_path)?;
+        self.validate_generation_path(config_path)?;
         Ok(vec![
             std::ffi::OsString::from("run"),
             std::ffi::OsString::from("-c"),
-            config_path.into_os_string(),
+            self.runtime_config.clone().into_os_string(),
         ])
     }
+}
+
+fn validate_generation_path(
+    generations_root: &Path,
+    config_path: &Path,
+) -> Result<PathBuf, ProcessError> {
+    if !config_path.is_absolute() || config_path.file_name() != Some(OsStr::new("config.json")) {
+        return Err(ProcessError::InvalidGenerationPath);
+    }
+    let canonical =
+        checked_regular_file(config_path.to_path_buf(), RunnerError::InvalidCandidatePath)
+            .map_err(|_| ProcessError::InvalidGenerationPath)?;
+    let generation_dir = canonical
+        .parent()
+        .ok_or(ProcessError::InvalidGenerationPath)?;
+    let generation = generation_dir
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(|value| value.parse::<u64>().ok());
+    if generation.is_none_or(|value| value == 0)
+        || generation_dir.parent() != Some(generations_root)
+    {
+        return Err(ProcessError::InvalidGenerationPath);
+    }
+    Ok(canonical)
+}
+
+fn publish_runtime_config(source: &Path, target: &Path) -> Result<(), ProcessError> {
+    let bytes = fs::read(source).map_err(|_| ProcessError::InvalidGenerationPath)?;
+    if bytes.is_empty() || bytes.len() > MAX_RUNTIME_CONFIG_BYTES {
+        return Err(ProcessError::InvalidGenerationPath);
+    }
+    crate::worker_config::atomic_write(target, &bytes).map_err(|_| ProcessError::ReloadFailed)
 }
 
 type OutputReader = thread::JoinHandle<std::io::Result<CheckOutputSummary>>;
@@ -314,6 +352,8 @@ pub struct RunningCore {
     child: Option<Child>,
     identity: ProcessIdentity,
     config_path: PathBuf,
+    generations_root: PathBuf,
+    pending_reload: Option<Vec<u8>>,
     stdout_reader: Option<OutputReader>,
     stderr_reader: Option<OutputReader>,
     stop_timeout: Duration,
@@ -327,6 +367,45 @@ impl RunningCore {
 
     pub fn config_path(&self) -> &Path {
         &self.config_path
+    }
+
+    pub const fn supports_reload(&self) -> bool {
+        cfg!(unix)
+    }
+
+    pub fn stage_reload(&mut self, config_path: &Path) -> Result<(), ProcessError> {
+        if !self.supports_reload() {
+            return Err(ProcessError::ReloadUnsupported);
+        }
+        if self.pending_reload.is_some() || self.try_exit()?.is_some() {
+            return Err(ProcessError::ReloadFailed);
+        }
+        let source = validate_generation_path(&self.generations_root, config_path)?;
+        let previous = fs::read(&self.config_path).map_err(|_| ProcessError::ReloadFailed)?;
+        publish_runtime_config(&source, &self.config_path)?;
+        if send_reload_signal(self.child.as_mut().ok_or(ProcessError::ReloadFailed)?).is_err() {
+            let _ = crate::worker_config::atomic_write(&self.config_path, &previous);
+            return Err(ProcessError::ReloadFailed);
+        }
+        self.pending_reload = Some(previous);
+        Ok(())
+    }
+
+    pub fn commit_reload(&mut self) -> Result<(), ProcessError> {
+        if self.pending_reload.take().is_none() {
+            return Err(ProcessError::ReloadFailed);
+        }
+        Ok(())
+    }
+
+    pub fn rollback_reload(&mut self) -> Result<(), ProcessError> {
+        let previous = self
+            .pending_reload
+            .take()
+            .ok_or(ProcessError::ReloadFailed)?;
+        crate::worker_config::atomic_write(&self.config_path, &previous)
+            .map_err(|_| ProcessError::ReloadFailed)?;
+        send_reload_signal(self.child.as_mut().ok_or(ProcessError::ReloadFailed)?)
     }
 
     pub fn try_exit(&mut self) -> Result<Option<ProcessExitReport>, ProcessError> {
@@ -450,6 +529,21 @@ fn request_graceful_stop(child: &mut Child) -> Result<bool, ProcessError> {
         .map_err(|_| ProcessError::StopFailed)
 }
 
+#[cfg(unix)]
+fn send_reload_signal(child: &mut Child) -> Result<(), ProcessError> {
+    let pid = i32::try_from(child.id()).map_err(|_| ProcessError::ReloadFailed)?;
+    // SAFETY: `pid` comes from the owned child and SIGHUP carries no pointer data.
+    let result = unsafe { libc::kill(pid, libc::SIGHUP) };
+    (result == 0)
+        .then_some(())
+        .ok_or(ProcessError::ReloadFailed)
+}
+
+#[cfg(not(unix))]
+fn send_reload_signal(_child: &mut Child) -> Result<(), ProcessError> {
+    Err(ProcessError::ReloadUnsupported)
+}
+
 fn terminate_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -493,11 +587,40 @@ mod tests {
 
     #[test]
     fn command_arguments_are_fixed_to_sing_box_run() {
-        let (_directory, runner, config) = runner_fixture();
+        let (directory, runner, config) = runner_fixture();
         let args = runner.command_arguments(&config).unwrap();
         assert_eq!(args[0], "run");
         assert_eq!(args[1], "-c");
-        assert_eq!(args[2], config.canonicalize().unwrap());
+        assert_eq!(
+            args[2],
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("core-active.json")
+        );
+    }
+
+    #[test]
+    fn start_publishes_an_owned_stable_runtime_config() {
+        let (directory, runner, config) = runner_fixture();
+        fs::write(&config, br#"{"generation":1}"#).unwrap();
+
+        let process = runner.start(&config).unwrap();
+
+        assert_eq!(
+            process.config_path(),
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("core-active.json")
+        );
+        assert_eq!(
+            fs::read(process.config_path()).unwrap(),
+            br#"{"generation":1}"#
+        );
+        process.stop().unwrap();
     }
 
     #[test]
@@ -587,5 +710,45 @@ mod tests {
         let process = runner.start(&config).unwrap();
         let report = process.stop().unwrap();
         assert!(report.forced());
+    }
+
+    #[cfg(all(unix, not(target_os = "android")))]
+    #[test]
+    fn unix_process_contract_reloads_and_rolls_back_the_stable_config() {
+        let script = "#!/bin/sh\ntrap 'cp \"$3\" observed.json' HUP\ntrap 'exit 0' TERM\nwhile :; do sleep 0.01; done\n";
+        let (directory, runner, config) = unix_runner(script, Duration::from_secs(1));
+        fs::write(&config, br#"{"generation":1}"#).unwrap();
+        let second = directory.path().join("generations/2");
+        fs::create_dir(&second).unwrap();
+        let second_config = second.join("config.json");
+        fs::write(&second_config, br#"{"generation":2}"#).unwrap();
+        let observed = directory.path().join("observed.json");
+        let mut process = runner.start(&config).unwrap();
+
+        process.stage_reload(&second_config).unwrap();
+        wait_for_file_contents(&observed, br#"{"generation":2}"#);
+        process.rollback_reload().unwrap();
+        wait_for_file_contents(&observed, br#"{"generation":1}"#);
+
+        assert_eq!(
+            fs::read(process.config_path()).unwrap(),
+            br#"{"generation":1}"#
+        );
+        process.stop().unwrap();
+    }
+
+    #[cfg(all(unix, not(target_os = "android")))]
+    fn wait_for_file_contents(path: &Path, expected: &[u8]) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if fs::read(path).is_ok_and(|bytes| bytes == expected) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reload was not observed"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }

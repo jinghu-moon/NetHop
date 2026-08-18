@@ -12,7 +12,8 @@ use thiserror::Error;
 
 use crate::{
     ActivationDiagnosticCode, ActiveGeneration, CandidateActivator, CandidateChecker,
-    CandidateProcess, CoreLauncher, HealthProbe, ProcessIdentity, SafetyAuditor, TunRuntime,
+    CandidateProcess, CoreLauncher, HealthProbe, ProcessError, ProcessIdentity, SafetyAuditor,
+    TunRuntime,
 };
 
 pub trait CapabilitySource {
@@ -423,6 +424,13 @@ pub struct ActiveRuntime<P: CandidateProcess, R> {
     active: ActiveGeneration<P>,
     attachment: RuntimeAttachment<R>,
     capabilities: CapabilityReport,
+    policy: CapturePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeReloadHealthError {
+    Core,
+    DataPlane,
 }
 
 #[derive(Debug)]
@@ -500,12 +508,57 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
         &self.capabilities
     }
 
+    pub const fn policy(&self) -> &CapturePolicy {
+        &self.policy
+    }
+
     pub fn process_identity(&self) -> ProcessIdentity {
         self.active.identity()
     }
 
     pub fn process_mut(&mut self) -> &mut P {
         self.active.process_mut()
+    }
+
+    pub(crate) fn commit_reload(
+        &mut self,
+        generation: SealedGeneration,
+    ) -> Result<(), ProcessError> {
+        self.active.process_mut().commit_reload()?;
+        self.active.replace_generation(generation);
+        Ok(())
+    }
+
+    pub(crate) fn stage_process_reload(
+        &mut self,
+        config_path: &std::path::Path,
+    ) -> Result<(), ProcessError> {
+        self.active.process_mut().stage_reload(config_path)
+    }
+
+    pub(crate) fn rollback_process_reload(&mut self) -> Result<(), ProcessError> {
+        self.active.process_mut().rollback_reload()
+    }
+
+    pub(crate) fn wait_reload_healthy<H, D>(
+        &mut self,
+        core_health: &H,
+        data_plane_health: &mut D,
+    ) -> Result<(), RuntimeReloadHealthError>
+    where
+        H: HealthProbe<P>,
+        D: DataPlaneHealthProbe<P>,
+    {
+        core_health
+            .wait_healthy(self.active.process_mut())
+            .map_err(|_| RuntimeReloadHealthError::Core)?;
+        data_plane_health
+            .wait_healthy(
+                self.active.process_mut(),
+                self.attachment.view(),
+                &self.capabilities,
+            )
+            .map_err(|_| RuntimeReloadHealthError::DataPlane)
     }
 
     pub(crate) fn rebuild_network<N>(
@@ -715,6 +768,7 @@ where
             active: ActiveGeneration::recovered(generation, process),
             attachment,
             capabilities,
+            policy: policy.clone(),
         })
     }
 }
@@ -940,6 +994,7 @@ where
             active,
             attachment,
             capabilities,
+            policy: policy.clone(),
         })
     }
 

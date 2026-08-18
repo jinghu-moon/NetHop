@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "methods": {
     "mode_get": "subscription.mode_get",
     "mode_set": "subscription.mode_set",

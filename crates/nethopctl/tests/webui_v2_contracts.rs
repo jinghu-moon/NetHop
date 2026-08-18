@@ -153,7 +153,7 @@ fn webui_payload_cli_accepts_only_the_config_mutate_allowlist_name() {
         "webui",
         "payload",
         "commit",
-        "subscription",
+        "config",
         "p_0123456789abcdef0123456789abcdef",
         "config-mutate",
         "--json",
@@ -164,6 +164,30 @@ fn webui_payload_cli_accepts_only_the_config_mutate_allowlist_name() {
     assert_eq!(
         request.params().payload_operation(),
         Some(WebUiPayloadOperation::ConfigMutate)
+    );
+}
+
+#[test]
+fn webui_payload_cli_maps_node_override_to_its_private_namespace() {
+    let invocation = parse_invocation([
+        "webui",
+        "payload",
+        "commit",
+        "node",
+        "p_0123456789abcdef0123456789abcdef",
+        "node-override-apply",
+        "--json",
+    ])
+    .unwrap();
+    let request =
+        build_request(&invocation, RequestId::new("node-override").unwrap(), None).unwrap();
+    assert_eq!(
+        request.params().payload_namespace(),
+        Some(WebUiPayloadNamespace::Node)
+    );
+    assert_eq!(
+        request.params().payload_operation(),
+        Some(WebUiPayloadOperation::NodeOverrideApply)
     );
 }
 

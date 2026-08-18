@@ -20,7 +20,7 @@ pub struct ConfigRuntime {
     current_source_digest: String,
     current_sources: SourceConfig,
     module_entry: Option<PathBuf>,
-    app_catalog: Option<AppCatalog>,
+    runtime_capture: Option<nethop_core::CapturePolicy>,
     candidate_sequence: u64,
     last_reload: ConfigReloadState,
 }
@@ -39,7 +39,7 @@ impl ConfigRuntime {
             current_source_digest: current_sources.source_config_digest().to_owned(),
             current_sources: current_sources.clone(),
             module_entry: None,
-            app_catalog: None,
+            runtime_capture: None,
             candidate_sequence: 0,
             last_reload: ConfigReloadState::Accepted,
         }
@@ -60,8 +60,7 @@ impl ConfigRuntime {
     }
 
     pub fn with_app_catalog(mut self, catalog: AppCatalog) -> Result<Self, ConfigRuntimeError> {
-        self.current.effective().admitted_capture(Some(&catalog))?;
-        self.app_catalog = Some(catalog);
+        self.runtime_capture = Some(self.current.effective().admitted_capture(Some(&catalog))?);
         Ok(self)
     }
 
@@ -112,9 +111,20 @@ impl ConfigRuntime {
     }
 
     pub fn capture_policy(&self) -> Result<nethop_core::CapturePolicy, ConfigRuntimeError> {
+        Ok(self
+            .runtime_capture
+            .clone()
+            .unwrap_or_else(|| self.current.effective().capture().clone()))
+    }
+
+    pub fn capture_policy_with_uids(
+        &self,
+        include_uids: &[u32],
+        exclude_uids: &[u32],
+    ) -> Result<nethop_core::CapturePolicy, ConfigRuntimeError> {
         self.current
             .effective()
-            .admitted_capture(self.app_catalog.as_ref())
+            .capture_with_application_uids(include_uids, exclude_uids)
             .map_err(Into::into)
     }
 
@@ -158,6 +168,7 @@ impl ConfigRuntime {
         self.current = checkpoint.current;
         self.current_source_digest = checkpoint.current_source_digest;
         self.current_sources = checkpoint.current_sources;
+        self.runtime_capture = None;
         Ok(ConfigChange::Changed {
             digest,
             enabled,
@@ -282,9 +293,7 @@ impl ConfigRuntime {
     }
 
     fn admit(&self, snapshot: &ConfigSnapshot) -> Result<(), ConfigRuntimeError> {
-        snapshot
-            .effective()
-            .admitted_capture(self.app_catalog.as_ref())?;
+        let _ = snapshot.effective().capture();
         Ok(())
     }
 
@@ -676,6 +685,7 @@ impl ConfigRuntime {
         self.current_source_digest = sources.source_config_digest().to_owned();
         self.current_sources = sources.clone();
         self.current = candidate;
+        self.runtime_capture = None;
         Ok(ConfigChange::Changed {
             digest,
             enabled,
@@ -777,7 +787,11 @@ fn apply_mutation(
         ConfigMutation::SetServiceEnabled { enabled } => {
             set_value(document, "/service/enabled", serde_json::json!(enabled))?;
         }
-        ConfigMutation::AddSource { name, url } => {
+        ConfigMutation::AddSource {
+            name,
+            url,
+            settings,
+        } => {
             let enabled = sources.active_sources().next().is_none();
             let list = array_mut(document, "/subscriptions/sources")?;
             if enabled {
@@ -786,7 +800,16 @@ fn apply_mutation(
                 }
             }
             *added_index = Some(list.len());
-            list.push(serde_json::json!({"name": name, "url": url, "enabled": enabled}));
+            let mut source = serde_json::json!({"name": name, "url": url, "enabled": enabled});
+            if let Some(settings) = settings {
+                apply_source_settings(
+                    source
+                        .as_object_mut()
+                        .expect("source mutation creates an object"),
+                    settings,
+                )?;
+            }
+            list.push(source);
             preferred_ids.push(None);
         }
         ConfigMutation::UpdateSource {
@@ -794,6 +817,7 @@ fn apply_mutation(
             name,
             url,
             enabled,
+            settings,
         } => {
             let index = source_index(sources, source_id)?;
             let source = array_mut(document, "/subscriptions/sources")?
@@ -808,6 +832,9 @@ fn apply_mutation(
             }
             if let Some(value) = enabled {
                 source.insert("enabled".into(), serde_json::json!(value));
+            }
+            if let Some(settings) = settings {
+                apply_source_patch(source, settings)?;
             }
         }
         ConfigMutation::RemoveSource { source_id } => {
@@ -895,6 +922,68 @@ fn apply_mutation(
             set_value(document, pointer, value.clone())?;
         }
     }
+    Ok(())
+}
+
+fn apply_source_settings(
+    source: &mut serde_json::Map<String, serde_json::Value>,
+    settings: &nethop_protocol::SubscriptionSourceSettings,
+) -> Result<(), ConfigRuntimeError> {
+    source.insert(
+        "request_profile".into(),
+        serde_json::to_value(settings.request_profile).map_err(|_| ConfigError::InvalidToml)?,
+    );
+    source.insert(
+        "format_hint".into(),
+        serde_json::to_value(settings.format_hint).map_err(|_| ConfigError::InvalidToml)?,
+    );
+    source.insert("mirrors".into(), serde_json::json!(settings.mirrors));
+    apply_source_filter(source, &settings.filter)
+}
+
+fn apply_source_patch(
+    source: &mut serde_json::Map<String, serde_json::Value>,
+    settings: &nethop_protocol::SubscriptionSourcePatch,
+) -> Result<(), ConfigRuntimeError> {
+    if let Some(request_profile) = settings.request_profile {
+        source.insert(
+            "request_profile".into(),
+            serde_json::to_value(request_profile).map_err(|_| ConfigError::InvalidToml)?,
+        );
+    }
+    if let Some(format_hint) = settings.format_hint {
+        source.insert(
+            "format_hint".into(),
+            serde_json::to_value(format_hint).map_err(|_| ConfigError::InvalidToml)?,
+        );
+    }
+    if let Some(mirrors) = &settings.mirrors {
+        source.insert("mirrors".into(), serde_json::json!(mirrors));
+    }
+    if let Some(filter) = &settings.filter {
+        apply_source_filter(source, filter)?;
+    }
+    Ok(())
+}
+
+fn apply_source_filter(
+    source: &mut serde_json::Map<String, serde_json::Value>,
+    settings: &nethop_protocol::SubscriptionSourceFilter,
+) -> Result<(), ConfigRuntimeError> {
+    let filter = source
+        .entry("filter")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or(ConfigError::InvalidToml)?;
+    filter.insert(
+        "include_names".into(),
+        serde_json::json!(settings.include_names),
+    );
+    filter.insert(
+        "exclude_names".into(),
+        serde_json::json!(settings.exclude_names),
+    );
+    filter.insert("protocols".into(), serde_json::json!(settings.protocols));
     Ok(())
 }
 

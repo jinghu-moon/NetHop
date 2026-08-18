@@ -517,6 +517,16 @@ fn operational_commands_build_only_bounded_typed_params() {
             nethop_protocol::ControlMethod::NodeExport,
             "nh1s-0123456789abcdef",
         ),
+        (
+            vec!["node", "override", "get", "nh1s-0123456789abcdef"],
+            nethop_protocol::ControlMethod::NodeOverrideGet,
+            "nh1s-0123456789abcdef",
+        ),
+        (
+            vec!["node", "override", "remove", "nh1s-0123456789abcdef"],
+            nethop_protocol::ControlMethod::NodeOverrideRemove,
+            "nh1s-0123456789abcdef",
+        ),
     ] {
         let invocation = parse_invocation(arguments).unwrap();
         let request = build_request(&invocation, RequestId::new("target").unwrap(), None).unwrap();
@@ -581,7 +591,7 @@ fn operational_commands_build_only_bounded_typed_params() {
     let request = build_request(&add, RequestId::new("sub-add").unwrap(), None).unwrap();
     assert!(matches!(
         request.params().mutation_value(),
-        Some(nethop_protocol::ConfigMutation::AddSource { name, url })
+        Some(nethop_protocol::ConfigMutation::AddSource { name, url, .. })
             if name == "Primary" && url == "https://example.com/sub"
     ));
 
@@ -778,7 +788,7 @@ fn client_sends_one_typed_request_and_preserves_daemon_response() {
     assert_eq!(transport.observed[0].method(), CliCommand::Status.method());
     assert_eq!(
         render_response(&actual).unwrap(),
-        r#"{"version":5,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
+        r#"{"version":6,"request_id":"ctl-test","ok":true,"generation":9,"result":{"state":"running"}}"#
     );
 }
 

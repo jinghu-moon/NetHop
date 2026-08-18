@@ -30,18 +30,18 @@ use crate::{
     ApiSecretStore, ClashApiClient, ClashApiLimits, CommitJournalStore, ConfigRuntime, ConfigStore,
     ConfigWatcher, ConfiguredSourceUpdater, FileLogRetention, HttpCoreReleaseBodyFetcher,
     HttpRuleSetBodyFetcher, HttpSourceBodyFetcher, JsonCoreVersionStateStore, ManualSourceStore,
-    MutationCoordinator, NodeSelectionStore, OperationalControl, OptionalRuntimeUpdateSource,
-    PersistentCoreVersionSchedule, PersistentRuleSetSchedule, PersistentUpdateSchedule,
-    RuleSetLimits, RuleSetProviderManifest, RuleSetStore, RuleSetUpdateService, SourceRegistry,
-    SourceStatusStore, SourceUpdateService, StatsStore, SystemSourceIdEntropy, UpdateRuntimePolicy,
-    WebUiPayloadStore,
+    MutationCoordinator, NodeOverrideStore, NodeSelectionStore, OperationalControl,
+    OptionalRuntimeUpdateSource, PersistentCoreVersionSchedule, PersistentRuleSetSchedule,
+    PersistentUpdateSchedule, RuleSetLimits, RuleSetProviderManifest, RuleSetStore,
+    RuleSetUpdateService, SourceRegistry, SourceStatusStore, SourceUpdateService, StatsStore,
+    SystemSourceIdEntropy, UpdateRuntimePolicy, WebUiPayloadStore,
 };
 #[cfg(all(unix, feature = "subscription-update"))]
 use nethop_android::{
-    AndroidToolPaths, AppCatalog, CapabilityProbe, CommandPrivateDnsFactsSource,
-    CommandProbeBackend, CommandUpdateNotifier, CommandWifiFactsSource, NetworkExecutor,
-    NetworkPlanVerifier, PlanSlot, ProbeLimits, SystemCommandBackend, SystemCommandLimits,
-    TunHealthVerifier, default_tun_interface,
+    AndroidToolPaths, CapabilityProbe, CommandPrivateDnsFactsSource, CommandProbeBackend,
+    CommandUpdateNotifier, CommandWifiFactsSource, NetworkExecutor, NetworkPlanVerifier, PlanSlot,
+    ProbeLimits, SystemCommandBackend, SystemCommandLimits, TunHealthVerifier,
+    default_tun_interface,
 };
 #[cfg(all(unix, feature = "subscription-update"))]
 use nethop_core::GenerationStore;
@@ -297,7 +297,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
     #[cfg(feature = "subscription-update")]
     report_worker_stage("sources_reconciled");
     #[cfg(feature = "subscription-update")]
-    let mut config_runtime = ConfigRuntime::new(
+    let config_runtime = ConfigRuntime::new(
         config_store,
         source_registry,
         config_snapshot,
@@ -306,16 +306,12 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
     .with_module_entry("/data/adb/modules/nethop/config/nethop.toml")
     .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
     report_worker_stage("config_runtime_ready");
-    let mut package_backend = CommandProbeBackend::new(
+    let package_backend = CommandProbeBackend::new(
         AndroidToolPaths::from_system()
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
         ProbeLimits::default(),
     );
-    if let Ok(catalog) = AppCatalog::load_started_users(&mut package_backend) {
-        config_runtime = config_runtime
-            .with_app_catalog(catalog)
-            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
-    }
+    report_worker_stage("app_resolver_deferred");
     let capture = config_runtime
         .capture_policy()
         .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
@@ -502,6 +498,12 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
             .with_cache_root(runtime.root().join("subscriptions/cache"))
             .map_err(|_| ApplicationError::WorkerInitializationFailed)?
             .with_local_proxy(local_fetch_proxy);
+        let node_override_store =
+            NodeOverrideStore::new(runtime.root().join("subscriptions/node-overrides.json"))
+                .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
+        let node_overrides = node_override_store
+            .load()
+            .map_err(|_| ApplicationError::WorkerInitializationFailed)?;
         let service = SourceUpdateService::new(
             &store,
             fetcher,
@@ -520,7 +522,8 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         .with_manual_source_store(
             ManualSourceStore::new(runtime.root().join("subscriptions/manual-source.body"))
                 .map_err(|_| ApplicationError::WorkerInitializationFailed)?,
-        );
+        )
+        .with_node_override_store(node_override_store, node_overrides);
         let updater = ConfiguredSourceUpdater::new(service, source_config);
         report_worker_stage("source_updater_ready");
         let database_path = runtime.root().join("state/nethop.db");
@@ -591,6 +594,7 @@ pub fn run_system_worker(runtime: &RuntimeRoot) -> Result<(), ApplicationError> 
         .with_rule_set_update_source(rule_set_updater)
         .with_rule_set_schedule(rule_set_schedule)
         .with_subscription_transactions(journal, MutationCoordinator::default())
+        .with_package_backend(package_backend)
         .with_configuration(config_runtime, restore_current)
         .with_update_schedule(schedule)
         .with_log_retention(

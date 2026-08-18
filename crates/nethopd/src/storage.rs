@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -77,6 +78,21 @@ pub struct SourceStatus {
     pub subscription_download_bytes: Option<u64>,
     pub subscription_total_bytes: Option<u64>,
     pub subscription_expire_at: Option<i64>,
+    pub using_last_known_good: bool,
+    pub diagnostic_code: Option<String>,
+}
+
+#[cfg(feature = "subscription-update")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceUpdateHistoryEntry {
+    pub source_id: String,
+    pub attempted_at_wall_seconds: i64,
+    pub health: SourceHealth,
+    pub generation: Option<u64>,
+    pub accepted: u64,
+    pub duplicate: u64,
+    pub rejected: u64,
+    pub warnings: u64,
     pub using_last_known_good: bool,
     pub diagnostic_code: Option<String>,
 }
@@ -259,7 +275,22 @@ fn initialize(connection: &Connection) -> Result<(), StatsStoreError> {
                subscription_expire_at INTEGER,
                using_last_known_good INTEGER NOT NULL,
                diagnostic_code TEXT
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS source_update_history (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               source_id TEXT NOT NULL,
+               attempted_at_wall_seconds INTEGER NOT NULL,
+               health TEXT NOT NULL,
+               generation INTEGER,
+               accepted INTEGER NOT NULL,
+               duplicate_count INTEGER NOT NULL,
+               rejected INTEGER NOT NULL,
+               warnings INTEGER NOT NULL,
+               using_last_known_good INTEGER NOT NULL,
+               diagnostic_code TEXT
+             );
+             CREATE INDEX IF NOT EXISTS source_update_history_time_idx
+               ON source_update_history(attempted_at_wall_seconds DESC, id DESC);",
         )
         .map_err(StatsStoreError::Database)?;
     ensure_source_status_metadata_columns(connection)
@@ -416,7 +447,29 @@ impl SourceStatusStore {
                     ],
                 )
                 .map_err(StatsStoreError::Database)?;
+            transaction
+                .execute(
+                    "INSERT INTO source_update_history
+                       (source_id, attempted_at_wall_seconds, health, generation,
+                        accepted, duplicate_count, rejected, warnings,
+                        using_last_known_good, diagnostic_code)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![
+                        detail.source_id.as_str(),
+                        wall_seconds,
+                        health,
+                        generation,
+                        accepted,
+                        duplicate,
+                        rejected,
+                        warnings,
+                        using_last_known_good,
+                        detail.diagnostic_code.as_deref(),
+                    ],
+                )
+                .map_err(StatsStoreError::Database)?;
         }
+        prune_source_history(&transaction)?;
         transaction.commit().map_err(StatsStoreError::Database)
     }
 
@@ -467,7 +520,18 @@ impl SourceStatusStore {
                     params![source_id.as_str(), wall_seconds, diagnostic_code],
                 )
                 .map_err(StatsStoreError::Database)?;
+            transaction
+                .execute(
+                    "INSERT INTO source_update_history
+                       (source_id, attempted_at_wall_seconds, health, generation,
+                        accepted, duplicate_count, rejected, warnings,
+                        using_last_known_good, diagnostic_code)
+                     VALUES (?1, ?2, 'failed', NULL, 0, 0, 0, 0, 0, ?3)",
+                    params![source_id.as_str(), wall_seconds, diagnostic_code],
+                )
+                .map_err(StatsStoreError::Database)?;
         }
+        prune_source_history(&transaction)?;
         transaction.commit().map_err(StatsStoreError::Database)
     }
 
@@ -546,6 +610,82 @@ impl SourceStatusStore {
         }
         Ok(statuses)
     }
+
+    pub fn history<I, S>(
+        &self,
+        source_ids: I,
+        limit: u16,
+    ) -> Result<Vec<SourceUpdateHistoryEntry>, StatsStoreError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if !(1..=128).contains(&limit) {
+            return Err(StatsStoreError::InvalidBucket);
+        }
+        let source_ids = source_ids
+            .into_iter()
+            .map(|value| {
+                SourceId::new(value.as_ref())
+                    .map(|source_id| source_id.as_str().to_owned())
+                    .map_err(|_| StatsStoreError::InvalidBucket)
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+        if source_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT source_id, attempted_at_wall_seconds, health, generation,
+                        accepted, duplicate_count, rejected, warnings,
+                        using_last_known_good, diagnostic_code
+                 FROM source_update_history ORDER BY id DESC LIMIT 512",
+            )
+            .map_err(StatsStoreError::Database)?;
+        let rows = statement
+            .query_map([], |row| {
+                let health: String = row.get(2)?;
+                Ok(SourceUpdateHistoryEntry {
+                    source_id: row.get(0)?,
+                    attempted_at_wall_seconds: row.get(1)?,
+                    health: health_from_db(&health),
+                    generation: row
+                        .get::<_, Option<i64>>(3)?
+                        .map(|value| value.max(0) as u64),
+                    accepted: row.get::<_, i64>(4)?.max(0) as u64,
+                    duplicate: row.get::<_, i64>(5)?.max(0) as u64,
+                    rejected: row.get::<_, i64>(6)?.max(0) as u64,
+                    warnings: row.get::<_, i64>(7)?.max(0) as u64,
+                    using_last_known_good: row.get(8)?,
+                    diagnostic_code: row.get(9)?,
+                })
+            })
+            .map_err(StatsStoreError::Database)?;
+        let mut history = Vec::with_capacity(usize::from(limit));
+        for row in rows {
+            let entry = row.map_err(StatsStoreError::Database)?;
+            if source_ids.contains(&entry.source_id) {
+                history.push(entry);
+                if history.len() == usize::from(limit) {
+                    break;
+                }
+            }
+        }
+        Ok(history)
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+fn prune_source_history(transaction: &rusqlite::Transaction<'_>) -> Result<(), StatsStoreError> {
+    transaction
+        .execute(
+            "DELETE FROM source_update_history
+             WHERE id NOT IN (SELECT id FROM source_update_history ORDER BY id DESC LIMIT 512)",
+            [],
+        )
+        .map_err(StatsStoreError::Database)?;
+    Ok(())
 }
 
 #[cfg(feature = "subscription-update")]

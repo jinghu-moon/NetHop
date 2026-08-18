@@ -126,3 +126,40 @@ fn unknown_source_has_an_explicit_never_state_without_fake_timestamps() {
     assert_eq!(status.last_attempt_wall_seconds, None);
     assert_eq!(status.last_success_wall_seconds, None);
 }
+
+#[test]
+fn source_update_history_is_persistent_newest_first_and_bounded_by_source() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("nethop.db");
+    let source_id = SourceId::new("src_05050505050505050505050505050505").unwrap();
+    let other_id = SourceId::new("src_06060606060606060606060606060606").unwrap();
+    let mut store = SourceStatusStore::open(&path).unwrap();
+    store
+        .record_report(100, &report(&source_id, SourceBodyOrigin::Fresh))
+        .unwrap();
+    store
+        .record_report(150, &report(&other_id, SourceBodyOrigin::Fresh))
+        .unwrap();
+    store
+        .record_report(200, &report(&source_id, SourceBodyOrigin::LastKnownGood))
+        .unwrap();
+    store
+        .record_failure(300, [source_id.as_str()], "fetch_failed")
+        .unwrap();
+
+    drop(store);
+    let store = SourceStatusStore::open(&path).unwrap();
+    let history = store.history([source_id.as_str()], 2).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].attempted_at_wall_seconds, 300);
+    assert_eq!(history[0].health, SourceHealth::Failed);
+    assert_eq!(history[0].diagnostic_code.as_deref(), Some("fetch_failed"));
+    assert_eq!(history[1].attempted_at_wall_seconds, 200);
+    assert_eq!(history[1].health, SourceHealth::Degraded);
+    assert!(history[1].using_last_known_good);
+    assert!(
+        history
+            .iter()
+            .all(|entry| entry.source_id == source_id.as_str())
+    );
+}

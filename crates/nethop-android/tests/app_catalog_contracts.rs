@@ -1,6 +1,6 @@
 use nethop_android::{
     AppCatalog, AppCatalogError, AppClass, AppSelectionMode, CapabilityError, PackageListKind,
-    PackageSnapshot, ProbeBackend, ProbeCommand, ProbeOutput,
+    PackageSnapshot, ProbeBackend, ProbeCommand, ProbeOutput, resolve_selection,
 };
 
 struct PackageBackend;
@@ -167,4 +167,31 @@ fn started_user_catalog_queries_each_running_user_and_skips_stopped_profiles() {
         1_010_123
     );
     assert!(catalog.app(11, "com.example.work").is_none());
+}
+
+#[test]
+fn runtime_resolver_uses_only_full_package_listing_and_reports_unresolved() {
+    let resolved = resolve_selection(
+        &mut PackageBackend,
+        AppSelectionMode::Whitelist,
+        [(0, "com.example.user"), (0, "com.missing")],
+    )
+    .unwrap();
+    assert_eq!(resolved.include_uids(), [10123]);
+    assert_eq!(
+        resolved.unresolved_packages(),
+        &[(0, "com.missing".to_owned())]
+    );
+}
+
+#[test]
+fn runtime_resolver_expands_shared_uid_without_classification_queries() {
+    let resolved = resolve_selection(
+        &mut PackageBackend,
+        AppSelectionMode::Blacklist,
+        [(0, "android")],
+    )
+    .unwrap();
+    assert_eq!(resolved.exclude_uids(), [1000]);
+    assert!(resolved.expansions().is_empty());
 }

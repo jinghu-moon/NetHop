@@ -25,6 +25,7 @@ pub const fn control_timeout(command: CliCommand, wait: bool) -> Duration {
             | CliCommand::SubscriptionModeSetSingle
             | CliCommand::SubscriptionModeSetMerge
             | CliCommand::SubscriptionSelect
+            | CliCommand::WebUiPayloadCommit
     ) {
         Duration::from_secs(10)
     } else {
@@ -56,6 +57,8 @@ pub enum CliCommand {
     NodeSelectManual,
     NodeRemove,
     NodeExport,
+    NodeOverrideGet,
+    NodeOverrideRemove,
     ConnectionsGet,
     ConnectionClose,
     ConnectionsCloseAll,
@@ -290,6 +293,8 @@ impl CliCommand {
             Self::NodeSelectAuto => ControlMethod::NodeSelectAuto,
             Self::NodeSelectManual => ControlMethod::NodeSelectManual,
             Self::NodeExport => ControlMethod::NodeExport,
+            Self::NodeOverrideGet => ControlMethod::NodeOverrideGet,
+            Self::NodeOverrideRemove => ControlMethod::NodeOverrideRemove,
             Self::NodeRemove => ControlMethod::ConfigMutate,
             Self::ConnectionsGet => ControlMethod::ConnectionsGet,
             Self::ConnectionClose => ControlMethod::ConnectionClose,
@@ -373,6 +378,11 @@ where
             },
             Some("remove") => CliCommand::NodeRemove,
             Some("export") => CliCommand::NodeExport,
+            Some("override") => match arguments.next().as_ref().map(AsRef::as_ref) {
+                Some("get") => CliCommand::NodeOverrideGet,
+                Some("remove") => CliCommand::NodeOverrideRemove,
+                _ => return Err(CliError::Usage),
+            },
             _ => return Err(CliError::Usage),
         },
         Some("connections") => match arguments.next().as_ref().map(AsRef::as_ref) {
@@ -400,15 +410,21 @@ where
             Some("update") => CliCommand::RuleSetUpdate,
             _ => return Err(CliError::Usage),
         },
-        Some("webui") if arguments.next().as_ref().map(AsRef::as_ref) == Some("payload") => {
-            match arguments.next().as_ref().map(AsRef::as_ref) {
+        Some("webui") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            Some("payload") => match arguments.next().as_ref().map(AsRef::as_ref) {
                 Some("create") => CliCommand::WebUiPayloadCreate,
                 Some("append") => CliCommand::WebUiPayloadAppend,
                 Some("commit") => CliCommand::WebUiPayloadCommit,
                 Some("remove") => CliCommand::WebUiPayloadRemove,
                 _ => return Err(CliError::Usage),
-            }
-        }
+            },
+            Some("icon") => match arguments.next().as_ref().map(AsRef::as_ref) {
+                Some("capability") => CliCommand::CapabilityGet,
+                Some("theme") => CliCommand::ApplicationList,
+                _ => return Err(CliError::Usage),
+            },
+            _ => return Err(CliError::Usage),
+        },
         Some("logs") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("get") => CliCommand::LogsGet,
             Some("tail") => CliCommand::LogsTail,
@@ -479,6 +495,7 @@ where
         }
         Some("subscription") if arguments.get(1).map(String::as_str) == Some("mode") => 2,
         Some("node") if arguments.get(1).map(String::as_str) == Some("select") => 3,
+        Some("node") if arguments.get(1).map(String::as_str) == Some("override") => 3,
         Some("webui") if arguments.get(1).map(String::as_str) == Some("payload") => 3,
         Some(
             "config" | "capability" | "node" | "connection" | "logs" | "subscription"
@@ -625,6 +642,8 @@ where
                             | CliCommand::NodeSelectManual
                             | CliCommand::NodeRemove
                             | CliCommand::NodeExport
+                            | CliCommand::NodeOverrideGet
+                            | CliCommand::NodeOverrideRemove
                             | CliCommand::ConnectionClose
                     )
                     && target.is_none() =>
@@ -658,6 +677,7 @@ where
                             | CliCommand::WebUiPayloadAppend
                             | CliCommand::WebUiPayloadCommit
                             | CliCommand::WebUiPayloadRemove
+                            | CliCommand::ApplicationList
                     ) =>
             {
                 positional.push(value.to_owned());
@@ -748,13 +768,15 @@ where
             | CliCommand::NodeSelectManual
             | CliCommand::NodeRemove
             | CliCommand::NodeExport
+            | CliCommand::NodeOverrideGet
+            | CliCommand::NodeOverrideRemove
             | CliCommand::ConnectionClose
     );
     if target.is_some() != target_command {
         return Err(CliError::Usage);
     }
     let expected_positionals = match command {
-        CliCommand::SubscriptionAdd | CliCommand::NetworkSet => 2,
+        CliCommand::SubscriptionAdd | CliCommand::NetworkSet => Some(2),
         CliCommand::SubscriptionRemove
         | CliCommand::SubscriptionMove
         | CliCommand::SubscriptionEnable
@@ -763,14 +785,14 @@ where
         | CliCommand::ApplicationAddPackage
         | CliCommand::ApplicationRemovePackage
         | CliCommand::ApplicationAddUid
-        | CliCommand::ApplicationRemoveUid => 1,
-        CliCommand::ApplicationMode => 1,
-        CliCommand::WebUiPayloadCreate => 1,
-        CliCommand::WebUiPayloadAppend | CliCommand::WebUiPayloadCommit => 3,
-        CliCommand::WebUiPayloadRemove => 2,
-        _ => 0,
+        | CliCommand::ApplicationRemoveUid => Some(1),
+        CliCommand::ApplicationMode => Some(1),
+        CliCommand::WebUiPayloadCreate => Some(1),
+        CliCommand::WebUiPayloadAppend | CliCommand::WebUiPayloadCommit => Some(3),
+        CliCommand::WebUiPayloadRemove => Some(2),
+        _ => None,
     };
-    if positional.len() != expected_positionals
+    if positional.len() != expected_positionals.unwrap_or(0)
         || (command != CliCommand::SubscriptionMove && before.is_some())
         || (command == CliCommand::SubscriptionMove && before.is_none())
     {
@@ -957,6 +979,7 @@ pub fn build_request(
             ConfigMutation::AddSource {
                 name: invocation.positional[0].clone(),
                 url: invocation.positional[1].clone(),
+                settings: None,
             },
         ),
         CliCommand::SubscriptionImportPreview | CliCommand::SubscriptionImportApply => {
@@ -1059,6 +1082,8 @@ pub fn build_request(
         CliCommand::NodeTest
         | CliCommand::NodeSelectManual
         | CliCommand::NodeExport
+        | CliCommand::NodeOverrideGet
+        | CliCommand::NodeOverrideRemove
         | CliCommand::ConnectionClose => {
             ControlParams::target(invocation.target.clone().ok_or(CliError::Usage)?)
         }
@@ -1096,7 +1121,8 @@ pub fn build_request(
         ),
         _ => ControlParams::new(invocation.wait, invocation.if_needed),
     };
-    ControlRequest::new(request_id, invocation.command.method())
+    let method = invocation.command.method();
+    ControlRequest::new(request_id, method)
         .with_params(params)
         .map_err(|_| CliError::RequestFailed)
 }
@@ -1106,6 +1132,7 @@ fn parse_payload_namespace(value: &str) -> Result<WebUiPayloadNamespace, CliErro
         "config" => Ok(WebUiPayloadNamespace::Config),
         "subscription" => Ok(WebUiPayloadNamespace::Subscription),
         "backup" => Ok(WebUiPayloadNamespace::Backup),
+        "node" => Ok(WebUiPayloadNamespace::Node),
         _ => Err(CliError::Usage),
     }
 }
@@ -1118,6 +1145,7 @@ fn parse_payload_operation(value: &str) -> Result<WebUiPayloadOperation, CliErro
         "subscription-import-preview" => Ok(WebUiPayloadOperation::SubscriptionImportPreview),
         "subscription-import-apply" => Ok(WebUiPayloadOperation::SubscriptionImportApply),
         "backup-restore" => Ok(WebUiPayloadOperation::BackupRestore),
+        "node-override-apply" => Ok(WebUiPayloadOperation::NodeOverrideApply),
         _ => Err(CliError::Usage),
     }
 }

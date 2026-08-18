@@ -526,7 +526,7 @@ impl EffectiveConfig {
             capture_mode,
             &network,
             &advanced,
-            applications.base_include_uids(),
+            applications.initial_include_uids(),
             applications.base_exclude_uids(),
         )?;
         Ok(Self {
@@ -601,12 +601,21 @@ impl EffectiveConfig {
             .ok_or(ConfigError::ApplicationCatalogUnavailable)?
             .compile_selection(mode, packages)
             .map_err(|_| ConfigError::InvalidApplications)?;
+        self.capture_with_application_uids(selection.include_uids(), selection.exclude_uids())
+    }
+
+    pub fn capture_with_application_uids(
+        &self,
+        include_uids: &[u32],
+        exclude_uids: &[u32],
+    ) -> Result<CapturePolicy, ConfigError> {
         let mut include = self.applications.base_include_uids();
-        include.extend_from_slice(selection.include_uids());
+        include.retain(|uid| *uid != APPLICATION_RESOLUTION_SENTINEL);
+        include.extend_from_slice(include_uids);
         include.sort_unstable();
         include.dedup();
         let mut exclude = self.applications.base_exclude_uids();
-        exclude.extend_from_slice(selection.exclude_uids());
+        exclude.extend_from_slice(exclude_uids);
         exclude.sort_unstable();
         exclude.dedup();
         if include.iter().any(|uid| exclude.contains(uid)) {
@@ -768,6 +777,11 @@ fn build_capture(
         })
         .map_err(|_| ConfigError::InvalidNetwork)
 }
+
+/// UID 1 is never an application UID on Android. It prevents a whitelist
+/// from temporarily degrading to "capture everything" while PackageManager
+/// is unavailable; it is removed once runtime resolution succeeds.
+pub(crate) const APPLICATION_RESOLUTION_SENTINEL: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1017,6 +1031,15 @@ impl ApplicationSettings {
             ApplicationMode::Whitelist => self.direct_uids().collect(),
             ApplicationMode::All | ApplicationMode::Blacklist => Vec::new(),
         }
+    }
+
+    fn initial_include_uids(&self) -> Vec<u32> {
+        let mut include = self.base_include_uids();
+        if self.mode == ApplicationMode::Whitelist && !self.targets.is_empty() && include.is_empty()
+        {
+            include.push(APPLICATION_RESOLUTION_SENTINEL);
+        }
+        include
     }
 
     fn base_exclude_uids(&self) -> Vec<u32> {

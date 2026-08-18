@@ -22,8 +22,9 @@ use thiserror::Error;
 
 use crate::{
     BuildCandidateError, CandidateBuildProfile, CandidateChecker, ManualSource, ManualSourceStore,
-    RuntimeUpdateError, RuntimeUpdateSource, SourceConfig, SourceDefinition, SubscriptionMode,
-    build_candidate, worker_config::atomic_write,
+    NodeOverrideSet, NodeOverrideStore, RuntimeUpdateError, RuntimeUpdateSource, SourceConfig,
+    SourceDefinition, SubscriptionMode, build_candidate_with_overrides,
+    worker_config::atomic_write,
 };
 
 pub type UpdateRuntimePolicy = CandidateBuildProfile;
@@ -277,6 +278,8 @@ pub struct SourceUpdateService<'a, F, C> {
     matrix: CapabilityMatrix,
     runtime: UpdateRuntimePolicy,
     manual_store: Option<ManualSourceStore>,
+    node_overrides: NodeOverrideSet,
+    node_override_store: Option<NodeOverrideStore>,
 }
 
 impl<'a, F, C> SourceUpdateService<'a, F, C>
@@ -300,12 +303,54 @@ where
             matrix,
             runtime,
             manual_store: None,
+            node_overrides: NodeOverrideSet::default(),
+            node_override_store: None,
         }
     }
 
     pub fn with_manual_source_store(mut self, store: ManualSourceStore) -> Self {
         self.manual_store = Some(store);
         self
+    }
+
+    pub fn with_node_overrides(mut self, overrides: NodeOverrideSet) -> Self {
+        self.node_overrides = overrides;
+        self
+    }
+
+    pub fn with_node_override_store(
+        mut self,
+        store: NodeOverrideStore,
+        overrides: NodeOverrideSet,
+    ) -> Self {
+        self.node_override_store = Some(store);
+        self.node_overrides = overrides;
+        self
+    }
+
+    pub fn node_overrides(&self) -> &NodeOverrideSet {
+        &self.node_overrides
+    }
+
+    pub fn replace_node_overrides(&mut self, overrides: NodeOverrideSet) {
+        self.node_overrides = overrides;
+    }
+
+    pub fn prepare_node_overrides(
+        &mut self,
+        config: &SourceConfig,
+        overrides: NodeOverrideSet,
+    ) -> Result<PreparedSourceUpdate, SourceUpdateError> {
+        if self.node_override_store.is_none() {
+            return Err(SourceUpdateError::NodeOverride);
+        }
+        let previous = std::mem::replace(&mut self.node_overrides, overrides.clone());
+        let prepared = self.prepare_cached(config);
+        self.node_overrides = previous;
+        prepared.map(|mut prepared| {
+            prepared.pending_node_overrides = Some(overrides);
+            prepared
+        })
     }
 
     pub fn update(
@@ -371,12 +416,13 @@ where
         }
         let generation = self.next_generation()?;
         let pool_source_ids = source_ids_with_manual_typed(config);
-        let candidate = build_candidate(
+        let candidate = build_candidate_with_overrides(
             generation,
             &conversion,
             self.runtime.clone(),
             SubscriptionMode::Merge,
             &pool_source_ids,
+            &self.node_overrides,
         )?
         .bind_sources(
             effective_source_digest(config, Some(Digest::sha256(bytes).hex().as_str())),
@@ -406,12 +452,13 @@ where
         }
         let generation = self.next_generation()?;
         let pool_source_ids = source_ids_with_manual_typed(config);
-        let candidate = build_candidate(
+        let candidate = build_candidate_with_overrides(
             generation,
             &conversion,
             self.runtime.clone(),
             SubscriptionMode::Merge,
             &pool_source_ids,
+            &self.node_overrides,
         )?
         .bind_sources(
             effective_source_digest(config, Some(Digest::sha256(bytes).hex().as_str())),
@@ -439,6 +486,7 @@ where
                 bytes: bytes.to_vec(),
                 format_hint,
             }),
+            pending_node_overrides: None,
             report: SourceUpdateReport {
                 generation,
                 source_count: conversion.source_outcomes.len(),
@@ -622,12 +670,13 @@ where
         } else {
             config.mode()
         };
-        let candidate = build_candidate(
+        let candidate = build_candidate_with_overrides(
             generation,
             &conversion,
             self.runtime.clone(),
             pool_mode,
             &pool_source_ids,
+            &self.node_overrides,
         )?
         .bind_sources(
             effective_source_digest(config, manual.as_ref().map(ManualSource::digest)),
@@ -656,6 +705,7 @@ where
             sealed,
             source_config_digest: config.source_config_digest().to_owned(),
             pending_manual: None,
+            pending_node_overrides: None,
             report: SourceUpdateReport {
                 generation,
                 source_count: active_sources.len() + usize::from(manual.is_some()),
@@ -686,13 +736,40 @@ where
         } else {
             None
         };
+        let override_checkpoint = if let Some(overrides) = &prepared.pending_node_overrides {
+            let store = self
+                .node_override_store
+                .as_ref()
+                .ok_or(SourceUpdateError::NodeOverride)?;
+            let checkpoint = store.load().map_err(|_| SourceUpdateError::NodeOverride)?;
+            if store.replace(overrides).is_err() {
+                if let (Some(store), Some(checkpoint)) =
+                    (self.manual_store.as_ref(), manual_checkpoint)
+                {
+                    let _ = store.restore(checkpoint);
+                }
+                let _ = self.store.discard_sealed(prepared.sealed);
+                return Err(SourceUpdateError::NodeOverride);
+            }
+            Some(checkpoint)
+        } else {
+            None
+        };
         if let Err(error) = self.store.commit_generation(&prepared.sealed) {
             if let (Some(store), Some(checkpoint)) = (self.manual_store.as_ref(), manual_checkpoint)
             {
                 let _ = store.restore(checkpoint);
             }
+            if let (Some(store), Some(checkpoint)) =
+                (self.node_override_store.as_ref(), override_checkpoint)
+            {
+                let _ = store.replace(&checkpoint);
+            }
             let _ = self.store.discard_sealed(prepared.sealed);
             return Err(error.into());
+        }
+        if let Some(overrides) = prepared.pending_node_overrides {
+            self.node_overrides = overrides;
         }
         Ok(prepared.report)
     }
@@ -733,6 +810,7 @@ enum PendingUpdate {
     RefreshAll,
     RefreshSource(SourceId),
     CachedRebuild,
+    NodeOverrides(NodeOverrideSet),
 }
 
 fn effective_source_digest(config: &SourceConfig, manual_digest: Option<&str>) -> String {
@@ -847,6 +925,21 @@ where
         Ok(())
     }
 
+    fn node_overrides(&self) -> Option<NodeOverrideSet> {
+        Some(self.service.node_overrides().clone())
+    }
+
+    fn request_node_overrides(
+        &mut self,
+        overrides: NodeOverrideSet,
+    ) -> Result<(), RuntimeUpdateError> {
+        if self.pending_update.is_some() || self.pending_import.is_some() {
+            return Err(RuntimeUpdateError::Prepare);
+        }
+        self.pending_update = Some(PendingUpdate::NodeOverrides(overrides));
+        Ok(())
+    }
+
     fn replace_config(&mut self, config: SourceConfig) {
         self.config = config;
     }
@@ -886,6 +979,9 @@ where
                     self.service.prepare_source(&self.config, &source_id)
                 }
                 PendingUpdate::CachedRebuild => self.service.prepare_cached(&self.config),
+                PendingUpdate::NodeOverrides(overrides) => {
+                    self.service.prepare_node_overrides(&self.config, overrides)
+                }
             };
             prepared.map_err(|_| RuntimeUpdateError::Prepare)
         }
@@ -893,6 +989,10 @@ where
 
     fn generation(&self, prepared: &Self::Prepared) -> GenerationId {
         prepared.report.generation
+    }
+
+    fn sealed_generation(&self, prepared: &Self::Prepared) -> Option<SealedGeneration> {
+        Some(prepared.sealed.clone())
     }
 
     fn is_current(&self, prepared: &Self::Prepared) -> bool {
@@ -951,6 +1051,7 @@ pub struct PreparedSourceUpdate {
     sealed: SealedGeneration,
     source_config_digest: String,
     pending_manual: Option<PendingManualSource>,
+    pending_node_overrides: Option<NodeOverrideSet>,
     report: SourceUpdateReport,
 }
 
@@ -1044,6 +1145,8 @@ pub enum SourceUpdateError {
     UnknownSource,
     #[error("persistent manual source is unavailable")]
     ManualSource,
+    #[error("persistent node override registry is unavailable")]
+    NodeOverride,
 }
 
 impl SourceUpdateError {
@@ -1058,6 +1161,7 @@ impl SourceUpdateError {
             Self::CandidateDigestMismatch => "candidate_digest_mismatch",
             Self::UnknownSource => "source_unknown_or_inactive",
             Self::ManualSource => "manual_source_unavailable",
+            Self::NodeOverride => "node_override_unavailable",
         }
     }
 }

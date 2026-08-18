@@ -229,7 +229,7 @@ fn runtime_metrics_use_core_totals_without_external_public_ip_requests() {
         200,
         serde_json::json!({"connections":[],"uploadTotal":1234,"downloadTotal":5678}).to_string(),
     )]);
-    let control = OperationalControl::new(
+    let mut control = OperationalControl::new(
         api(address),
         NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
         root.join("diagnostics-latest.json"),
@@ -241,6 +241,7 @@ fn runtime_metrics_use_core_totals_without_external_public_ip_requests() {
         RuntimeState::RunningTproxy,
         None,
     );
+    assert_eq!(metrics["schema_version"], 2);
     assert_eq!(metrics["uptime_seconds"], 90);
     assert_eq!(metrics["traffic"]["upload_bytes"], 1234);
     assert_eq!(metrics["traffic"]["download_bytes"], 5678);
@@ -248,6 +249,58 @@ fn runtime_metrics_use_core_totals_without_external_public_ip_requests() {
     let requests = server.join().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("GET /connections "));
+}
+
+#[test]
+fn traffic_control_exposes_real_window_metadata_and_explicit_gaps() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (address, server) = serve(vec![
+        (200, r#"{"up":123,"down":456}"#.to_owned()),
+        (200, "{}".to_owned()),
+    ]);
+    let mut control = OperationalControl::new(
+        api(address),
+        NodeSelectionStore::new(root.join("selection.v1.json")).unwrap(),
+        root.join("diagnostics-latest.json"),
+    )
+    .unwrap();
+    let policy = CapturePolicy::new(
+        CaptureMode::Tproxy,
+        true,
+        Some(7893),
+        Some(131_072),
+        Vec::new(),
+        vec![0],
+    )
+    .unwrap();
+    let ok = control
+        .handle(
+            ControlMethod::TrafficGet,
+            &ControlParams::default(),
+            RuntimeState::RunningTproxy,
+            None,
+            &policy,
+        )
+        .unwrap();
+    assert_eq!(ok["state"], "ok");
+    assert_eq!(ok["sample"]["up_bps"], 123);
+    assert_eq!(ok["sample"]["down_bps"], 456);
+    assert!(ok["observed_at_unix_ms"].as_u64().unwrap() > 0);
+    assert_eq!(ok["interval_ms"], 1_000);
+
+    let gap = control
+        .handle(
+            ControlMethod::TrafficGet,
+            &ControlParams::default(),
+            RuntimeState::RunningTproxy,
+            None,
+            &policy,
+        )
+        .unwrap();
+    assert_eq!(gap["state"], "gap");
+    assert_eq!(gap["sample"]["up_bps"], 0);
+    server.join().unwrap();
 }
 
 #[test]

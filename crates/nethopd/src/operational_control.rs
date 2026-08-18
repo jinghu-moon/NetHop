@@ -15,9 +15,9 @@ use thiserror::Error;
 use crate::{
     AutoSelectionDecision, BenchmarkCandidate, BenchmarkEndpoint, BenchmarkError, BenchmarkReport,
     BenchmarkTrigger, ClashApiClient, ClashApiError, ClashGroupSnapshot, NodeListSnapshot,
-    NodeSelectionIntent, NodeSelectionStore, ProcessIdentity, SelectionModelError, StableNodeId,
-    choose_auto_target, collect_outbound_route, collect_process_metrics, join_node_snapshot,
-    resolve_active_terminal,
+    NodeSelectionIntent, NodeSelectionStore, ProcessIdentity, ProcessMetricsSampler,
+    SelectionModelError, StableNodeId, choose_auto_target, collect_outbound_route,
+    join_node_snapshot, resolve_active_terminal,
 };
 
 static TEMP_SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -76,6 +76,8 @@ pub struct OperationalControl {
     selection_store: NodeSelectionStore,
     diagnostics_path: PathBuf,
     generation_root: Option<PathBuf>,
+    last_traffic_observed_at: Option<Instant>,
+    process_metrics: ProcessMetricsSampler,
 }
 
 impl OperationalControl {
@@ -97,6 +99,8 @@ impl OperationalControl {
             selection_store,
             diagnostics_path,
             generation_root: None,
+            last_traffic_observed_at: None,
+            process_metrics: ProcessMetricsSampler::default(),
         })
     }
 
@@ -190,10 +194,7 @@ impl OperationalControl {
                 self.api.close_all_connections()?;
                 Ok(json!({"closed_all":true}))
             }
-            ControlMethod::TrafficGet => Ok(json!({
-                "sample": self.api.traffic_sample()?,
-                "interval_seconds": 1,
-            })),
+            ControlMethod::TrafficGet => Ok(self.traffic_document()),
             ControlMethod::TopologyGet => Ok(json!({
                 "runtime_state": runtime_state_wire(state),
                 "generation": generation.map(GenerationId::get),
@@ -620,7 +621,7 @@ impl OperationalControl {
     }
 
     pub fn metrics_document(
-        &self,
+        &mut self,
         process: Option<ProcessIdentity>,
         daemon_uptime: Duration,
         state: RuntimeState,
@@ -628,17 +629,49 @@ impl OperationalControl {
     ) -> Value {
         let totals = self.api.traffic_totals().ok();
         json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "runtime_state": runtime_state_wire(state),
             "generation": generation.map(GenerationId::get),
             "uptime_seconds": daemon_uptime.as_secs(),
-            "core": process.map(collect_process_metrics),
+            "core": process.map(|identity| self.process_metrics.sample(identity)),
             "traffic": {
                 "upload_bytes": totals.map(|value| value.upload),
                 "download_bytes": totals.map(|value| value.download),
             },
             "outbound": collect_outbound_route(),
         })
+    }
+
+    fn traffic_document(&mut self) -> Value {
+        let sample = self.api.traffic_sample();
+        let observed_at = Instant::now();
+        let observed_at_unix_ms = unix_millis();
+        let interval_ms = self.last_traffic_observed_at.map_or(1_000, |previous| {
+            u64::try_from(observed_at.duration_since(previous).as_millis())
+                .unwrap_or(u64::MAX)
+                .max(1)
+        });
+        self.last_traffic_observed_at = Some(observed_at);
+
+        match sample {
+            Ok(sample) => json!({
+                "kind": "traffic",
+                "state": "ok",
+                "sample": {
+                    "up_bps": sample.up,
+                    "down_bps": sample.down,
+                },
+                "observed_at_unix_ms": observed_at_unix_ms,
+                "interval_ms": interval_ms,
+            }),
+            Err(_) => json!({
+                "kind": "traffic",
+                "state": "gap",
+                "sample": { "up_bps": 0, "down_bps": 0 },
+                "observed_at_unix_ms": observed_at_unix_ms,
+                "interval_ms": interval_ms,
+            }),
+        }
     }
 }
 
@@ -771,6 +804,15 @@ fn unix_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Error)]

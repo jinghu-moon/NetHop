@@ -3,14 +3,16 @@
 use std::{cell::Cell, collections::BTreeMap, fs, rc::Rc};
 
 use nethop_core::{
-    CaptureMode, CapturePolicy, ClashApi, GenerationId, GenerationStore, ManagedOptions, TunStack,
+    CaptureMode, CapturePolicy, ClashApi, GenerationId, GenerationNodeRegistry, GenerationStore,
+    ManagedOptions, TunStack,
 };
 use nethop_subscription::{CapabilityMatrix, FormatHint, ParserLimits};
 use nethopd::{
-    CandidateChecker, ConfigStore, ConfiguredSourceUpdater, ManualSourceStore, RunnerError,
-    RuntimeUpdateSource, SourceBody, SourceBodyFetcher, SourceBodyOrigin, SourceConfig,
-    SourceDefinition, SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceUpdateError,
-    SourceUpdateService, UpdateRuntimePolicy,
+    CandidateChecker, ConfigStore, ConfiguredSourceUpdater, ManualSourceStore, NodeOverride,
+    NodeOverrideSet, NodeOverrideStore, RunnerError, RuntimeUpdateSource, SourceBody,
+    SourceBodyFetcher, SourceBodyOrigin, SourceConfig, SourceDefinition, SourceIdEntropy,
+    SourceRegistry, SourceRegistryError, SourceUpdateError, SourceUpdateService, StableNodeId,
+    UpdateRuntimePolicy,
 };
 use tempfile::tempdir;
 
@@ -606,4 +608,180 @@ fn local_import_bootstraps_without_configured_source_cache() {
     assert_eq!(store.current_generation().unwrap(), Some(report.generation));
     assert_eq!(calls.get(), 1);
     assert!(directory.path().join("manual-source.body").is_file());
+}
+
+#[test]
+fn node_override_commit_persists_registry_and_preserves_node_identity() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let override_path = directory.path().join("node-overrides.json");
+    let override_store = NodeOverrideStore::new(override_path.clone()).unwrap();
+    let checker = FakeChecker {
+        calls: Rc::new(Cell::new(0)),
+        reject: false,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: bodies(&config),
+            fail: false,
+            failed_source: None,
+        },
+        &checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    )
+    .with_node_override_store(override_store, NodeOverrideSet::default());
+    let initial = service.update(&config).unwrap();
+    let initial_registry: GenerationNodeRegistry = serde_json::from_slice(
+        &fs::read(
+            store
+                .generations_root()
+                .join(initial.generation.get().to_string())
+                .join("nodes.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let original = initial_registry.records().first().unwrap();
+    let node_id = StableNodeId::new(original.stable_node_id()).unwrap();
+    let original_sources = original.source_ids().to_vec();
+    let mut overrides = NodeOverrideSet::default();
+    overrides
+        .upsert(
+            NodeOverride::new(
+                node_id.clone(),
+                "编辑后的东京节点",
+                serde_json::json!({
+                    "type": "trojan",
+                    "server": "edited.example.com",
+                    "server_port": 443,
+                    "password": "private-override-secret",
+                    "tls": {"enabled": true}
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let prepared = service
+        .prepare_node_overrides(&config, overrides.clone())
+        .unwrap();
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(initial.generation)
+    );
+    assert!(!override_path.exists());
+    let committed = service.commit(prepared).unwrap();
+
+    assert_eq!(committed.generation.get(), initial.generation.get() + 1);
+    assert_eq!(service.node_overrides(), &overrides);
+    assert_eq!(
+        NodeOverrideStore::new(&override_path)
+            .unwrap()
+            .load()
+            .unwrap(),
+        overrides
+    );
+    let generated_root = store
+        .generations_root()
+        .join(committed.generation.get().to_string());
+    let registry: GenerationNodeRegistry =
+        serde_json::from_slice(&fs::read(generated_root.join("nodes.json")).unwrap()).unwrap();
+    let edited = registry.by_stable_id(node_id.as_str()).unwrap();
+    assert_eq!(edited.display_name(), "编辑后的东京节点");
+    assert_eq!(edited.source_ids(), original_sources);
+    let generated: serde_json::Value =
+        serde_json::from_slice(&fs::read(generated_root.join("config.json")).unwrap()).unwrap();
+    let outbound = generated["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["tag"] == node_id.as_str())
+        .unwrap();
+    assert_eq!(outbound["server"], "edited.example.com");
+    assert_eq!(outbound["password"], "private-override-secret");
+}
+
+#[test]
+fn rejected_node_override_candidate_does_not_write_registry_or_advance_generation() {
+    let directory = tempdir().unwrap();
+    let config = write_sources(&directory.path().join("nethop.toml"));
+    let store = GenerationStore::new(directory.path().join("state")).unwrap();
+    let accepting_checker = FakeChecker {
+        calls: Rc::new(Cell::new(0)),
+        reject: false,
+    };
+    let initial = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: bodies(&config),
+            fail: false,
+            failed_source: None,
+        },
+        &accepting_checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    )
+    .update(&config)
+    .unwrap();
+    let registry: GenerationNodeRegistry = serde_json::from_slice(
+        &fs::read(
+            store
+                .generations_root()
+                .join(initial.generation.get().to_string())
+                .join("nodes.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let node_id = StableNodeId::new(registry.records()[0].stable_node_id()).unwrap();
+    let override_path = directory.path().join("node-overrides.json");
+    let rejecting_checker = FakeChecker {
+        calls: Rc::new(Cell::new(0)),
+        reject: true,
+    };
+    let mut service = SourceUpdateService::new(
+        &store,
+        FakeFetcher {
+            bodies: bodies(&config),
+            fail: false,
+            failed_source: None,
+        },
+        &rejecting_checker,
+        ParserLimits::default(),
+        CapabilityMatrix::default(),
+        runtime(),
+    )
+    .with_node_override_store(
+        NodeOverrideStore::new(&override_path).unwrap(),
+        NodeOverrideSet::default(),
+    );
+    let mut overrides = NodeOverrideSet::default();
+    overrides
+        .upsert(
+            NodeOverride::new(
+                node_id,
+                "不会提交的节点",
+                serde_json::json!({
+                    "type": "trojan",
+                    "server": "rejected.example.com",
+                    "server_port": 443,
+                    "password": "never-persisted"
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert!(service.prepare_node_overrides(&config, overrides).is_err());
+    assert_eq!(
+        store.current_generation().unwrap(),
+        Some(initial.generation)
+    );
+    assert!(!override_path.exists());
+    assert!(service.node_overrides().is_empty());
 }

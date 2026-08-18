@@ -18,6 +18,8 @@ pub mod log_retention;
 #[cfg(feature = "subscription-update")]
 pub mod manual_source;
 pub mod node_benchmark;
+#[cfg(feature = "subscription-update")]
+pub mod node_override;
 pub mod operational_control;
 pub mod process;
 pub mod ruleset;
@@ -111,6 +113,8 @@ pub use node_benchmark::{
 pub use node_benchmark::{
     BenchmarkEngineMetrics, benchmark_engine_metrics, reset_benchmark_engine_metrics,
 };
+#[cfg(feature = "subscription-update")]
+pub use node_override::{NodeOverride, NodeOverrideError, NodeOverrideSet, NodeOverrideStore};
 pub use operational_control::{OperationalControl, OperationalControlError, ReplayResult};
 pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
@@ -134,8 +138,9 @@ pub use runner::{
     SingBoxCheckRunner,
 };
 pub use runtime_metrics::{
-    OutboundRoute, ProcessMetrics, collect_outbound_route, collect_process_metrics,
-    parse_default_route_interface, parse_process_stat, parse_statm_rss_bytes,
+    OutboundRoute, ProcessMetrics, ProcessMetricsSampler, calculate_cpu_percent,
+    collect_outbound_route, parse_default_route_interface, parse_process_stat,
+    parse_statm_rss_bytes,
 };
 pub use scheduler::{
     InMemoryScheduleStore, ScheduleKey, SchedulePolicy, ScheduleRecord, ScheduleStore,
@@ -163,7 +168,7 @@ pub use stats::{
     CounterReading, CounterTransport, StatsError,
 };
 #[cfg(feature = "subscription-update")]
-pub use storage::{SourceHealth, SourceStatus, SourceStatusStore};
+pub use storage::{SourceHealth, SourceStatus, SourceStatusStore, SourceUpdateHistoryEntry};
 pub use storage::{StatsBucket, StatsStore, StatsStoreError, TrafficTotal};
 pub use subscription_transaction::{
     CommitJournal, CommitJournalStore, CommitPhase, MutationCoordinator, RecoveryAction,
@@ -198,6 +203,8 @@ pub use worker_activation::{
     WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator, WorkerRecovery,
     WorkerRecoveryError,
 };
+#[cfg(feature = "subscription-update")]
+pub use worker_application::RuntimeReloadError;
 pub use worker_application::{
     ApplicationRecovery, MonotonicClock, OptionalRuntimeUpdateSource, RuntimeCoreVersionSource,
     RuntimePolicyError, RuntimeRecoverySource, RuntimeUpdateError, RuntimeUpdateSource,
@@ -213,6 +220,8 @@ pub use worker_service::{
     WorkerControlService, WorkerServiceDriver, WorkerServiceError, WorkerServiceSignal,
     WorkerServiceTasks, run_worker_service,
 };
+#[cfg(feature = "subscription-update")]
+pub use worker_services::build_candidate_with_overrides;
 #[cfg(feature = "subscription-update")]
 pub use worker_services::{BuildCandidateError, CandidateBuildProfile, build_candidate};
 pub use worker_services::{

@@ -27,7 +27,13 @@ pub enum TerminalOutboundAdapterError {
 pub fn adapt_terminal_outbound(
     node: &DedupedNode,
 ) -> Result<TerminalOutbound, TerminalOutboundAdapterError> {
-    terminal_from_composed(compose_outbound(node))
+    adapt_terminal_outbound_value(compose_outbound(node))
+}
+
+pub fn adapt_terminal_outbound_value(
+    value: Value,
+) -> Result<TerminalOutbound, TerminalOutboundAdapterError> {
+    terminal_from_composed(value)
 }
 
 pub fn adapt_terminal_outbounds(

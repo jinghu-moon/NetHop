@@ -3,7 +3,10 @@
 use std::{fs, path::Path};
 
 use nethop_android::{AppCatalog, PackageSnapshot};
-use nethop_protocol::{ApplicationPolicyMode, ApplicationTarget, ConfigMutation};
+use nethop_protocol::{
+    ApplicationPolicyMode, ApplicationTarget, ConfigMutation, SubscriptionFormatHint,
+    SubscriptionRequestProfile, SubscriptionSourceFilter, SubscriptionSourcePatch,
+};
 use nethopd::{
     ConfigChange, ConfigRuntime, ConfigStore, SourceIdEntropy, SourceRegistry, SourceRegistryError,
 };
@@ -171,6 +174,7 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
             &ConfigMutation::AddSource {
                 name: "Backup".into(),
                 url: "https://two.example/sub".into(),
+                settings: None,
             },
             &mut FixedEntropy(2),
         )
@@ -200,6 +204,7 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
                 name: Some("Renamed".into()),
                 url: Some("https://rotated.example/sub".into()),
                 enabled: None,
+                settings: None,
             },
             &mut FixedEntropy(4),
         )
@@ -262,6 +267,71 @@ fn typed_source_mutations_keep_private_identity_and_obey_cas() {
 }
 
 #[test]
+fn source_advanced_settings_are_typed_and_preserve_daemon_owned_exclusions() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 3\n[service]\nenabled = true\n[subscriptions]\n[[subscriptions.sources]]\nname = \"Primary\"\nurl = \"https://one.example/sub\"\n[subscriptions.sources.filter]\nexcluded_node_ids = [\"nh1s-0123456789abcdef\"]\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let store = ConfigStore::new(&config_path).unwrap();
+    let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
+    let snapshot = store.load().unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let mut runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let source_id = runtime.source_config().sources()[0]
+        .id()
+        .as_str()
+        .to_owned();
+
+    let digest = runtime.current().digest().to_owned();
+    runtime
+        .mutate_with_entropy(
+            &digest,
+            &ConfigMutation::UpdateSource {
+                source_id,
+                name: None,
+                url: None,
+                enabled: None,
+                settings: Some(Box::new(SubscriptionSourcePatch {
+                    request_profile: Some(SubscriptionRequestProfile::Mihomo),
+                    format_hint: Some(SubscriptionFormatHint::ClashYaml),
+                    mirrors: Some(vec!["https://mirror.example/sub".into()]),
+                    filter: Some(SubscriptionSourceFilter {
+                        include_names: vec!["Premium".into()],
+                        exclude_names: vec!["Expired".into()],
+                        protocols: vec!["trojan".into(), "vless".into()],
+                    }),
+                })),
+            },
+            &mut FixedEntropy(2),
+        )
+        .unwrap();
+
+    let document = serde_json::to_value(
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let source = &document["subscriptions"]["sources"][0];
+    assert_eq!(source["request_profile"], "mihomo");
+    assert_eq!(source["format_hint"], "clash_yaml");
+    assert_eq!(source["mirrors"], json!(["https://mirror.example/sub"]));
+    assert_eq!(source["filter"]["include_names"], json!(["Premium"]));
+    assert_eq!(source["filter"]["exclude_names"], json!(["Expired"]));
+    assert_eq!(source["filter"]["protocols"], json!(["vless", "trojan"]));
+    assert_eq!(
+        source["filter"]["excluded_node_ids"],
+        json!(["nh1s-0123456789abcdef"])
+    );
+}
+
+#[test]
 fn add_source_replaces_the_enabled_empty_single_mode_placeholder() {
     let directory = tempdir().unwrap();
     let config_path = directory.path().join("nethop.toml");
@@ -280,6 +350,7 @@ fn add_source_replaces_the_enabled_empty_single_mode_placeholder() {
             &ConfigMutation::AddSource {
                 name: "Live".into(),
                 url: "https://live.example/sub".into(),
+                settings: None,
             },
             &mut FixedEntropy(2),
         )
@@ -437,10 +508,7 @@ fn package_names_are_admitted_to_uids_before_any_config_write() {
     runtime
         .apply_document(&digest, &document)
         .expect("known package is admitted");
-    assert_eq!(
-        runtime.capture_policy().unwrap().include_uids(),
-        [1000, 10123]
-    );
+    assert_eq!(runtime.capture_policy().unwrap().include_uids(), [10123]);
 
     let before = fs::read(&config_path).unwrap();
     let digest = runtime.current().digest().to_owned();
@@ -450,8 +518,33 @@ fn package_names_are_admitted_to_uids_before_any_config_write() {
         "subscriptions": {"sources":[{"name":"Primary","url":"https://one.example/sub"}]},
         "applications": {"mode":"whitelist","targets":[{"kind":"package","android_user_id":0,"package":"com.missing"}]}
     });
-    assert!(runtime.apply_document(&digest, &unknown).is_err());
-    assert_eq!(fs::read(&config_path).unwrap(), before);
+    runtime
+        .apply_document(&digest, &unknown)
+        .expect("unknown package remains persistable as a pending runtime target");
+    assert_ne!(fs::read(&config_path).unwrap(), before);
+}
+
+#[test]
+fn unresolved_package_policy_is_persisted_with_a_non_capturing_whitelist_sentinel() {
+    let directory = tempdir().unwrap();
+    let config_path = directory.path().join("nethop.toml");
+    write(&config_path, "Primary", "https://one.example/sub", true);
+    let store = ConfigStore::new(&config_path).unwrap();
+    let registry = SourceRegistry::new(directory.path().join("source-registry.v1.json")).unwrap();
+    let snapshot = store.load().unwrap();
+    let sources = registry.reconcile(&snapshot, &mut FixedEntropy(1)).unwrap();
+    let mut runtime = ConfigRuntime::new(store, registry, snapshot, &sources);
+    let digest = runtime.current().digest().to_owned();
+    let document = json!({
+        "schema_version": 3,
+        "service": {"enabled": true},
+        "subscriptions": {"sources":[{"name":"Primary","url":"https://one.example/sub"}]},
+        "applications": {"mode":"whitelist","targets":[{"kind":"package","android_user_id":0,"package":"com.not.installed"}]}
+    });
+    runtime.apply_document(&digest, &document).unwrap();
+    let capture = runtime.capture_policy().unwrap();
+    assert_eq!(capture.include_uids(), [1]);
+    assert!(!capture.captures_uid(10_123));
 }
 
 #[test]
@@ -597,6 +690,7 @@ fn rollback_restores_exact_observed_bytes_active_snapshot_and_source_ids() {
                 name: Some("Replacement".into()),
                 url: Some("https://two.example/sub".into()),
                 enabled: None,
+                settings: None,
             },
             &mut FixedEntropy(2),
         )

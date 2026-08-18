@@ -36,6 +36,7 @@ impl WebUiPayloadStore {
             WebUiPayloadNamespace::Config,
             WebUiPayloadNamespace::Subscription,
             WebUiPayloadNamespace::Backup,
+            WebUiPayloadNamespace::Node,
         ] {
             let directory = store.namespace_directory(namespace);
             fs::create_dir_all(&directory).map_err(|_| WebUiPayloadError::Io)?;
@@ -139,6 +140,7 @@ impl WebUiPayloadStore {
             WebUiPayloadNamespace::Config,
             WebUiPayloadNamespace::Subscription,
             WebUiPayloadNamespace::Backup,
+            WebUiPayloadNamespace::Node,
         ] {
             let directory = self.namespace_directory(namespace);
             for entry in fs::read_dir(directory)
@@ -176,6 +178,7 @@ impl WebUiPayloadStore {
             WebUiPayloadNamespace::Config => "config",
             WebUiPayloadNamespace::Subscription => "subscription",
             WebUiPayloadNamespace::Backup => "backup",
+            WebUiPayloadNamespace::Node => "node",
         })
     }
 

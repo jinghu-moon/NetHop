@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: u8 = 5;
+pub const PROTOCOL_VERSION: u8 = 6;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_WEBUI_STDOUT_BYTES: usize = MAX_FRAME_BYTES;
 pub const MAX_WEBUI_STDERR_BYTES: usize = 64 * 1024;
@@ -124,6 +124,12 @@ pub enum ControlMethod {
     NodeSelectManual,
     #[serde(rename = "node.export")]
     NodeExport,
+    #[serde(rename = "node.override_get")]
+    NodeOverrideGet,
+    #[serde(rename = "node.override_apply")]
+    NodeOverrideApply,
+    #[serde(rename = "node.override_remove")]
+    NodeOverrideRemove,
     #[serde(rename = "connections.get")]
     ConnectionsGet,
     #[serde(rename = "connection.close")]
@@ -161,6 +167,8 @@ pub enum ConfigMutation {
     AddSource {
         name: String,
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        settings: Option<Box<SubscriptionSourceSettings>>,
     },
     UpdateSource {
         source_id: String,
@@ -170,6 +178,8 @@ pub enum ConfigMutation {
         url: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        settings: Option<Box<SubscriptionSourcePatch>>,
     },
     RemoveSource {
         source_id: String,
@@ -207,6 +217,67 @@ pub enum ConfigMutation {
         field_id: String,
         value: Value,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionSourceSettings {
+    #[serde(default)]
+    pub request_profile: SubscriptionRequestProfile,
+    #[serde(default)]
+    pub format_hint: SubscriptionFormatHint,
+    #[serde(default)]
+    pub mirrors: Vec<String>,
+    #[serde(default)]
+    pub filter: SubscriptionSourceFilter,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionSourcePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_profile: Option<SubscriptionRequestProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_hint: Option<SubscriptionFormatHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrors: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<SubscriptionSourceFilter>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionSourceFilter {
+    #[serde(default)]
+    pub include_names: Vec<String>,
+    #[serde(default)]
+    pub exclude_names: Vec<String>,
+    #[serde(default)]
+    pub protocols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionRequestProfile {
+    Generic,
+    Mihomo,
+    ClashStandard,
+    Surfboard,
+    SingBox,
+    #[default]
+    SingBoxAndroid,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionFormatHint {
+    #[default]
+    Auto,
+    UriList,
+    Base64List,
+    ClashYaml,
+    SingboxJson,
+    SurfboardIni,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -273,6 +344,7 @@ pub enum WebUiPayloadNamespace {
     Config,
     Subscription,
     Backup,
+    Node,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +356,7 @@ pub enum WebUiPayloadOperation {
     SubscriptionImportPreview,
     SubscriptionImportApply,
     BackupRestore,
+    NodeOverrideApply,
 }
 
 pub const MAX_NODE_BENCHMARK_CANDIDATES: usize = 64;
@@ -1075,6 +1148,13 @@ struct WebUiPayloadParams {
     operation: Option<WebUiPayloadOperation>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeOverrideDocument {
+    pub display_name: String,
+    pub outbound: Value,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlParams {
@@ -1113,6 +1193,8 @@ pub struct ControlParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_override: Option<Box<NodeOverrideDocument>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     payload: Option<Box<WebUiPayloadParams>>,
 }
 
@@ -1136,6 +1218,7 @@ impl ControlParams {
             source_id: None,
             subscription_mode: None,
             enabled: None,
+            node_override: None,
             payload: None,
         }
     }
@@ -1200,6 +1283,14 @@ impl ControlParams {
     pub fn target(target: String) -> Self {
         Self {
             target: Some(target),
+            ..Self::default()
+        }
+    }
+
+    pub fn node_override(target: String, document: NodeOverrideDocument) -> Self {
+        Self {
+            target: Some(target),
+            node_override: Some(Box::new(document)),
             ..Self::default()
         }
     }
@@ -1372,6 +1463,10 @@ impl ControlParams {
 
     pub const fn enabled(&self) -> Option<bool> {
         self.enabled
+    }
+
+    pub fn node_override_value(&self) -> Option<&NodeOverrideDocument> {
+        self.node_override.as_deref()
     }
 
     pub fn payload_namespace(&self) -> Option<WebUiPayloadNamespace> {
@@ -1560,6 +1655,9 @@ impl ControlRequest {
                 | ControlMethod::NodeTestOperationGet
                 | ControlMethod::NodeSelectManual
                 | ControlMethod::NodeExport
+                | ControlMethod::NodeOverrideGet
+                | ControlMethod::NodeOverrideApply
+                | ControlMethod::NodeOverrideRemove
                 | ControlMethod::ConnectionClose
         );
         if self.params.target.is_some() != target_method
@@ -1577,6 +1675,28 @@ impl ControlRequest {
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             })
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if matches!(
+            self.method,
+            ControlMethod::NodeOverrideGet
+                | ControlMethod::NodeOverrideApply
+                | ControlMethod::NodeOverrideRemove
+        ) && self
+            .params
+            .target
+            .as_ref()
+            .is_none_or(|target| !valid_stable_node_id(target))
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        if self.params.node_override.is_some() != (self.method == ControlMethod::NodeOverrideApply)
+            || self
+                .params
+                .node_override
+                .as_deref()
+                .is_some_and(|value| !valid_node_override(value))
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
@@ -1675,6 +1795,36 @@ impl ControlRequest {
         if !valid_payload_shape {
             return Err(ProtocolError::InvalidEnvelope);
         }
+        if self.method == ControlMethod::WebUiPayloadCommit
+            && !matches!(
+                (
+                    self.params.payload_namespace(),
+                    self.params.payload_operation()
+                ),
+                (
+                    Some(WebUiPayloadNamespace::Config),
+                    Some(
+                        WebUiPayloadOperation::ConfigValidate
+                            | WebUiPayloadOperation::ConfigApply
+                            | WebUiPayloadOperation::ConfigMutate
+                    )
+                ) | (
+                    Some(WebUiPayloadNamespace::Subscription),
+                    Some(
+                        WebUiPayloadOperation::SubscriptionImportPreview
+                            | WebUiPayloadOperation::SubscriptionImportApply
+                    )
+                ) | (
+                    Some(WebUiPayloadNamespace::Backup),
+                    Some(WebUiPayloadOperation::BackupRestore)
+                ) | (
+                    Some(WebUiPayloadNamespace::Node),
+                    Some(WebUiPayloadOperation::NodeOverrideApply)
+                )
+            )
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
         Ok(())
     }
 }
@@ -1695,6 +1845,14 @@ fn valid_payload_chunk(value: &str) -> bool {
         })
 }
 
+fn valid_node_override(value: &NodeOverrideDocument) -> bool {
+    !value.display_name.is_empty()
+        && value.display_name.len() <= 128
+        && !value.display_name.chars().any(char::is_control)
+        && value.outbound.is_object()
+        && serde_json::to_vec(&value.outbound).is_ok_and(|bytes| bytes.len() <= 64 * 1024)
+}
+
 fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
     let source_id = |value: &str| {
         value.len() == 36
@@ -1705,17 +1863,27 @@ fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
     };
     let valid = match mutation {
         ConfigMutation::SetServiceEnabled { .. } => true,
-        ConfigMutation::AddSource { name, url } => bounded(name, 128) && url.len() <= 16 * 1024,
+        ConfigMutation::AddSource {
+            name,
+            url,
+            settings,
+        } => {
+            bounded(name, 128)
+                && url.len() <= 16 * 1024
+                && settings.as_deref().is_none_or(valid_source_settings)
+        }
         ConfigMutation::UpdateSource {
             source_id: id,
             name,
             url,
             enabled,
+            settings,
         } => {
             source_id(id)
-                && (name.is_some() || url.is_some() || enabled.is_some())
+                && (name.is_some() || url.is_some() || enabled.is_some() || settings.is_some())
                 && name.as_ref().is_none_or(|value| bounded(value, 128))
                 && url.as_ref().is_none_or(|value| value.len() <= 16 * 1024)
+                && settings.as_deref().is_none_or(valid_source_patch)
         }
         ConfigMutation::RemoveSource { source_id: id } => source_id(id),
         ConfigMutation::MoveSource {
@@ -1752,6 +1920,72 @@ fn validate_mutation(mutation: &ConfigMutation) -> Result<(), ProtocolError> {
         }
     };
     valid.then_some(()).ok_or(ProtocolError::InvalidEnvelope)
+}
+
+fn valid_source_settings(settings: &SubscriptionSourceSettings) -> bool {
+    valid_source_fields(
+        &settings.mirrors,
+        &settings.filter.include_names,
+        &settings.filter.exclude_names,
+        &settings.filter.protocols,
+    )
+}
+
+fn valid_source_patch(settings: &SubscriptionSourcePatch) -> bool {
+    (settings.request_profile.is_some()
+        || settings.format_hint.is_some()
+        || settings.mirrors.is_some()
+        || settings.filter.is_some())
+        && valid_source_fields(
+            settings.mirrors.as_deref().unwrap_or_default(),
+            settings
+                .filter
+                .as_ref()
+                .map_or(&[][..], |filter| filter.include_names.as_slice()),
+            settings
+                .filter
+                .as_ref()
+                .map_or(&[][..], |filter| filter.exclude_names.as_slice()),
+            settings
+                .filter
+                .as_ref()
+                .map_or(&[][..], |filter| filter.protocols.as_slice()),
+        )
+}
+
+fn valid_source_fields(
+    mirrors: &[String],
+    include_names: &[String],
+    exclude_names: &[String],
+    protocols: &[String],
+) -> bool {
+    let bounded_unique = |values: &[String], limit: usize, max_bytes: usize| {
+        values.len() <= limit
+            && values.iter().all(|value| bounded(value, max_bytes))
+            && values
+                .iter()
+                .enumerate()
+                .all(|(index, value)| !values[..index].contains(value))
+    };
+    mirrors.len() <= 4
+        && mirrors.iter().all(|value| bounded(value, 16 * 1024))
+        && bounded_unique(include_names, 64, 128)
+        && bounded_unique(exclude_names, 64, 128)
+        && protocols.len() <= 16
+        && protocols.iter().enumerate().all(|(index, value)| {
+            matches!(
+                value.as_str(),
+                "vless"
+                    | "vmess"
+                    | "shadowsocks"
+                    | "trojan"
+                    | "hysteria2"
+                    | "tuic"
+                    | "anytls"
+                    | "http"
+                    | "socks"
+            ) && !protocols[..index].contains(value)
+        })
 }
 
 fn bounded(value: &str, max: usize) -> bool {

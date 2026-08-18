@@ -4,7 +4,8 @@ use nethop_protocol::{
     ApplicationPolicyMode, ApplicationTarget, ConfigMutation, ControlError, ControlMethod,
     ControlParams, ControlRequest, ControlResponse, ErrorCode, ErrorDomain, EventKind, FrameCodec,
     LogChannel, MAX_FRAME_BYTES, PROTOCOL_VERSION, ProtocolError, RequestId, StreamFrame,
-    StreamKind, WireFrame,
+    StreamKind, SubscriptionFormatHint, SubscriptionRequestProfile, SubscriptionSourceFilter,
+    SubscriptionSourcePatch, SubscriptionSourceSettings, WireFrame,
 };
 use serde_json::json;
 
@@ -13,14 +14,14 @@ fn request_id() -> RequestId {
 }
 
 #[test]
-fn request_golden_uses_big_endian_length_and_v5_json() {
+fn request_golden_uses_big_endian_length_and_v6_json() {
     let frame = WireFrame::Request(ControlRequest::new(request_id(), ControlMethod::StatusGet));
     let encoded = FrameCodec::encode(&frame).unwrap();
     let length = u32::from_be_bytes(encoded[..4].try_into().unwrap()) as usize;
     assert_eq!(length, encoded.len() - 4);
     assert_eq!(
         &encoded[4..],
-        br#"{"version":5,"request_id":"req-001","method":"status.get","params":{}}"#
+        br#"{"version":6,"request_id":"req-001","method":"status.get","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -28,7 +29,7 @@ fn request_golden_uses_big_endian_length_and_v5_json() {
 #[test]
 fn request_rejects_unknown_fields_versions_and_unbounded_ids() {
     let unknown =
-        br#"{"version":5,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
+        br#"{"version":6,"request_id":"r","method":"status.get","params":{},"admin":true}"#;
     let mut framed = (unknown.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(unknown);
     assert_eq!(
@@ -72,7 +73,7 @@ fn response_requires_exactly_one_result_or_error_branch() {
         failure
     );
 
-    let invalid = br#"{"version":5,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
+    let invalid = br#"{"version":6,"request_id":"r","ok":true,"generation":1,"error":{"code":"NH-AUTH-DENIED","message":"denied"}}"#;
     let mut framed = (invalid.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(invalid);
     assert_eq!(
@@ -160,7 +161,7 @@ fn codec_rejects_trailing_bytes_invalid_utf8_and_truncated_io() {
 
 #[test]
 fn protocol_version_is_frozen() {
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
 }
 
 #[test]
@@ -191,7 +192,7 @@ fn control_error_details_are_optional_and_bounded_by_the_outer_frame() {
 }
 
 #[test]
-fn subscription_update_is_a_bounded_v5_empty_params_command() {
+fn subscription_update_is_a_bounded_v6_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::SubscriptionUpdate,
@@ -199,7 +200,7 @@ fn subscription_update_is_a_bounded_v5_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":5,"request_id":"req-001","method":"subscription.update","params":{}}"#
+        br#"{"version":6,"request_id":"req-001","method":"subscription.update","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -239,7 +240,7 @@ fn local_import_preview_and_apply_are_digest_bound_documents() {
 }
 
 #[test]
-fn config_reload_is_a_bounded_v5_empty_params_command() {
+fn config_reload_is_a_bounded_v6_empty_params_command() {
     let frame = WireFrame::Request(ControlRequest::new(
         request_id(),
         ControlMethod::ConfigReload,
@@ -247,7 +248,7 @@ fn config_reload_is_a_bounded_v5_empty_params_command() {
     let encoded = FrameCodec::encode(&frame).unwrap();
     assert_eq!(
         &encoded[4..],
-        br#"{"version":5,"request_id":"req-001","method":"config.reload","params":{}}"#
+        br#"{"version":6,"request_id":"req-001","method":"config.reload","params":{}}"#
     );
     assert_eq!(FrameCodec::decode(&encoded).unwrap(), frame);
 }
@@ -452,7 +453,7 @@ fn close_all_and_log_clear_accept_only_empty_params() {
 #[test]
 fn operational_params_reject_unknown_fields() {
     let payload =
-        br#"{"version":5,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
+        br#"{"version":6,"request_id":"req-001","method":"node.list","params":{"offset":1}}"#;
     let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
     framed.extend_from_slice(payload);
     assert_eq!(
@@ -609,6 +610,54 @@ fn application_target_mutations_are_typed_bounded_and_round_trip() {
 }
 
 #[test]
+fn source_advanced_settings_are_bounded_typed_and_round_trip() {
+    let settings = SubscriptionSourceSettings {
+        request_profile: SubscriptionRequestProfile::Mihomo,
+        format_hint: SubscriptionFormatHint::ClashYaml,
+        mirrors: vec!["https://mirror.example/sub".into()],
+        filter: SubscriptionSourceFilter {
+            include_names: vec!["Premium".into()],
+            exclude_names: vec!["Expired".into()],
+            protocols: vec!["trojan".into(), "vless".into()],
+        },
+    };
+    let request = ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+        .with_params(ControlParams::mutation(
+            "a".repeat(64),
+            ConfigMutation::AddSource {
+                name: "Primary".into(),
+                url: "https://one.example/sub".into(),
+                settings: Some(Box::new(settings.clone())),
+            },
+        ))
+        .unwrap();
+    let frame = WireFrame::Request(request);
+    assert_eq!(
+        FrameCodec::decode(&FrameCodec::encode(&frame).unwrap()).unwrap(),
+        frame
+    );
+
+    let invalid = SubscriptionSourcePatch {
+        mirrors: Some(vec!["https://mirror.example/sub".into(); 5]),
+        ..SubscriptionSourcePatch::default()
+    };
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::ConfigMutate)
+            .with_params(ControlParams::mutation(
+                "a".repeat(64),
+                ConfigMutation::UpdateSource {
+                    source_id: "src_0123456789abcdef0123456789abcdef".into(),
+                    name: None,
+                    url: None,
+                    enabled: None,
+                    settings: Some(Box::new(invalid)),
+                },
+            ))
+            .is_err()
+    );
+}
+
+#[test]
 fn application_policy_mutation_is_atomic_and_rejects_invalid_mode_target_pairs() {
     let targets = vec![ApplicationTarget::Package {
         android_user_id: 0,
@@ -668,6 +717,42 @@ fn remove_node_mutation_accepts_only_stable_lowercase_fingerprints() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn node_override_methods_require_stable_identity_and_bounded_terminal_document() {
+    let valid = ControlRequest::new(request_id(), ControlMethod::NodeOverrideApply).with_params(
+        ControlParams::node_override(
+            "nh1s-0123456789abcdef".into(),
+            nethop_protocol::NodeOverrideDocument {
+                display_name: "东京节点".into(),
+                outbound: json!({
+                    "type":"trojan",
+                    "server":"edge.example.com",
+                    "server_port":443,
+                    "password":"secret"
+                }),
+            },
+        ),
+    );
+    assert!(valid.is_ok());
+
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::NodeOverrideApply)
+            .with_params(ControlParams::node_override(
+                "unstable".into(),
+                nethop_protocol::NodeOverrideDocument {
+                    display_name: "node".into(),
+                    outbound: json!({"type":"trojan"}),
+                },
+            ))
+            .is_err()
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::NodeOverrideApply)
+            .with_params(ControlParams::target("nh1s-0123456789abcdef".into()))
+            .is_err()
+    );
 }
 
 #[test]

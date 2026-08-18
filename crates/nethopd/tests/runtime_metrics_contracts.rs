@@ -1,4 +1,8 @@
-use nethopd::{parse_default_route_interface, parse_process_stat, parse_statm_rss_bytes};
+use std::time::Duration;
+
+use nethopd::{
+    calculate_cpu_percent, parse_default_route_interface, parse_process_stat, parse_statm_rss_bytes,
+};
 
 #[test]
 fn proc_stat_parser_handles_spaces_and_parentheses_in_process_name() {
@@ -14,6 +18,19 @@ fn statm_parser_uses_resident_pages_and_checks_overflow() {
     );
     assert_eq!(parse_statm_rss_bytes("1 not-a-number", 4096), None);
     assert_eq!(parse_statm_rss_bytes("1 18446744073709551615", 4096), None);
+}
+
+#[test]
+fn cpu_percent_uses_two_real_observations_instead_of_process_lifetime_average() {
+    assert_eq!(
+        calculate_cpu_percent(100, 125, Duration::from_millis(500), 100),
+        Some(50.0)
+    );
+    assert_eq!(
+        calculate_cpu_percent(125, 100, Duration::from_secs(1), 100),
+        None
+    );
+    assert_eq!(calculate_cpu_percent(100, 125, Duration::ZERO, 100), None);
 }
 
 #[test]

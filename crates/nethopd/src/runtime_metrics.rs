@@ -1,8 +1,14 @@
-use std::{fs, net::UdpSocket, time::Duration};
+use std::{
+    fs,
+    net::UdpSocket,
+    time::{Duration, Instant},
+};
 
 use serde::Serialize;
 
 use crate::ProcessIdentity;
+
+const MAX_CPU_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProcessMetrics {
@@ -13,6 +19,63 @@ pub struct ProcessMetrics {
     pub memory_rss_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProcessCpuObservation {
+    identity: ProcessIdentity,
+    cpu_ticks: u64,
+    observed_at: Instant,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessMetricsSampler {
+    previous: Option<ProcessCpuObservation>,
+}
+
+impl ProcessMetricsSampler {
+    pub fn sample(&mut self, identity: ProcessIdentity) -> ProcessMetrics {
+        let pid = identity.pid();
+        let observed_at = Instant::now();
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|document| parse_process_stat(&document))
+            .filter(|(_, start_ticks)| {
+                identity
+                    .start_time_ticks()
+                    .is_none_or(|expected| expected == *start_ticks)
+            });
+        let cpu_percent = stat.and_then(|(cpu_ticks, _)| {
+            let current = ProcessCpuObservation {
+                identity,
+                cpu_ticks,
+                observed_at,
+            };
+            let percent = self.previous.and_then(|previous| {
+                let elapsed = current.observed_at.duration_since(previous.observed_at);
+                (previous.identity == identity && elapsed <= MAX_CPU_SAMPLE_INTERVAL).then(
+                    || {
+                        calculate_cpu_percent(
+                            previous.cpu_ticks,
+                            current.cpu_ticks,
+                            elapsed,
+                            clock_ticks_per_second()?,
+                        )
+                    },
+                )?
+            });
+            self.previous = Some(current);
+            percent
+        });
+        if stat.is_none() {
+            self.previous = None;
+        }
+        ProcessMetrics {
+            pid,
+            cpu_percent,
+            memory_rss_bytes: stat.and_then(|_| process_rss_bytes(pid)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OutboundRoute {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -20,15 +83,6 @@ pub struct OutboundRoute {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_address: Option<String>,
     pub public_ip: Option<String>,
-}
-
-pub fn collect_process_metrics(identity: ProcessIdentity) -> ProcessMetrics {
-    let pid = identity.pid();
-    ProcessMetrics {
-        pid,
-        cpu_percent: process_cpu_percent(pid),
-        memory_rss_bytes: process_rss_bytes(pid),
-    }
 }
 
 pub fn collect_outbound_route() -> OutboundRoute {
@@ -43,6 +97,19 @@ pub fn collect_outbound_route() -> OutboundRoute {
             .map(|address| address.ip().to_string()),
         public_ip: None,
     }
+}
+
+pub fn calculate_cpu_percent(
+    previous_ticks: u64,
+    current_ticks: u64,
+    elapsed: Duration,
+    ticks_per_second: u64,
+) -> Option<f64> {
+    if elapsed.is_zero() || ticks_per_second == 0 {
+        return None;
+    }
+    let delta = current_ticks.checked_sub(previous_ticks)?;
+    Some(delta as f64 / ticks_per_second as f64 / elapsed.as_secs_f64() * 100.0)
 }
 
 pub fn parse_default_route_interface(document: &str) -> Option<String> {
@@ -75,20 +142,6 @@ pub fn parse_statm_rss_bytes(document: &str, page_size: u64) -> Option<u64> {
         .parse::<u64>()
         .ok()?
         .checked_mul(page_size)
-}
-
-fn process_cpu_percent(pid: u32) -> Option<f64> {
-    let (cpu_ticks, start_ticks) =
-        parse_process_stat(&fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
-    let uptime = fs::read_to_string("/proc/uptime")
-        .ok()?
-        .split_whitespace()
-        .next()?
-        .parse::<f64>()
-        .ok()?;
-    let ticks_per_second = clock_ticks_per_second()? as f64;
-    let elapsed = uptime - start_ticks as f64 / ticks_per_second;
-    (elapsed > 0.0).then_some((cpu_ticks as f64 / ticks_per_second / elapsed) * 100.0)
 }
 
 fn process_rss_bytes(pid: u32) -> Option<u64> {

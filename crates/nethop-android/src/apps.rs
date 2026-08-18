@@ -268,6 +268,108 @@ pub struct CompiledAppSelection {
     expansions: Vec<SharedUidExpansion>,
 }
 
+/// 运行时从 PackageManager 解析包名得到的 UID 选择结果。
+/// 持久化配置只保存包名；该结构只在运行时存在。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAppSelection {
+    include_uids: Vec<u32>,
+    exclude_uids: Vec<u32>,
+    unresolved_packages: Vec<(u32, String)>,
+    expansions: Vec<SharedUidExpansion>,
+}
+
+impl ResolvedAppSelection {
+    pub fn include_uids(&self) -> &[u32] {
+        &self.include_uids
+    }
+    pub fn exclude_uids(&self) -> &[u32] {
+        &self.exclude_uids
+    }
+    pub fn unresolved_packages(&self) -> &[(u32, String)] {
+        &self.unresolved_packages
+    }
+    pub fn expansions(&self) -> &[SharedUidExpansion] {
+        &self.expansions
+    }
+    pub fn is_pending(&self) -> bool {
+        !self.unresolved_packages.is_empty()
+    }
+}
+
+/// 每次调用都查询最新的 `cmd package list packages -U --user` 结果。
+pub fn resolve_selection<'a>(
+    backend: &mut impl ProbeBackend,
+    mode: AppSelectionMode,
+    selected: impl IntoIterator<Item = (u32, &'a str)>,
+) -> Result<ResolvedAppSelection, AppCatalogError> {
+    let selected: Vec<(u32, String)> = selected
+        .into_iter()
+        .map(|(user, package)| (user, package.to_owned()))
+        .collect();
+    let users = selected
+        .iter()
+        .map(|(user, _)| *user)
+        .collect::<BTreeSet<_>>();
+    let mut packages = BTreeMap::new();
+    for user in users {
+        let output = backend
+            .run(ProbeCommand::PackageList {
+                kind: PackageListKind::All,
+                android_user_id: user,
+            })
+            .map_err(|_| AppCatalogError::QueryFailed)?;
+        if !output.success() {
+            return Err(AppCatalogError::QueryFailed);
+        }
+        for (package, uid) in parse_packages(output.stdout())? {
+            validate_uid_user(uid, user)?;
+            packages.insert((user, package), uid);
+        }
+    }
+    let mut selected_uids = BTreeSet::new();
+    let mut unresolved = Vec::new();
+    for (user, package) in &selected {
+        match packages.get(&(*user, package.clone())) {
+            Some(uid) => {
+                selected_uids.insert((*user, *uid));
+            }
+            None => unresolved.push((*user, package.clone())),
+        }
+    }
+    let mut expansions = Vec::new();
+    for (user, uid) in &selected_uids {
+        let affected_packages = packages
+            .iter()
+            .filter_map(|((package_user, package), package_uid)| {
+                (*package_user == *user && *package_uid == *uid).then_some(package.clone())
+            })
+            .collect::<Vec<_>>();
+        if affected_packages.len() > 1 {
+            expansions.push(SharedUidExpansion {
+                android_user_id: *user,
+                uid: *uid,
+                affected_packages,
+            });
+        }
+    }
+    let mut include_uids = Vec::new();
+    let mut exclude_uids = Vec::new();
+    match mode {
+        AppSelectionMode::Whitelist => {
+            include_uids.extend(selected_uids.iter().map(|(_, uid)| *uid))
+        }
+        AppSelectionMode::Blacklist => {
+            exclude_uids.extend(selected_uids.iter().map(|(_, uid)| *uid))
+        }
+    }
+    Ok(ResolvedAppSelection {
+        include_uids,
+        exclude_uids,
+        unresolved_packages: unresolved,
+        expansions,
+    })
+}
+
 impl CompiledAppSelection {
     pub fn include_uids(&self) -> &[u32] {
         &self.include_uids

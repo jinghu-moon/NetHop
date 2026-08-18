@@ -30,6 +30,8 @@ fn command_name(command: CliCommand) -> &'static str {
         CliCommand::NodeSelectManual => "NodeSelectManual",
         CliCommand::NodeRemove => "NodeRemove",
         CliCommand::NodeExport => "NodeExport",
+        CliCommand::NodeOverrideGet => "NodeOverrideGet",
+        CliCommand::NodeOverrideRemove => "NodeOverrideRemove",
         CliCommand::ConnectionsGet => "ConnectionsGet",
         CliCommand::ConnectionClose => "ConnectionClose",
         CliCommand::ConnectionsCloseAll => "ConnectionsCloseAll",
@@ -75,7 +77,7 @@ fn command_name(command: CliCommand) -> &'static str {
 fn every_stable_cli_command_has_a_v1_before_golden() {
     let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
     assert_eq!(fixture["protocol_version"], 1);
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
 
     let success: ControlResponse = serde_json::from_value(fixture["success"].clone()).unwrap();
     let failure: ControlResponse = serde_json::from_value(fixture["failure"].clone()).unwrap();

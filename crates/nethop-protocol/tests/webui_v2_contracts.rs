@@ -12,7 +12,7 @@ fn request_id() -> RequestId {
 
 #[test]
 fn v3_freezes_traffic_payload_methods_and_stable_errors() {
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
     assert_eq!(serde_json::to_value(EventKind::Traffic).unwrap(), "traffic");
     assert_eq!(MAX_WEBUI_STDOUT_BYTES, 1024 * 1024);
     assert_eq!(MAX_WEBUI_STDERR_BYTES, 64 * 1024);
@@ -79,7 +79,7 @@ fn payload_methods_have_typed_bounded_wire_shapes() {
 #[test]
 fn private_payload_config_mutate_is_a_stable_allowlisted_operation() {
     let params = ControlParams::payload_commit(
-        WebUiPayloadNamespace::Subscription,
+        WebUiPayloadNamespace::Config,
         "p_0123456789abcdef0123456789abcdef".into(),
         WebUiPayloadOperation::ConfigMutate,
     );
@@ -91,6 +91,20 @@ fn private_payload_config_mutate_is_a_stable_allowlisted_operation() {
     .unwrap();
     let wire = serde_json::to_value(request).unwrap();
     assert_eq!(wire["params"]["payload"]["operation"], "config_mutate");
+}
+
+#[test]
+fn payload_commit_rejects_cross_namespace_operations() {
+    let params = ControlParams::payload_commit(
+        WebUiPayloadNamespace::Subscription,
+        "p_0123456789abcdef0123456789abcdef".into(),
+        WebUiPayloadOperation::ConfigMutate,
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::WebUiPayloadCommit)
+            .with_params(params)
+            .is_err()
+    );
 }
 
 #[test]

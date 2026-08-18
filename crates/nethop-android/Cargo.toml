@@ -18,3 +18,4 @@ libc = "0.2"
 
 [dev-dependencies]
 serde_json = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3"

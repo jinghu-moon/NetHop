@@ -2,6 +2,7 @@
 
 pub mod apps;
 pub mod capability;
+pub mod ebpf_poc;
 pub mod executor;
 pub mod forwarding;
 pub mod health;
@@ -14,7 +15,7 @@ pub mod wifi_scene;
 
 pub use apps::{
     AppCatalog, AppCatalogError, AppClass, AppIdentity, AppSelectionMode, CompiledAppSelection,
-    PackageSnapshot, SharedUidExpansion, UidGroup,
+    PackageSnapshot, ResolvedAppSelection, SharedUidExpansion, UidGroup, resolve_selection,
 };
 pub use capability::{
     AllocationCapability, AndroidToolPaths, CapabilityDiagnosticCode, CapabilityError,
@@ -22,6 +23,7 @@ pub use capability::{
     IpFamily, NetfilterBackend, NetfilterTable, PackageListKind, ProbeBackend, ProbeCommand,
     ProbeLimits, ProbeOutput, ResourceCandidate,
 };
+pub use ebpf_poc::{EbpfPocDiagnostic, EbpfPocFacts, EbpfPocScope};
 pub use executor::{
     ApplyReceipt, CommandFailure, CommandInvocation, CommandOutput, ExecutionDiagnosticCode,
     ExecutionError, NetworkCommandBackend, NetworkExecutor, NetworkProgram, SystemCommandBackend,

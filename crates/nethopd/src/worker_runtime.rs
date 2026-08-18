@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "subscription-update")]
+use nethop_core::SealedGeneration;
 use nethop_core::{GenerationId, RuntimeState};
 use thiserror::Error;
 
@@ -216,6 +218,22 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
 
     pub fn process_identity(&self) -> Option<crate::ProcessIdentity> {
         self.active.as_ref().map(ActiveRuntime::process_identity)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub(crate) fn active_mut(&mut self) -> Option<&mut ActiveRuntime<P, R>> {
+        self.active.as_mut()
+    }
+
+    #[cfg(feature = "subscription-update")]
+    pub(crate) fn commit_reload(
+        &mut self,
+        generation: SealedGeneration,
+    ) -> Result<(), crate::ProcessError> {
+        self.active
+            .as_mut()
+            .ok_or(crate::ProcessError::ReloadFailed)?
+            .commit_reload(generation)
     }
 
     pub fn next_wakeup_in(&self, now: Duration) -> Duration {

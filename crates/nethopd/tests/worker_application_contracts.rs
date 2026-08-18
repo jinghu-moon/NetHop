@@ -4,7 +4,10 @@ use std::{
     time::Duration,
 };
 #[cfg(feature = "subscription-update")]
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    path::Path,
+};
 
 use nethop_android::{
     AllocationCapability, CapabilityError, CapabilityReport, CapabilityStatus, ExecutionError,
@@ -16,11 +19,14 @@ use nethop_android::{UpdateNotificationOutcome, UpdateNotificationSink};
 #[cfg(feature = "subscription-update")]
 use nethop_android::{WifiFactsSource, WifiNetworkFacts, WifiSceneError};
 #[cfg(feature = "subscription-update")]
-use nethop_core::{Candidate, GenerationId, GenerationStore, ManagedConfig, TerminalOutbound};
+use nethop_core::{
+    Candidate, GenerationId, GenerationNodeRecord, GenerationNodeRegistry, GenerationStore,
+    ManagedConfig, SealedGeneration, TerminalOutbound,
+};
 use nethop_core::{CaptureMode, CapturePolicy, RuntimeState};
-#[cfg(feature = "subscription-update")]
-use nethop_protocol::ControlParams;
 use nethop_protocol::{ControlMethod, ControlRequest, RequestId};
+#[cfg(feature = "subscription-update")]
+use nethop_protocol::{ControlParams, NodeOverrideDocument};
 use nethopd::{
     ActiveRuntime, CandidateProcess, ControlRequestHandler, NetworkController, ProcessError,
     ProcessIdentity, RuntimeRecoverySource, WorkerApplication, WorkerClock, WorkerRecoveryError,
@@ -30,12 +36,15 @@ use nethopd::{
 use nethopd::{
     CandidateChecker, CapabilitySource, CommitJournalStore, ConfigRuntime, ConfigStore,
     CoreLauncher, CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe,
-    HealthProbe, HealthProbeError, InMemoryScheduleStore, MutationCoordinator,
-    PersistentCoreVersionSchedule, RuleSetUpdateError, RuleSetUpdatePreparation, RunnerError,
-    RuntimeAttachmentView, RuntimeCoreVersionSchedule, RuntimePolicyError, RuntimeRuleSetSchedule,
-    RuntimeRuleSetUpdateSource, RuntimeUpdateError, RuntimeUpdateSource, SchedulerError,
-    SourceIdEntropy, SourceRegistry, SourceRegistryError, SourceStatusStore, UpdateStatus,
+    HealthProbe, HealthProbeError, InMemoryScheduleStore, MutationCoordinator, NodeOverrideSet,
+    NodeSelectionStore, OperationalControl, PersistentCoreVersionSchedule, RuleSetUpdateError,
+    RuleSetUpdatePreparation, RunnerError, RuntimeAttachmentView, RuntimeCoreVersionSchedule,
+    RuntimePolicyError, RuntimeReloadError, RuntimeRuleSetSchedule, RuntimeRuleSetUpdateSource,
+    RuntimeUpdateError, RuntimeUpdateSource, SchedulerError, SourceIdEntropy, SourceRegistry,
+    SourceRegistryError, SourceStatusStore, UpdateStatus,
 };
+#[cfg(feature = "subscription-update")]
+use nethopd::{ClashApiClient, ClashApiLimits};
 use nethopd::{CoreReleaseBodyFetcher, CoreVersion, CoreVersionCheckError, CoreVersionChecker};
 #[cfg(feature = "subscription-update")]
 use serde_json::json;
@@ -247,6 +256,25 @@ impl CandidateProcess for RuleSetProcess {
         Ok(true)
     }
 
+    fn supports_reload(&self) -> bool {
+        true
+    }
+
+    fn stage_reload(&mut self, _config_path: &Path) -> Result<(), ProcessError> {
+        self.events.borrow_mut().push("core_reload");
+        Ok(())
+    }
+
+    fn commit_reload(&mut self) -> Result<(), ProcessError> {
+        self.events.borrow_mut().push("core_reload_commit");
+        Ok(())
+    }
+
+    fn rollback_reload(&mut self) -> Result<(), ProcessError> {
+        self.events.borrow_mut().push("core_reload_rollback");
+        Ok(())
+    }
+
     fn stop(self) -> Result<(), ProcessError> {
         self.events.borrow_mut().push("core_stop");
         Ok(())
@@ -332,6 +360,7 @@ struct RuleSetRecovery {
     health: RuleSetCoreHealth,
     capability: RuleSetCapability,
     data_health: RuleSetDataPlaneHealth,
+    reload_supported: bool,
 }
 
 #[cfg(feature = "subscription-update")]
@@ -370,7 +399,32 @@ impl RuleSetRecovery {
             health: RuleSetCoreHealth,
             capability: RuleSetCapability,
             data_health: RuleSetDataPlaneHealth,
+            reload_supported: true,
         }
+    }
+
+    fn without_reload(mut self) -> Self {
+        self.reload_supported = false;
+        self
+    }
+
+    fn prepare_generation(&self, generation: u64, tag: &str) -> SealedGeneration {
+        let outbound = TerminalOutbound::new(
+            tag,
+            "trojan",
+            BTreeMap::from([
+                ("server".to_owned(), json!("example.com")),
+                ("server_port".to_owned(), json!(443)),
+                ("password".to_owned(), json!("fixture-only")),
+            ]),
+        )
+        .unwrap();
+        let candidate = Candidate::new(
+            GenerationId::new(generation).unwrap(),
+            ManagedConfig::from_outbounds(vec![outbound]).unwrap(),
+        );
+        let prepared = self.store.prepare_candidate(&candidate).unwrap();
+        self.store.seal_candidate(&prepared).unwrap()
     }
 }
 
@@ -418,6 +472,39 @@ impl RuntimeRecoverySource<TestNetwork> for RuleSetRecovery {
     fn probe(&mut self) -> Result<CapabilityReport, CapabilityError> {
         self.capability.probe()
     }
+
+    fn stage_reload(
+        &mut self,
+        runtime: &mut ActiveRuntime<Self::Process, ()>,
+        policy: &CapturePolicy,
+        generation: GenerationId,
+    ) -> Result<SealedGeneration, RuntimeReloadError> {
+        if runtime.policy() != policy {
+            return Err(RuntimeReloadError::PolicyChanged);
+        }
+        if !self.reload_supported {
+            return Err(RuntimeReloadError::Unsupported);
+        }
+        let sealed = self
+            .store
+            .sealed_generation(generation)
+            .map_err(|_| RuntimeReloadError::InvalidGeneration)?;
+        runtime
+            .process_mut()
+            .stage_reload(&sealed.config_path())
+            .map_err(|_| RuntimeReloadError::Stage)?;
+        Ok(sealed)
+    }
+
+    fn rollback_reload(
+        &mut self,
+        runtime: &mut ActiveRuntime<Self::Process, ()>,
+    ) -> Result<(), RuntimeReloadError> {
+        runtime
+            .process_mut()
+            .rollback_reload()
+            .map_err(|_| RuntimeReloadError::RollbackFailed)
+    }
 }
 
 #[derive(Default)]
@@ -434,6 +521,144 @@ struct TestUpdater {
     needed: bool,
     generation: nethop_core::GenerationId,
     current: bool,
+}
+
+#[cfg(feature = "subscription-update")]
+struct ReloadUpdater {
+    store: GenerationStore,
+    sealed: SealedGeneration,
+    events: Rc<RefCell<Vec<&'static str>>>,
+    fail_commit: bool,
+}
+
+#[cfg(feature = "subscription-update")]
+struct NodeOverrideUpdater {
+    store: GenerationStore,
+    generations: VecDeque<u64>,
+    current: Rc<RefCell<NodeOverrideSet>>,
+    pending: Option<NodeOverrideSet>,
+    events: Rc<RefCell<Vec<&'static str>>>,
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeUpdateSource for NodeOverrideUpdater {
+    type Prepared = (SealedGeneration, NodeOverrideSet);
+
+    fn is_needed(&self) -> bool {
+        false
+    }
+
+    fn node_overrides(&self) -> Option<NodeOverrideSet> {
+        Some(self.current.borrow().clone())
+    }
+
+    fn request_node_overrides(
+        &mut self,
+        overrides: NodeOverrideSet,
+    ) -> Result<(), RuntimeUpdateError> {
+        if self.pending.is_some() {
+            return Err(RuntimeUpdateError::Prepare);
+        }
+        self.events.borrow_mut().push("request_override");
+        self.pending = Some(overrides);
+        Ok(())
+    }
+
+    fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError> {
+        self.events.borrow_mut().push("prepare_override");
+        let generation = self
+            .generations
+            .pop_front()
+            .and_then(|value| GenerationId::new(value).ok())
+            .ok_or(RuntimeUpdateError::Prepare)?;
+        let overrides = self.pending.take().ok_or(RuntimeUpdateError::Prepare)?;
+        let outbound = TerminalOutbound::new(
+            "fixture",
+            "trojan",
+            BTreeMap::from([
+                ("server".to_owned(), json!("example.com")),
+                ("server_port".to_owned(), json!(443)),
+                ("password".to_owned(), json!("fixture-only")),
+            ]),
+        )
+        .map_err(|_| RuntimeUpdateError::Prepare)?;
+        let candidate = Candidate::new(
+            generation,
+            ManagedConfig::from_outbounds(vec![outbound])
+                .map_err(|_| RuntimeUpdateError::Prepare)?,
+        );
+        let prepared = self
+            .store
+            .prepare_candidate(&candidate)
+            .map_err(|_| RuntimeUpdateError::Prepare)?;
+        let sealed = self
+            .store
+            .seal_candidate(&prepared)
+            .map_err(|_| RuntimeUpdateError::Prepare)?;
+        Ok((sealed, overrides))
+    }
+
+    fn generation(&self, prepared: &Self::Prepared) -> GenerationId {
+        prepared.0.generation()
+    }
+
+    fn sealed_generation(&self, prepared: &Self::Prepared) -> Option<SealedGeneration> {
+        Some(prepared.0.clone())
+    }
+
+    fn commit(&mut self, prepared: Self::Prepared) -> Result<GenerationId, RuntimeUpdateError> {
+        self.events.borrow_mut().push("commit_override");
+        self.store
+            .commit_generation(&prepared.0)
+            .map_err(|_| RuntimeUpdateError::Commit)?;
+        let generation = prepared.0.generation();
+        *self.current.borrow_mut() = prepared.1;
+        Ok(generation)
+    }
+
+    fn discard(&mut self, prepared: Self::Prepared) -> Result<(), RuntimeUpdateError> {
+        self.events.borrow_mut().push("discard_override");
+        self.store
+            .discard_sealed(prepared.0)
+            .map_err(|_| RuntimeUpdateError::Discard)
+    }
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeUpdateSource for ReloadUpdater {
+    type Prepared = SealedGeneration;
+
+    fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError> {
+        self.events.borrow_mut().push("prepare");
+        Ok(self.sealed.clone())
+    }
+
+    fn generation(&self, prepared: &Self::Prepared) -> GenerationId {
+        prepared.generation()
+    }
+
+    fn sealed_generation(&self, prepared: &Self::Prepared) -> Option<SealedGeneration> {
+        Some(prepared.clone())
+    }
+
+    fn commit(&mut self, prepared: Self::Prepared) -> Result<GenerationId, RuntimeUpdateError> {
+        self.events.borrow_mut().push("commit");
+        if self.fail_commit {
+            Err(RuntimeUpdateError::Commit)
+        } else {
+            self.store
+                .commit_generation(&prepared)
+                .map_err(|_| RuntimeUpdateError::Commit)?;
+            Ok(prepared.generation())
+        }
+    }
+
+    fn discard(&mut self, prepared: Self::Prepared) -> Result<(), RuntimeUpdateError> {
+        self.events.borrow_mut().push("discard");
+        self.store
+            .discard_sealed(prepared)
+            .map_err(|_| RuntimeUpdateError::Discard)
+    }
 }
 
 #[cfg(feature = "subscription-update")]
@@ -750,6 +975,116 @@ fn policy() -> CapturePolicy {
 
 fn request(id: &str, method: ControlMethod) -> ControlRequest {
     ControlRequest::new(RequestId::new(id).unwrap(), method)
+}
+
+#[cfg(feature = "subscription-update")]
+fn serve_node_snapshots(
+    node_id: &str,
+    count: usize,
+) -> (std::net::SocketAddrV4, std::thread::JoinHandle<Vec<String>>) {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::time::Duration;
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = match listener.local_addr().unwrap() {
+        std::net::SocketAddr::V4(address) => address,
+        _ => unreachable!(),
+    };
+    let body = json!({
+        "proxies": {
+            "nethop-select": {"type":"Selector", "now":node_id, "all":[node_id]},
+            (node_id): {"type":"Trojan"}
+        }
+    })
+    .to_string();
+    let handle = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 2048];
+            loop {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            requests.push(String::from_utf8(bytes).unwrap());
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        }
+        requests
+    });
+    (address, handle)
+}
+
+#[cfg(feature = "subscription-update")]
+fn node_override_operational_control(
+    root: &Path,
+    node_id: &str,
+    address: std::net::SocketAddrV4,
+) -> OperationalControl {
+    let generations = root.join("operational-generations");
+    std::fs::create_dir(&generations).unwrap();
+    std::fs::create_dir(generations.join("7")).unwrap();
+    std::fs::write(generations.join("current"), "7\n").unwrap();
+    std::fs::write(
+        generations.join("7/config.json"),
+        serde_json::to_vec(&json!({
+            "outbounds": [{
+                "type": "trojan",
+                "tag": node_id,
+                "server": "original.example.com",
+                "server_port": 443,
+                "password": "original-private-secret"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let registry = GenerationNodeRegistry::new(vec![
+        GenerationNodeRecord::new(
+            node_id,
+            node_id,
+            "原始新加坡节点",
+            "trojan",
+            vec!["src_0123456789abcdef0123456789abcdef".into()],
+            true,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    std::fs::write(
+        generations.join("7/nodes.json"),
+        serde_json::to_vec(&registry).unwrap(),
+    )
+    .unwrap();
+    OperationalControl::new(
+        ClashApiClient::new(
+            address,
+            "0123456789abcdef0123456789abcdef",
+            ClashApiLimits::default(),
+        )
+        .unwrap(),
+        NodeSelectionStore::new(root.join("node-selection.json")).unwrap(),
+        root.join("diagnostics-latest.json"),
+    )
+    .unwrap()
+    .with_generation_root(generations)
+    .unwrap()
 }
 
 #[cfg(feature = "subscription-update")]
@@ -1292,6 +1627,121 @@ fn failed_update_prepare_preserves_the_existing_runtime_state() {
 
 #[test]
 #[cfg(feature = "subscription-update")]
+fn running_subscription_update_reloads_core_without_stopping_the_data_plane() {
+    let runtime_events = Rc::new(RefCell::new(Vec::new()));
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&runtime_events), Rc::new(Cell::new(0)), None);
+    let sealed = recovery.prepare_generation(2, "updated");
+    let updater = ReloadUpdater {
+        store: recovery.store.clone(),
+        sealed,
+        events: Rc::clone(&update_events),
+        fail_commit: false,
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater);
+
+    application.run_ready().unwrap();
+    application.handle(request("reload", ControlMethod::SubscriptionUpdate));
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        runtime_events.borrow().as_slice(),
+        ["core_start", "core_reload", "core_reload_commit"]
+    );
+    assert_eq!(update_events.borrow().as_slice(), ["prepare", "commit"]);
+    assert_eq!(application.snapshot().generation.unwrap().get(), 2);
+    assert_eq!(application.snapshot().last_update, UpdateStatus::Succeeded);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
+fn unsupported_reload_uses_the_existing_full_activation_fallback() {
+    let runtime_events = Rc::new(RefCell::new(Vec::new()));
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&runtime_events), Rc::new(Cell::new(0)), None)
+        .without_reload();
+    let sealed = recovery.prepare_generation(2, "updated");
+    let updater = ReloadUpdater {
+        store: recovery.store.clone(),
+        sealed,
+        events: Rc::clone(&update_events),
+        fail_commit: false,
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater);
+
+    application.run_ready().unwrap();
+    application.handle(request(
+        "reload-fallback",
+        ControlMethod::SubscriptionUpdate,
+    ));
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        runtime_events.borrow().as_slice(),
+        ["core_start", "core_stop", "core_start"]
+    );
+    assert_eq!(update_events.borrow().as_slice(), ["prepare", "commit"]);
+    assert_eq!(application.snapshot().generation.unwrap().get(), 2);
+    assert_eq!(application.snapshot().last_update, UpdateStatus::Succeeded);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
+fn failed_reload_commit_restores_the_running_generation_without_core_stop() {
+    let runtime_events = Rc::new(RefCell::new(Vec::new()));
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&runtime_events), Rc::new(Cell::new(0)), None);
+    let sealed = recovery.prepare_generation(2, "updated");
+    let updater = ReloadUpdater {
+        store: recovery.store.clone(),
+        sealed,
+        events: Rc::clone(&update_events),
+        fail_commit: true,
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater);
+
+    application.run_ready().unwrap();
+    application.handle(request("reload-fail", ControlMethod::SubscriptionUpdate));
+    application.run_ready().unwrap();
+
+    assert_eq!(
+        runtime_events.borrow().as_slice(),
+        ["core_start", "core_reload", "core_reload_rollback"]
+    );
+    assert_eq!(update_events.borrow().as_slice(), ["prepare", "commit"]);
+    assert_eq!(application.snapshot().generation.unwrap().get(), 1);
+    assert_eq!(application.snapshot().last_update, UpdateStatus::Failed);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
 fn failed_candidate_activation_discards_it_and_recovers_the_previous_current() {
     let clock = TestClock(Rc::new(Cell::new(Duration::ZERO)));
     let recoveries = Rc::new(RefCell::new(Vec::new()));
@@ -1805,12 +2255,12 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     .with_source_status_store(source_status);
 
     let hello = request("hello", ControlMethod::ProtocolHello)
-        .with_params(ControlParams::hello("manager-alpha".into(), 5, 5))
+        .with_params(ControlParams::hello("manager-alpha".into(), 6, 6))
         .unwrap();
     let hello = application.handle(hello);
     assert!(hello.ok());
     assert_eq!(hello.result().unwrap()["compatible"], true);
-    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 5);
+    assert_eq!(hello.result().unwrap()["daemon_protocol_min"], 6);
     assert!(
         hello.result().unwrap()["supported_features"]
             .as_array()
@@ -1851,6 +2301,7 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     assert!(source_id.starts_with("src_"));
     assert_eq!(config["source_status"][0]["source_id"], source_id);
     assert_eq!(config["source_status"][0]["health"], "never");
+    assert_eq!(config["source_history"], json!([]));
     assert!(
         !serde_json::to_string(config)
             .unwrap()
@@ -2134,4 +2585,115 @@ fn advanced_apply_refreshes_runtime_probe_health_and_reconcile_policy() {
     assert!(response.ok());
     assert_eq!(recovery_updates.borrow().as_slice(), [(7900, 5, 3)]);
     assert_eq!(verifier_updates.borrow().as_slice(), [7900]);
+}
+
+#[test]
+#[cfg(feature = "subscription-update")]
+fn node_override_worker_flow_is_transactional_idempotent_and_reversible() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let node_id = "nh1s-0123456789abcdef";
+    let (address, server) = serve_node_snapshots(node_id, 5);
+    let control = node_override_operational_control(&root, node_id, address);
+    let runtime_events = Rc::new(RefCell::new(Vec::new()));
+    let update_events = Rc::new(RefCell::new(Vec::new()));
+    let current = Rc::new(RefCell::new(NodeOverrideSet::default()));
+    let recovery = RuleSetRecovery::new(Rc::clone(&runtime_events), Rc::new(Cell::new(0)), None);
+    let updater = NodeOverrideUpdater {
+        store: recovery.store.clone(),
+        generations: VecDeque::from([2, 3]),
+        current: Rc::clone(&current),
+        pending: None,
+        events: Rc::clone(&update_events),
+    };
+    let mut application = WorkerApplication::new(
+        recovery,
+        TestNetwork,
+        TestVerifier,
+        TestClock(Rc::new(Cell::new(Duration::ZERO))),
+        policy(),
+        PlanSlot::A,
+        WorkerRuntimeLimits::default(),
+    )
+    .with_updater(updater)
+    .with_operational_control(control);
+
+    let original = application.handle(
+        request("override-get-original", ControlMethod::NodeOverrideGet)
+            .with_params(ControlParams::target(node_id.to_owned()))
+            .unwrap(),
+    );
+    assert!(original.ok(), "{original:?}");
+    assert_eq!(original.result().unwrap()["overridden"], false);
+    assert_eq!(original.result().unwrap()["display_name"], "原始新加坡节点");
+
+    let document = NodeOverrideDocument {
+        display_name: "编辑后的东京节点".into(),
+        outbound: json!({
+            "type": "trojan",
+            "server": "edited.example.com",
+            "server_port": 443,
+            "password": "private-node-credential"
+        }),
+    };
+    let apply = application.handle(
+        request("override-apply", ControlMethod::NodeOverrideApply)
+            .with_params(ControlParams::node_override(
+                node_id.to_owned(),
+                document.clone(),
+            ))
+            .unwrap(),
+    );
+    assert!(apply.ok(), "{apply:?}");
+    assert_eq!(apply.generation(), Some(2));
+    assert_eq!(apply.result().unwrap()["changed"], true);
+    assert!(!format!("{apply:?}").contains("private-node-credential"));
+    assert_eq!(
+        update_events.borrow().as_slice(),
+        ["request_override", "prepare_override", "commit_override"]
+    );
+
+    let duplicate = application.handle(
+        request("override-apply-duplicate", ControlMethod::NodeOverrideApply)
+            .with_params(ControlParams::node_override(node_id.to_owned(), document))
+            .unwrap(),
+    );
+    assert!(duplicate.ok(), "{duplicate:?}");
+    assert_eq!(duplicate.result().unwrap()["changed"], false);
+    assert_eq!(duplicate.generation(), Some(2));
+    assert_eq!(update_events.borrow().len(), 3);
+
+    let edited = application.handle(
+        request("override-get-edited", ControlMethod::NodeOverrideGet)
+            .with_params(ControlParams::target(node_id.to_owned()))
+            .unwrap(),
+    );
+    assert_eq!(edited.result().unwrap()["overridden"], true);
+    assert_eq!(
+        edited.result().unwrap()["outbound"]["server"],
+        "edited.example.com"
+    );
+
+    let removed = application.handle(
+        request("override-remove", ControlMethod::NodeOverrideRemove)
+            .with_params(ControlParams::target(node_id.to_owned()))
+            .unwrap(),
+    );
+    assert!(removed.ok(), "{removed:?}");
+    assert_eq!(removed.generation(), Some(3));
+    assert_eq!(removed.result().unwrap()["changed"], true);
+    assert_eq!(update_events.borrow().len(), 6);
+    assert!(current.borrow().is_empty());
+
+    let restored = application.handle(
+        request("override-get-restored", ControlMethod::NodeOverrideGet)
+            .with_params(ControlParams::target(node_id.to_owned()))
+            .unwrap(),
+    );
+    assert_eq!(restored.result().unwrap()["overridden"], false);
+    assert_eq!(
+        restored.result().unwrap()["outbound"]["server"],
+        "original.example.com"
+    );
+    assert_eq!(server.join().unwrap().len(), 5);
 }

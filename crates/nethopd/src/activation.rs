@@ -136,6 +136,18 @@ impl CandidateChecker for SingBoxCheckRunner {
 pub trait CandidateProcess: Sized {
     fn identity(&self) -> ProcessIdentity;
     fn is_running(&mut self) -> Result<bool, ProcessError>;
+    fn supports_reload(&self) -> bool {
+        false
+    }
+    fn stage_reload(&mut self, _config_path: &Path) -> Result<(), ProcessError> {
+        Err(ProcessError::ReloadUnsupported)
+    }
+    fn commit_reload(&mut self) -> Result<(), ProcessError> {
+        Err(ProcessError::ReloadUnsupported)
+    }
+    fn rollback_reload(&mut self) -> Result<(), ProcessError> {
+        Err(ProcessError::ReloadUnsupported)
+    }
     fn stop(self) -> Result<(), ProcessError>;
 }
 
@@ -146,6 +158,22 @@ impl CandidateProcess for RunningCore {
 
     fn is_running(&mut self) -> Result<bool, ProcessError> {
         self.try_exit().map(|status| status.is_none())
+    }
+
+    fn supports_reload(&self) -> bool {
+        self.supports_reload()
+    }
+
+    fn stage_reload(&mut self, config_path: &Path) -> Result<(), ProcessError> {
+        self.stage_reload(config_path)
+    }
+
+    fn commit_reload(&mut self) -> Result<(), ProcessError> {
+        self.commit_reload()
+    }
+
+    fn rollback_reload(&mut self) -> Result<(), ProcessError> {
+        self.rollback_reload()
     }
 
     fn stop(self) -> Result<(), ProcessError> {
@@ -297,6 +325,11 @@ impl<P: CandidateProcess> ActiveGeneration<P> {
 
     pub fn process_mut(&mut self) -> &mut P {
         &mut self.process
+    }
+
+    pub(crate) fn replace_generation(&mut self, generation: SealedGeneration) {
+        self.previous_generation = Some(self.generation.generation());
+        self.generation = generation;
     }
 
     pub fn stop(self) -> Result<(), ProcessError> {

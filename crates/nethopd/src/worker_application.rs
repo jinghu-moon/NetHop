@@ -23,7 +23,7 @@ use nethop_android::{
 use nethop_android::{CapabilityStatus, ResourceCandidate, WifiFactsSource};
 use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
 #[cfg(feature = "subscription-update")]
-use nethop_core::{ManagedOptions, TunStack};
+use nethop_core::{ManagedOptions, SealedGeneration, TunStack};
 #[cfg(feature = "subscription-update")]
 use nethop_protocol::PROTOCOL_VERSION;
 use nethop_protocol::{
@@ -38,7 +38,10 @@ use serde_json::json;
 
 use crate::operational_control::{FastSelectionApply, FastSelectionContext, FastSelectionInput};
 #[cfg(feature = "subscription-update")]
-use crate::worker_services::{unavailable_control_error, unavailable_control_error_with_details};
+use crate::worker_activation::RuntimeReloadHealthError;
+use crate::worker_services::unavailable_control_error;
+#[cfg(feature = "subscription-update")]
+use crate::worker_services::unavailable_control_error_with_details;
 use crate::{
     ActiveRuntime, CandidateProcess, CapabilitySource, ControlCommand, ControlRequestHandler,
     ControlSnapshot, CurrentGenerationActivator, DataPlaneHealthProbe, HealthProbe,
@@ -54,16 +57,21 @@ use crate::{
 use crate::{CandidateChecker, CoreLauncher, OperationalControl, WebUiPayloadStore};
 #[cfg(feature = "subscription-update")]
 use crate::{
-    ConfigChange, ConfigRuntime, ConfigRuntimeCheckpoint, RuleSetUpdatePreparation,
-    RuntimeCoreVersionSchedule, RuntimeLogRetention, RuntimeRuleSetSchedule,
-    RuntimeRuleSetUpdateSource, RuntimeUpdateSchedule, SourceConfig, SourceStatusStore,
-    SourceUpdateReport, UnavailableCoreVersionSchedule, UnavailableLogRetention,
-    UnavailableRuleSetSchedule, UnavailableRuleSetUpdateSource, UnavailableUpdateSchedule,
+    ConfigChange, ConfigRuntime, ConfigRuntimeCheckpoint, NodeOverride, NodeOverrideSet,
+    RuleSetUpdatePreparation, RuntimeCoreVersionSchedule, RuntimeLogRetention,
+    RuntimeRuleSetSchedule, RuntimeRuleSetUpdateSource, RuntimeUpdateSchedule, SourceConfig,
+    SourceStatusStore, SourceUpdateReport, StableNodeId, UnavailableCoreVersionSchedule,
+    UnavailableLogRetention, UnavailableRuleSetSchedule, UnavailableRuleSetUpdateSource,
+    UnavailableUpdateSchedule,
 };
 use crate::{
     CoreReleaseBodyFetcher, CoreUpdateAvailability, CoreVersion, CoreVersionCheckError,
     CoreVersionChecker, CoreVersionStateSink, CoreVersionStatus,
 };
+#[cfg(feature = "subscription-update")]
+use nethop_android::{AppSelectionMode, CommandProbeBackend, resolve_selection};
+#[cfg(feature = "subscription-update")]
+use nethop_protocol::ApplicationTarget;
 #[cfg(feature = "subscription-update")]
 use nethop_subscription::FormatHint;
 
@@ -243,6 +251,27 @@ where
     fn probe(&mut self) -> Result<CapabilityReport, CapabilityError>;
 
     #[cfg(feature = "subscription-update")]
+    fn stage_reload(
+        &mut self,
+        _runtime: &mut ActiveRuntime<Self::Process, N::Receipt>,
+        _policy: &CapturePolicy,
+        _generation: GenerationId,
+    ) -> Result<SealedGeneration, RuntimeReloadError> {
+        Err(RuntimeReloadError::Unsupported)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn rollback_reload(
+        &mut self,
+        runtime: &mut ActiveRuntime<Self::Process, N::Receipt>,
+    ) -> Result<(), RuntimeReloadError> {
+        runtime
+            .process_mut()
+            .rollback_reload()
+            .map_err(|_| RuntimeReloadError::RollbackFailed)
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn replace_runtime_policy(
         &mut self,
         _candidates: Vec<ResourceCandidate>,
@@ -272,6 +301,35 @@ pub enum RuntimePolicyError {
     Capability,
     CoreHealth,
     DataPlaneHealth,
+}
+
+#[cfg(feature = "subscription-update")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeReloadError {
+    Unsupported,
+    PolicyChanged,
+    InvalidGeneration,
+    CoreCheck,
+    Stage,
+    CoreHealth,
+    DataPlaneHealth,
+    RollbackFailed,
+}
+
+#[cfg(feature = "subscription-update")]
+impl RuntimeReloadError {
+    pub const fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::Unsupported => "runtime_reload_unsupported",
+            Self::PolicyChanged => "runtime_reload_policy_changed",
+            Self::InvalidGeneration => "runtime_reload_invalid_generation",
+            Self::CoreCheck => "runtime_reload_core_check_failed",
+            Self::Stage => "runtime_reload_stage_failed",
+            Self::CoreHealth => "runtime_reload_core_health_failed",
+            Self::DataPlaneHealth => "runtime_reload_data_plane_health_failed",
+            Self::RollbackFailed => "runtime_reload_rollback_failed",
+        }
+    }
 }
 
 pub trait RuntimeUpdateSource {
@@ -304,6 +362,19 @@ pub trait RuntimeUpdateSource {
     }
 
     #[cfg(feature = "subscription-update")]
+    fn node_overrides(&self) -> Option<NodeOverrideSet> {
+        None
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_node_overrides(
+        &mut self,
+        _overrides: NodeOverrideSet,
+    ) -> Result<(), RuntimeUpdateError> {
+        Err(RuntimeUpdateError::Prepare)
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn replace_config(&mut self, _config: SourceConfig) {}
 
     #[cfg(feature = "subscription-update")]
@@ -317,6 +388,10 @@ pub trait RuntimeUpdateSource {
 
     fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError>;
     fn generation(&self, prepared: &Self::Prepared) -> GenerationId;
+    #[cfg(feature = "subscription-update")]
+    fn sealed_generation(&self, _prepared: &Self::Prepared) -> Option<SealedGeneration> {
+        None
+    }
     fn is_current(&self, _prepared: &Self::Prepared) -> bool {
         true
     }
@@ -422,6 +497,24 @@ where
     }
 
     #[cfg(feature = "subscription-update")]
+    fn node_overrides(&self) -> Option<NodeOverrideSet> {
+        self.inner
+            .as_ref()
+            .and_then(RuntimeUpdateSource::node_overrides)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn request_node_overrides(
+        &mut self,
+        overrides: NodeOverrideSet,
+    ) -> Result<(), RuntimeUpdateError> {
+        self.inner
+            .as_mut()
+            .ok_or(RuntimeUpdateError::Prepare)?
+            .request_node_overrides(overrides)
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn replace_config(&mut self, config: SourceConfig) {
         if let Some(inner) = &mut self.inner {
             inner.replace_config(config);
@@ -452,6 +545,13 @@ where
             .as_ref()
             .expect("prepared update requires an available source")
             .generation(prepared)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn sealed_generation(&self, prepared: &Self::Prepared) -> Option<SealedGeneration> {
+        self.inner
+            .as_ref()
+            .and_then(|inner| inner.sealed_generation(prepared))
     }
 
     fn is_current(&self, prepared: &Self::Prepared) -> bool {
@@ -582,6 +682,56 @@ where
     }
 
     #[cfg(feature = "subscription-update")]
+    fn stage_reload(
+        &mut self,
+        runtime: &mut ActiveRuntime<Self::Process, N::Receipt>,
+        policy: &CapturePolicy,
+        generation: GenerationId,
+    ) -> Result<SealedGeneration, RuntimeReloadError> {
+        if runtime.policy() != policy {
+            return Err(RuntimeReloadError::PolicyChanged);
+        }
+        if !runtime.process_mut().supports_reload() {
+            return Err(RuntimeReloadError::Unsupported);
+        }
+        let sealed = self
+            .store
+            .sealed_generation(generation)
+            .map_err(|_| RuntimeReloadError::InvalidGeneration)?;
+        self.checker
+            .check(&sealed.config_path())
+            .map_err(|_| RuntimeReloadError::CoreCheck)?;
+        runtime
+            .stage_process_reload(&sealed.config_path())
+            .map_err(|_| RuntimeReloadError::Stage)?;
+        if let Err(error) =
+            runtime.wait_reload_healthy(self.core_health, &mut self.data_plane_health)
+        {
+            if runtime.rollback_process_reload().is_err() {
+                return Err(RuntimeReloadError::RollbackFailed);
+            }
+            return Err(match error {
+                RuntimeReloadHealthError::Core => RuntimeReloadError::CoreHealth,
+                RuntimeReloadHealthError::DataPlane => RuntimeReloadError::DataPlaneHealth,
+            });
+        }
+        Ok(sealed)
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn rollback_reload(
+        &mut self,
+        runtime: &mut ActiveRuntime<Self::Process, N::Receipt>,
+    ) -> Result<(), RuntimeReloadError> {
+        runtime
+            .rollback_process_reload()
+            .map_err(|_| RuntimeReloadError::RollbackFailed)?;
+        runtime
+            .wait_reload_healthy(self.core_health, &mut self.data_plane_health)
+            .map_err(|_| RuntimeReloadError::RollbackFailed)
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn replace_runtime_policy(
         &mut self,
         candidates: Vec<ResourceCandidate>,
@@ -655,6 +805,14 @@ where
     updater: U,
     #[cfg(feature = "subscription-update")]
     config: Option<ConfigRuntime>,
+    #[cfg(feature = "subscription-update")]
+    package_backend: Option<CommandProbeBackend>,
+    #[cfg(feature = "subscription-update")]
+    application_sync_state: &'static str,
+    #[cfg(feature = "subscription-update")]
+    application_sync_reason: Option<String>,
+    #[cfg(feature = "subscription-update")]
+    next_application_sync: Duration,
     #[cfg(feature = "subscription-update")]
     subscription_journal: Option<crate::CommitJournalStore>,
     #[cfg(feature = "subscription-update")]
@@ -766,6 +924,14 @@ where
             #[cfg(feature = "subscription-update")]
             config: self.config,
             #[cfg(feature = "subscription-update")]
+            package_backend: self.package_backend,
+            #[cfg(feature = "subscription-update")]
+            application_sync_state: self.application_sync_state,
+            #[cfg(feature = "subscription-update")]
+            application_sync_reason: self.application_sync_reason,
+            #[cfg(feature = "subscription-update")]
+            next_application_sync: self.next_application_sync,
+            #[cfg(feature = "subscription-update")]
             subscription_journal: self.subscription_journal,
             #[cfg(feature = "subscription-update")]
             mutation_coordinator: self.mutation_coordinator,
@@ -870,6 +1036,14 @@ where
             updater,
             #[cfg(feature = "subscription-update")]
             config: None,
+            #[cfg(feature = "subscription-update")]
+            package_backend: None,
+            #[cfg(feature = "subscription-update")]
+            application_sync_state: "pending",
+            #[cfg(feature = "subscription-update")]
+            application_sync_reason: None,
+            #[cfg(feature = "subscription-update")]
+            next_application_sync: Duration::ZERO,
             #[cfg(feature = "subscription-update")]
             subscription_journal: None,
             #[cfg(feature = "subscription-update")]
@@ -1006,6 +1180,12 @@ where
     }
 
     #[cfg(feature = "subscription-update")]
+    pub fn with_package_backend(mut self, backend: CommandProbeBackend) -> Self {
+        self.package_backend = Some(backend);
+        self
+    }
+
+    #[cfg(feature = "subscription-update")]
     pub fn with_configuration(mut self, config: ConfigRuntime, restore_current: bool) -> Self {
         let enabled = config.current().effective().service_enabled();
         self.dry_run = config.current().effective().advanced().dry_run();
@@ -1020,11 +1200,102 @@ where
             self.control.queue_command(ControlCommand::Update);
         }
         self.config = Some(config);
+        self.refresh_application_policy();
         if let Some(config) = self.config.as_ref() {
             let (enabled, interval, sources) = config.update_schedule();
             let _ = self.update_schedule.configure(enabled, interval, sources);
         }
         self
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn refresh_application_policy(&mut self) {
+        self.next_application_sync = self.clock.now().saturating_add(Duration::from_secs(5));
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
+        let effective = config.current().effective().clone();
+        let mode = match effective.applications().mode() {
+            crate::ApplicationMode::All => {
+                if let Ok(options) = effective.managed_options() {
+                    self.policy = effective.capture().clone();
+                    self.updater.replace_runtime_policy(
+                        self.policy.clone(),
+                        effective.managed_tun_stack(),
+                        options,
+                    );
+                }
+                self.application_sync_state = "synced";
+                self.application_sync_reason = None;
+                return;
+            }
+            crate::ApplicationMode::Blacklist => AppSelectionMode::Blacklist,
+            crate::ApplicationMode::Whitelist => AppSelectionMode::Whitelist,
+        };
+        let targets = effective
+            .applications()
+            .targets()
+            .iter()
+            .filter_map(|target| match target {
+                ApplicationTarget::Package {
+                    android_user_id,
+                    package,
+                } => Some((*android_user_id, package.as_str())),
+                ApplicationTarget::Uid { .. } => None,
+            });
+        let Some(backend) = self.package_backend.as_mut() else {
+            self.application_sync_state = "pending";
+            self.application_sync_reason = Some("resolver_unavailable".into());
+            return;
+        };
+        match resolve_selection(backend, mode, targets) {
+            Ok(selection) if !selection.is_pending() => {
+                match effective.capture_with_application_uids(
+                    selection.include_uids(),
+                    selection.exclude_uids(),
+                ) {
+                    Ok(capture) => {
+                        if let Ok(options) = effective.managed_options() {
+                            self.policy = capture.clone();
+                            self.updater.replace_runtime_policy(
+                                capture,
+                                effective.managed_tun_stack(),
+                                options,
+                            );
+                        }
+                        self.application_sync_state = "synced";
+                        self.application_sync_reason = None;
+                    }
+                    Err(_) => {
+                        self.application_sync_state = "failed";
+                        self.application_sync_reason = Some("capture_policy_invalid".into());
+                    }
+                }
+            }
+            Ok(selection) => {
+                self.application_sync_state = "pending";
+                self.application_sync_reason = Some(format!(
+                    "unresolved_packages:{}",
+                    selection.unresolved_packages().len()
+                ));
+            }
+            Err(error) => {
+                self.application_sync_state = "pending";
+                self.application_sync_reason = Some(error.to_string());
+            }
+        }
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn publish_application_sync_event(&self) {
+        self.event_hub.publish(
+            EventKind::Config,
+            json!({
+                "kind": "application_runtime",
+                "state": self.application_sync_state,
+                "reason": self.application_sync_reason,
+            }),
+        );
     }
 
     #[cfg(feature = "subscription-update")]
@@ -1252,16 +1523,6 @@ where
                 );
             }
             self.dry_run = effective.advanced().dry_run();
-            if let (Ok(capture), Ok(options)) =
-                (config.capture_policy(), effective.managed_options())
-            {
-                self.policy = capture.clone();
-                self.updater.replace_runtime_policy(
-                    capture,
-                    effective.managed_tun_stack(),
-                    options,
-                );
-            }
             let advanced = effective.advanced();
             let runtime_policy_ready = self
                 .recovery
@@ -1299,6 +1560,11 @@ where
             if let Some(runtime) = self.runtime.as_mut() {
                 runtime.replace_limits(limits);
             }
+        }
+        let previous_application_sync = self.application_sync_state;
+        self.refresh_application_policy();
+        if previous_application_sync != self.application_sync_state {
+            self.publish_application_sync_event();
         }
         self.event_hub.publish(
             EventKind::Config,
@@ -1766,15 +2032,29 @@ where
     fn update(&mut self, now: Duration) -> Result<(), WorkerServiceError> {
         let result = self.update_inner(now, GenerationBuildAccounting::SubscriptionRefresh);
         let succeeded = result.is_ok() && self.snapshot().last_update == UpdateStatus::Succeeded;
-        if let Some(report) = self.updater.take_source_update_report()
-            && let Some(store) = self.source_status.as_mut()
-            && let Ok(wall_seconds) = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .ok()
-                .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-                .ok_or(())
-        {
-            let _ = store.record_report(wall_seconds, &report);
+        let report = self.updater.take_source_update_report();
+        let wall_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_secs()).ok());
+        let failed_source_ids = (!succeeded && report.is_none()).then(|| {
+            self.config
+                .as_ref()
+                .map(|config| {
+                    config
+                        .source_config()
+                        .active_sources()
+                        .map(|source| source.id().as_str().to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        });
+        if let (Some(store), Some(wall_seconds)) = (self.source_status.as_mut(), wall_seconds) {
+            if let Some(report) = report {
+                let _ = store.record_report(wall_seconds, &report);
+            } else if let Some(source_ids) = failed_source_ids {
+                let _ = store.record_failure(wall_seconds, source_ids, "update_failed");
+            }
         }
         if self.update_schedule.record_result(succeeded).is_err() {
             return Err(WorkerServiceError::TaskFailed);
@@ -1855,6 +2135,98 @@ where
             };
         }
         let generation = self.updater.generation(&prepared);
+        if self.updater.sealed_generation(&prepared).is_some() && self.runtime.is_some() {
+            let staged_reload = {
+                let runtime = self
+                    .runtime
+                    .as_mut()
+                    .and_then(WorkerRuntime::active_mut)
+                    .expect("running worker has an active runtime");
+                self.recovery
+                    .stage_reload(runtime, &self.policy, generation)
+            };
+            match staged_reload {
+                Ok(sealed) => {
+                    if self
+                        .config
+                        .as_ref()
+                        .is_some_and(|config| !config.disk_matches_current())
+                    {
+                        if let Some(runtime) =
+                            self.runtime.as_mut().and_then(WorkerRuntime::active_mut)
+                        {
+                            let _ = self.recovery.rollback_reload(runtime);
+                        }
+                        let _ = self.updater.discard(prepared);
+                        self.publish_generation_build_status(accounting, UpdateStatus::Failed);
+                        return Ok(());
+                    }
+                    if self.updater.commit(prepared).is_err() {
+                        let rollback_failed = self
+                            .runtime
+                            .as_mut()
+                            .and_then(WorkerRuntime::active_mut)
+                            .is_none_or(|runtime| self.recovery.rollback_reload(runtime).is_err());
+                        self.event_hub.publish(
+                            EventKind::Runtime,
+                            json!({
+                                "kind": "generation_reload",
+                                "state": "commit_failed",
+                                "desired_generation": generation.get(),
+                                "rollback_failed": rollback_failed,
+                            }),
+                        );
+                        self.publish_generation_build_status(accounting, UpdateStatus::Failed);
+                        return if rollback_failed {
+                            Err(WorkerServiceError::ShutdownFailed)
+                        } else {
+                            Ok(())
+                        };
+                    }
+                    let committed = self
+                        .runtime
+                        .as_mut()
+                        .is_some_and(|runtime| runtime.commit_reload(sealed).is_ok());
+                    if !committed {
+                        self.publish_generation_build_status(accounting, UpdateStatus::Failed);
+                        return Err(WorkerServiceError::TaskFailed);
+                    }
+                    self.restart_budget.clear();
+                    let state = self
+                        .runtime
+                        .as_ref()
+                        .map_or(RuntimeState::FailOpenDirect, WorkerRuntime::state);
+                    self.event_hub.publish(
+                        EventKind::Runtime,
+                        json!({
+                            "kind": "generation_reload",
+                            "state": "applied",
+                            "active_generation": generation.get(),
+                        }),
+                    );
+                    self.publish_generation_build_status(accounting, UpdateStatus::Succeeded);
+                    self.publish_snapshot(state, Some(generation));
+                    self.replay_selector();
+                    return Ok(());
+                }
+                Err(RuntimeReloadError::Unsupported | RuntimeReloadError::PolicyChanged) => {}
+                Err(error) => {
+                    let _ = self.updater.discard(prepared);
+                    self.event_hub.publish(
+                        EventKind::Runtime,
+                        json!({
+                            "kind": "generation_reload",
+                            "state": "pending",
+                            "desired_generation": generation.get(),
+                            "active_generation": self.runtime.as_ref().and_then(WorkerRuntime::generation).map(GenerationId::get),
+                            "diagnostic_code": error.diagnostic_code(),
+                        }),
+                    );
+                    self.publish_generation_build_status(accounting, UpdateStatus::Failed);
+                    return Ok(());
+                }
+            }
+        }
         if self.stop().is_err() {
             let _ = self.updater.discard(prepared);
             self.publish_generation_build_status(accounting, UpdateStatus::Failed);
@@ -2692,6 +3064,7 @@ where
                         ControlMethod::SubscriptionImportApply
                     }
                     WebUiPayloadOperation::BackupRestore => ControlMethod::ConfigApply,
+                    WebUiPayloadOperation::NodeOverrideApply => ControlMethod::NodeOverrideApply,
                 };
                 let inner =
                     match ControlRequest::new(request_id.clone(), method).with_params(params) {
@@ -2746,6 +3119,157 @@ where
                     .target_value()
                     .expect("protocol validated benchmark operation ID"),
             );
+        }
+        #[cfg(feature = "subscription-update")]
+        if matches!(
+            request.method(),
+            ControlMethod::NodeOverrideGet
+                | ControlMethod::NodeOverrideApply
+                | ControlMethod::NodeOverrideRemove
+        ) {
+            let request_id = request.request_id().clone();
+            let snapshot = self.snapshot();
+            let generation = snapshot.generation.map(GenerationId::get);
+            let target = request
+                .params()
+                .target_value()
+                .expect("protocol validated node override target");
+            let node_id = StableNodeId::new(target.to_owned()).expect("protocol validated node ID");
+            let (exported, display_name) = {
+                let Some(control) = self.operational_control.as_mut() else {
+                    return ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(
+                            ErrorDomain::Node,
+                            "OVERRIDE-CONTROL-UNAVAILABLE",
+                        ),
+                    );
+                };
+                let exported = match control.handle(
+                    ControlMethod::NodeExport,
+                    &ControlParams::target(target.to_owned()),
+                    snapshot.state,
+                    snapshot.generation,
+                    &self.policy,
+                ) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return ControlResponse::failure(
+                            request_id,
+                            generation,
+                            unavailable_control_error(
+                                ErrorDomain::Node,
+                                "OVERRIDE-NODE-NOT-ACTIVE",
+                            ),
+                        );
+                    }
+                };
+                let display_name = control
+                    .handle(
+                        ControlMethod::NodeList,
+                        &ControlParams::default(),
+                        snapshot.state,
+                        snapshot.generation,
+                        &self.policy,
+                    )
+                    .ok()
+                    .and_then(|value| value.get("nodes").cloned())
+                    .and_then(|value| value.as_array().cloned())
+                    .and_then(|nodes| nodes.into_iter().find(|node| node["id"] == target))
+                    .and_then(|node| node.get("name").cloned())
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| target.to_owned());
+                (exported, display_name)
+            };
+            if request.method() == ControlMethod::NodeOverrideGet {
+                let overrides = self.updater.node_overrides().unwrap_or_default();
+                if let Some(value) = overrides.get(&node_id) {
+                    return ControlResponse::success(
+                        request_id,
+                        generation,
+                        json!({
+                            "node_id": target,
+                            "overridden": true,
+                            "display_name": value.display_name(),
+                            "outbound": value.outbound(),
+                        }),
+                    );
+                }
+                return ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({
+                        "node_id": target,
+                        "overridden": false,
+                        "display_name": display_name,
+                        "outbound": exported["outbound"].clone(),
+                    }),
+                );
+            }
+            let mut overrides = self.updater.node_overrides().unwrap_or_default();
+            let changed = if request.method() == ControlMethod::NodeOverrideApply {
+                let document = request
+                    .params()
+                    .node_override_value()
+                    .expect("protocol validated node override document");
+                let value = match NodeOverride::new(
+                    node_id.clone(),
+                    document.display_name.clone(),
+                    document.outbound.clone(),
+                ) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return ControlResponse::failure(
+                            request_id,
+                            generation,
+                            unavailable_control_error(ErrorDomain::Node, "OVERRIDE-INVALID"),
+                        );
+                    }
+                };
+                if overrides.get(&node_id) == Some(&value) {
+                    false
+                } else if overrides.upsert(value).is_ok() {
+                    true
+                } else {
+                    return ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Node, "OVERRIDE-LIMIT"),
+                    );
+                }
+            } else {
+                overrides.remove(&node_id)
+            };
+            if !changed {
+                return ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({"accepted": true, "changed": false, "completed": true}),
+                );
+            }
+            let expected_overrides = overrides.clone();
+            let completed = self.updater.request_node_overrides(overrides).is_ok()
+                && self.rebuild_generation(self.clock.now()).is_ok()
+                && self.updater.node_overrides().as_ref() == Some(&expected_overrides);
+            let generation = self.snapshot().generation.map(GenerationId::get);
+            return if completed {
+                self.event_hub.publish(
+                    EventKind::NodeActive,
+                    json!({"kind":"node_override","node_id":target}),
+                );
+                ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({"accepted": true, "changed": true, "completed": true}),
+                )
+            } else {
+                ControlResponse::failure(
+                    request_id,
+                    generation,
+                    unavailable_control_error(ErrorDomain::Node, "OVERRIDE-APPLY-FAILED"),
+                )
+            };
         }
         if matches!(
             request.method(),
@@ -2974,7 +3498,7 @@ where
                 .runtime
                 .as_ref()
                 .and_then(WorkerRuntime::process_identity);
-            let Some(control) = self.operational_control.as_ref() else {
+            let Some(control) = self.operational_control.as_mut() else {
                 return ControlResponse::failure(
                     request_id,
                     generation,
@@ -3211,6 +3735,22 @@ where
                                 .ok()
                         })
                         .unwrap_or_default();
+                    let source_history = self
+                        .source_status
+                        .as_ref()
+                        .and_then(|store| {
+                            store
+                                .history(
+                                    config
+                                        .source_config()
+                                        .sources()
+                                        .iter()
+                                        .map(|source| source.id().as_str()),
+                                    64,
+                                )
+                                .ok()
+                        })
+                        .unwrap_or_default();
                     return ControlResponse::success(
                         request_id,
                         generation,
@@ -3220,8 +3760,13 @@ where
                             "candidate_sequence": config.candidate_sequence(),
                             "watcher_health": self.watcher_health_wire(),
                             "last_reload": config.last_reload().as_str(),
+                            "application_runtime": {
+                                "state": self.application_sync_state,
+                                "reason": self.application_sync_reason,
+                            },
                             "document": config.redacted_document(),
                             "source_status": source_status,
+                            "source_history": source_history,
                         }),
                     );
                 }
@@ -3788,6 +4333,10 @@ where
                                 "completed": true,
                                 "source_id": source_id,
                                 "observed_config_digest": self.config.as_ref().map(|value| value.current().digest()),
+                                "application_runtime": {
+                                    "state": self.application_sync_state,
+                                    "reason": self.application_sync_reason,
+                                },
                             }),
                         )
                     } else {
@@ -5090,6 +5639,14 @@ where
             self.control.queue_command(ControlCommand::Update);
         }
         let now = self.clock.now();
+        #[cfg(feature = "subscription-update")]
+        if now >= self.next_application_sync && self.application_sync_state != "synced" {
+            let previous_application_sync = self.application_sync_state;
+            self.refresh_application_policy();
+            if previous_application_sync != self.application_sync_state {
+                self.publish_application_sync_event();
+            }
+        }
         self.start_periodic_node_benchmark_if_due(now);
         self.sample_traffic_if_due(now);
         if now >= self.next_payload_cleanup {
