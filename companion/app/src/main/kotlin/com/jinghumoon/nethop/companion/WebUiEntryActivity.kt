@@ -1,10 +1,17 @@
 package com.jinghumoon.nethop.companion
 
+import android.animation.ObjectAnimator
 import android.app.Activity
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Bundle
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.animation.LinearInterpolator
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceError
@@ -13,6 +20,9 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.webkit.WebViewAssetLoader
 import com.jinghumoon.nethop.companion.webui.AndroidWebUiBridge
@@ -20,6 +30,7 @@ import com.jinghumoon.nethop.companion.webui.RootShellSession
 import com.jinghumoon.nethop.companion.webui.RootWebRootPathHandler
 import com.jinghumoon.nethop.companion.webui.TrustedWebOrigin
 import com.jinghumoon.nethop.companion.packages.PackageIconPathHandler
+import com.jinghumoon.nethop.companion.packages.AndroidPackageRepository
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -38,7 +49,10 @@ class WebUiEntryActivity : Activity() {
     private var bridge: AndroidWebUiBridge? = null
     private var pathHandler: RootWebRootPathHandler? = null
     private var packageIconHandler: PackageIconPathHandler? = null
+    private var packageRepository: AndroidPackageRepository? = null
     private var rootSession: RootShellSession? = null
+    private var loadingOverlay: View? = null
+    private var loadingAnimator: ObjectAnimator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,23 +81,21 @@ class WebUiEntryActivity : Activity() {
     }
 
     private fun showLoading() {
-        setContentView(TextView(this).apply {
-            setText(R.string.app_name)
-            setPadding(32, 48, 32, 32)
-        })
+        setContentView(createLoadingView())
     }
 
     private fun showTrustedWebUi(session: RootShellSession) {
         val handler = RootWebRootPathHandler(session)
-        val iconHandler = PackageIconPathHandler(this)
+        val repository = companionServices.createPackageRepository(this)
+        val iconHandler = PackageIconPathHandler(repository)
         val loader = WebViewAssetLoader.Builder()
             .setDomain("appassets.androidplatform.net")
             .addPathHandler("/nethop/", handler)
-            .addPathHandler("/package-icons/", iconHandler)
+            .addPathHandler("/package-icons/original/", iconHandler)
             .build()
         val view = hardenedWebView()
         view.webViewClient = localOnlyClient(loader, allowFallback = false, fallbackOnMainFrameError = true)
-        val nativeBridge = AndroidWebUiBridge.attach(this, view)
+        val nativeBridge = AndroidWebUiBridge.attach(this, view, repository, companionServices.commandExecutor)
         if (nativeBridge == null) {
             handler.close()
             iconHandler.close()
@@ -94,11 +106,70 @@ class WebUiEntryActivity : Activity() {
         }
         pathHandler = handler
         packageIconHandler = iconHandler
+        packageRepository = repository
         bridge = nativeBridge
         webView = view
-        setContentView(view)
+        val container = FrameLayout(this).apply {
+            addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(createLoadingView(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        setContentView(container)
         view.loadUrl(TrustedWebOrigin.START_URL)
     }
+
+    private fun createLoadingView(): View {
+        loadingAnimator?.cancel()
+        val background = resolveThemeColor(android.R.attr.colorBackground, Color.WHITE)
+        val foreground = resolveThemeColor(android.R.attr.textColorPrimary, Color.BLACK)
+        val accent = resolveThemeColor(android.R.attr.colorAccent, foreground)
+        val icon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_nethop_tile_on)
+            imageTintList = ColorStateList.valueOf(accent)
+            contentDescription = null
+        }
+        loadingAnimator = ObjectAnimator.ofFloat(icon, View.ROTATION, 0f, 360f).apply {
+            duration = 1_200L
+            repeatCount = ObjectAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            start()
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(icon, LinearLayout.LayoutParams(dp(64), dp(64)))
+            addView(TextView(this@WebUiEntryActivity).apply {
+                setText(R.string.webui_loading)
+                setTextColor(foreground)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(18)
+            })
+        }
+        return FrameLayout(this).apply {
+            setBackgroundColor(background)
+            isClickable = true
+            isFocusable = true
+            addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            loadingOverlay = this
+        }
+    }
+
+    private fun hideLoadingOverlay() {
+        loadingAnimator?.cancel()
+        loadingAnimator = null
+        val overlay = loadingOverlay ?: return
+        loadingOverlay = null
+        (overlay.parent as? ViewGroup)?.removeView(overlay)
+    }
+
+    private fun resolveThemeColor(attribute: Int, fallback: Int): Int {
+        val value = TypedValue()
+        if (!theme.resolveAttribute(attribute, value, true)) return fallback
+        return if (value.resourceId != 0) getColor(value.resourceId) else value.data
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun hardenedWebView(): WebView {
@@ -111,7 +182,7 @@ class WebUiEntryActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            cacheMode = WebSettings.LOAD_NO_CACHE
+            cacheMode = WebSettings.LOAD_DEFAULT
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = false
             mediaPlaybackRequiresUserGesture = true
@@ -146,6 +217,10 @@ class WebUiEntryActivity : Activity() {
             return !allowed
         }
 
+        override fun onPageCommitVisible(view: WebView, url: String) {
+            hideLoadingOverlay()
+        }
+
         override fun onReceivedHttpError(
             view: WebView,
             request: WebResourceRequest,
@@ -171,12 +246,14 @@ class WebUiEntryActivity : Activity() {
 
     private fun showFallback() {
         if (destroyed.get()) return
+        hideLoadingOverlay()
         bridge?.close()
         bridge = null
         pathHandler?.close()
         pathHandler = null
         packageIconHandler?.close()
         packageIconHandler = null
+        packageRepository = null
         webView?.let { old -> old.stopLoading(); old.destroy() }
         webView = null
         closeRootSession()
@@ -196,6 +273,7 @@ class WebUiEntryActivity : Activity() {
 
     private fun showNativeError() {
         if (destroyed.get()) return
+        hideLoadingOverlay()
         webView?.let { view -> view.stopLoading(); view.destroy() }
         webView = null
         setContentView(TextView(this).apply {
@@ -228,6 +306,7 @@ class WebUiEntryActivity : Activity() {
 
     override fun onDestroy() {
         destroyed.set(true)
+        hideLoadingOverlay()
         bootstrapJob?.cancel()
         bridge?.close()
         bridge = null
@@ -235,6 +314,7 @@ class WebUiEntryActivity : Activity() {
         pathHandler = null
         packageIconHandler?.close()
         packageIconHandler = null
+        packageRepository = null
         webView?.let { view -> view.stopLoading(); view.loadUrl("about:blank"); view.destroy() }
         webView = null
         val session = rootSession

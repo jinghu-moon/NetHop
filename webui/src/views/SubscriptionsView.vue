@@ -24,12 +24,24 @@ import { runJson } from "@/bridge/command";
 import { useHost } from "@/bridge/context";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import OptionDropdown from "@/components/OptionDropdown.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
 import PageState from "@/components/PageState.vue";
 import SegmentedControl from "@/components/SegmentedControl.vue";
 import { validatedQuery } from "@/model/client";
-import { parseConfig, parseSubscriptionSnapshot, type SubscriptionDto, type SubscriptionModeDto } from "@/model/dto";
+import { parseConfig, parseSubscriptionSnapshot, type SourceUpdateHistoryDto, type SubscriptionDto, type SubscriptionModeDto } from "@/model/dto";
 import { presentSubscription, type SubscriptionPresentation } from "@/model/subscription-presentation";
+import {
+  buildSourceSettings,
+  defaultSourceEditorSettings,
+  parseSourceEditorSettings,
+  subscriptionFormatHints,
+  subscriptionProtocols,
+  subscriptionRequestProfiles,
+  type SourceEditorSettings,
+  type SubscriptionFormatHint,
+  type SubscriptionRequestProfile,
+} from "@/model/subscription-settings";
 import { createOperationStore } from "@/runtime/operation";
 import { uiStores } from "@/runtime/store";
 import { useBackDismiss } from "@/shell/useBackDispatcher";
@@ -48,6 +60,7 @@ const queuedAction = ref<{ readonly item: SubscriptionDto; readonly action: Sour
 const pendingDelete = ref<SubscriptionDto>();
 const name = ref("");
 const url = ref("");
+const sourceSettings = ref<SourceEditorSettings>({ ...defaultSourceEditorSettings, protocols: [] });
 const formError = ref("");
 const saving = ref(false);
 const importText = ref("");
@@ -74,7 +87,10 @@ const items = computed(() => uiStores.runtime.subscriptionOrder.value
   .filter((item): item is SubscriptionDto => Boolean(item)));
 const mode = computed(() => uiStores.runtime.subscriptionMode.value ?? "single");
 const modeOptions = [{ value: "single", label: "单订阅" }, { value: "merge", label: "合并" }] as const;
+const requestProfileOptions = subscriptionRequestProfiles.map((value) => ({ value, label: ({ generic: "通用", mihomo: "Mihomo", clash_standard: "Clash Standard", surfboard: "Surfboard", sing_box: "sing-box", sing_box_android: "sing-box Android" } as const)[value] }));
+const formatHintOptions = subscriptionFormatHints.map((value) => ({ value, label: ({ auto: "自动识别", uri_list: "URI 列表", base64_list: "Base64 列表", clash_yaml: "Clash YAML", singbox_json: "sing-box JSON", surfboard_ini: "Surfboard INI" } as const)[value] }));
 const presentations = computed<Readonly<Record<string, SubscriptionPresentation>>>(() => Object.fromEntries(items.value.map((item) => [item.id, presentSubscription(item, clockSeconds.value)])));
+const sourceHistory = computed(() => uiStores.config.active.value?.sourceHistory.slice(0, 8) ?? []);
 const currentFeedback = computed(() => feedbackId.value ? operations.byId[feedbackId.value] : undefined);
 const activeIndex = computed(() => activeItem.value ? items.value.findIndex((item) => item.id === activeItem.value?.id) : -1);
 const actionKeys = computed<readonly SourceAction[]>(() => activeItem.value
@@ -94,6 +110,13 @@ const actionItems = computed(() => {
 
 function isUpdating(id: string): boolean { return updatingIds.value.has(id); }
 function presentation(item: SubscriptionDto): SubscriptionPresentation { return presentations.value[item.id] ?? presentSubscription(item, clockSeconds.value); }
+function historySourceName(entry: SourceUpdateHistoryDto): string { return uiStores.runtime.subscriptionsById.value[entry.sourceId]?.name ?? entry.sourceId; }
+function historyTime(entry: SourceUpdateHistoryDto): string { return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(entry.attemptedAtWallSeconds * 1_000); }
+function historySummary(entry: SourceUpdateHistoryDto): string {
+  if (entry.health === "failed") return entry.diagnosticCode ?? "更新失败";
+  const count = entry.accepted + entry.duplicate;
+  return entry.usingLastKnownGood ? `沿用缓存 · ${count} 个节点` : `${count} 个节点 · 排除 ${entry.rejected}`;
+}
 function setUpdating(id: string, pending: boolean): void {
   const next = new Set(updatingIds.value);
   if (pending) next.add(id); else next.delete(id);
@@ -137,6 +160,9 @@ function openEditor(item?: SubscriptionDto): void {
   editing.value = item;
   name.value = item?.name ?? "";
   url.value = "";
+  sourceSettings.value = item && uiStores.config.active.value
+    ? parseSourceEditorSettings(uiStores.config.active.value.document, item.id)
+    : { ...defaultSourceEditorSettings, protocols: [] };
   formError.value = "";
 }
 function closeEditor(): void {
@@ -144,7 +170,20 @@ function closeEditor(): void {
   editing.value = undefined;
   name.value = "";
   url.value = "";
+  sourceSettings.value = { ...defaultSourceEditorSettings, protocols: [] };
   formError.value = "";
+}
+
+function updateRequestProfile(value: string): void {
+  if (subscriptionRequestProfiles.includes(value as SubscriptionRequestProfile)) sourceSettings.value.requestProfile = value as SubscriptionRequestProfile;
+}
+function updateFormatHint(value: string): void {
+  if (subscriptionFormatHints.includes(value as SubscriptionFormatHint)) sourceSettings.value.formatHint = value as SubscriptionFormatHint;
+}
+function updateProtocol(protocol: string, checked: boolean): void {
+  const next = new Set(sourceSettings.value.protocols);
+  if (checked) next.add(protocol); else next.delete(protocol);
+  sourceSettings.value.protocols = subscriptionProtocols.filter((value) => next.has(value));
 }
 async function openContentImport(): Promise<void> {
   closeEditor();
@@ -162,6 +201,13 @@ async function save(): Promise<void> {
   const nextUrl = url.value.trim();
   if (!nextName) { formError.value = "请输入订阅名称"; return; }
   if ((!editing.value && !nextUrl) || (nextUrl && !/^https:\/\//i.test(nextUrl))) { formError.value = "订阅链接必须使用 HTTPS"; return; }
+  let settings: Readonly<Record<string, unknown>>;
+  try {
+    settings = buildSourceSettings(sourceSettings.value, editing.value ? "update" : "add");
+  } catch (error) {
+    formError.value = error instanceof Error ? error.message : "高级设置无效";
+    return;
+  }
   const id = "subscription-save";
   const wasEditing = Boolean(editing.value);
   beginFeedback(id, "subscription-config");
@@ -169,9 +215,9 @@ async function save(): Promise<void> {
   try {
     const digest = uiStores.config.baseDigest.value ?? "0".repeat(64);
     const mutation = editing.value
-      ? { type: "update_source", source_id: editing.value.id, name: nextName, ...(nextUrl ? { url: nextUrl } : {}) }
-      : { type: "add_source", name: nextName, url: nextUrl };
-    await uploadPrivatePayload(host, "subscription", "config-mutate", JSON.stringify({ expected_config_digest: digest, mutation }));
+      ? { type: "update_source", source_id: editing.value.id, name: nextName, ...(nextUrl ? { url: nextUrl } : {}), settings }
+      : { type: "add_source", name: nextName, url: nextUrl, settings };
+    await uploadPrivatePayload(host, "config", "config-mutate", JSON.stringify({ expected_config_digest: digest, mutation }));
     closeEditor();
     await load();
     finishFeedback(id, true, wasEditing ? "订阅已保存" : "订阅已添加");
@@ -255,7 +301,7 @@ async function remove(item: SubscriptionDto): Promise<void> {
   beginFeedback(id, "subscription-config");
   try {
     const digest = uiStores.config.baseDigest.value ?? "0".repeat(64);
-    await uploadPrivatePayload(host, "subscription", "config-mutate", JSON.stringify({ expected_config_digest: digest, mutation: { type: "remove_source", source_id: item.id } }));
+    await uploadPrivatePayload(host, "config", "config-mutate", JSON.stringify({ expected_config_digest: digest, mutation: { type: "remove_source", source_id: item.id } }));
     pendingDelete.value = undefined;
     await load();
     finishFeedback(id, true, `“${item.name}”已删除`);
@@ -272,7 +318,7 @@ async function move(item: SubscriptionDto, direction: -1 | 1): Promise<void> {
   beginFeedback(id, "subscription-config");
   try {
     const mutation = { type: "move_source", source_id: item.id, ...(target ? { before_source_id: target.id } : {}) };
-    await uploadPrivatePayload(host, "subscription", "config-mutate", JSON.stringify({ expected_config_digest: uiStores.config.baseDigest.value ?? "0".repeat(64), mutation }));
+    await uploadPrivatePayload(host, "config", "config-mutate", JSON.stringify({ expected_config_digest: uiStores.config.baseDigest.value ?? "0".repeat(64), mutation }));
     await load();
     finishFeedback(id, true, "订阅顺序已更新");
   } catch {
@@ -379,6 +425,17 @@ onActivated(() => { void load().catch(() => undefined); });
       </article>
     </div>
 
+    <section v-if="sourceHistory.length > 0" class="source-history-section">
+      <h3>最近更新</h3>
+      <div class="source-history-list">
+        <div v-for="entry in sourceHistory" :key="`${entry.sourceId}-${entry.attemptedAtWallSeconds}`" class="source-history-row" :data-health="entry.health">
+          <i />
+          <div><strong>{{ historySourceName(entry) }}</strong><span>{{ historySummary(entry) }}</span></div>
+          <time>{{ historyTime(entry) }}</time>
+        </div>
+      </div>
+    </section>
+
     <TButton class="subscription-add-fab" size="large" shape="circle" theme="primary" title="添加订阅" @click="openEditor()"><IconPlus :size="26" stroke-width="2" /></TButton>
 
     <TActionSheet v-model="actionSheetOpen" class="subscription-actions-sheet" theme="list" align="left" show-cancel cancel-text="取消" :description="activeItem?.name ?? ''" :items="actionItems" @selected="selectAction" @close="finishActionSheet" @cancel="activeItem = undefined" />
@@ -389,6 +446,18 @@ onActivated(() => { void load().catch(() => undefined); });
         <TInput v-model="name" label="名称" placeholder="例如：主订阅" :maxlength="256" />
         <TInput v-if="!editing" v-model="url" label="订阅链接" placeholder="仅限 HTTPS 链接" type="url" />
         <TInput v-else v-model="url" label="替换链接（可选）" placeholder="留空表示不修改" type="url" />
+        <details class="source-advanced-settings">
+          <summary>高级设置</summary>
+          <div class="source-advanced-fields">
+            <label class="source-option-field"><span>请求配置档</span><OptionDropdown :model-value="sourceSettings.requestProfile" :options="requestProfileOptions" @update:model-value="updateRequestProfile" /></label>
+            <label class="source-option-field"><span>内容格式</span><OptionDropdown :model-value="sourceSettings.formatHint" :options="formatHintOptions" @update:model-value="updateFormatHint" /></label>
+            <div v-if="editing && sourceSettings.mirrorCount > 0" class="source-mirror-state"><span>已配置 {{ sourceSettings.mirrorCount }} 个镜像</span><TCheckbox :checked="sourceSettings.replaceMirrors" @change="(checked) => { sourceSettings.replaceMirrors = checked === true; }">替换镜像</TCheckbox></div>
+            <TTextarea v-if="!editing || sourceSettings.replaceMirrors" v-model="sourceSettings.mirrorsText" label="镜像链接" placeholder="每行一个 HTTPS 链接" :autosize="{ minRows: 2, maxRows: 4 }" />
+            <TTextarea v-model="sourceSettings.includeNamesText" label="名称包含" placeholder="每行一个匹配词" :autosize="{ minRows: 2, maxRows: 4 }" />
+            <TTextarea v-model="sourceSettings.excludeNamesText" label="名称排除" placeholder="每行一个匹配词" :autosize="{ minRows: 2, maxRows: 4 }" />
+            <div class="source-protocol-field"><span>协议过滤</span><div class="source-protocol-grid"><TCheckbox v-for="protocol in subscriptionProtocols" :key="protocol" :checked="sourceSettings.protocols.includes(protocol)" @change="(checked) => updateProtocol(protocol, checked === true)">{{ protocol }}</TCheckbox></div></div>
+          </div>
+        </details>
         <small v-if="formError" class="form-error">{{ formError }}</small>
         <TButton v-if="!editing" class="content-import-entry" block variant="text" theme="default" @click="openContentImport"><IconFileImport :size="18" />从文本内容导入</TButton>
         <div class="editor-actions"><TButton variant="outline" :disabled="saving" @click="closeEditor">取消</TButton><TButton theme="primary" :loading="saving" :disabled="saving" @click="save">保存</TButton></div>

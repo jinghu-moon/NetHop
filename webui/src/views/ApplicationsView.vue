@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, h, onActivated, onBeforeUnmount, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, ref } from "vue";
 import { useDebounce } from "@vueuse/core";
-import { IconDotsVertical, IconSortAscending, IconSortDescending } from "@tabler/icons-vue";
-import { ActionSheet as TActionSheet, Button as TButton, PullDownRefresh as TPullDownRefresh, Switch as TSwitch, Tag as TTag } from "tdesign-mobile-vue";
+import { Button as TButton, PullDownRefresh as TPullDownRefresh, Switch as TSwitch, Tag as TTag } from "tdesign-mobile-vue";
 import ApplicationCategoryDropdown from "@/components/applications/ApplicationCategoryDropdown.vue";
 import ApplicationSearch from "@/components/applications/ApplicationSearch.vue";
+import ApplicationSortDropdown from "@/components/applications/ApplicationSortDropdown.vue";
 import SegmentedControl from "@/components/SegmentedControl.vue";
 import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
 import PageState from "@/components/PageState.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
 import { useHost } from "@/bridge/context";
-import { packageIconSource } from "@/bridge/package-icon";
+import { BridgeError } from "@/bridge/command";
+import ApplicationIcon from "@/components/applications/ApplicationIcon.vue";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { readPackages } from "@/bridge/package-adapter";
 import { validatedQuery } from "@/model/client";
@@ -20,9 +21,8 @@ import { uiStores } from "@/runtime/store";
 import { createOperationStore } from "@/runtime/operation";
 import { SearchIndex } from "@/runtime/search-index";
 import type { PackageInfo } from "@/bridge/host";
-import { hasApplicationSortData, parseApplicationSort, prioritizeSelected, serializeApplicationSort, sortApplications, type ApplicationSort, type ApplicationSortField, type ApplicationSortDirection } from "@/model/application-sort";
+import { hasApplicationSortData, parseApplicationSort, prioritizeSelected, serializeApplicationSort, sortApplications, type ApplicationSort, type ApplicationSortField } from "@/model/application-sort";
 import { useUiPreference } from "@/runtime/storage";
-import { useBackDismiss } from "@/shell/useBackDispatcher";
 
 interface AppRow extends PackageInfo { readonly selected: boolean; readonly sharedCount: number }
 const host = useHost();
@@ -47,11 +47,7 @@ const sortFields: readonly { field: ApplicationSortField; label: string }[] = [
   { field: "storage", label: "存储占用" },
   { field: "lastUsed", label: "最近使用时间" },
 ];
-const sortOptions = computed(() => [{ value: "selected-first", label: selectedFirst.value ? "取消已选优先" : "已选优先", icon: () => h(IconSortAscending, { size: 20 }) }, ...sortFields.flatMap((item) => ([
-  { value: `${item.field}:asc`, label: `${item.label} · 升序`, icon: () => h(IconSortAscending, { size: 20 }), disabled: !hasApplicationSortData(packages.value, item.field) },
-  { value: `${item.field}:desc`, label: `${item.label} · 降序`, icon: () => h(IconSortDescending, { size: 20 }), disabled: !hasApplicationSortData(packages.value, item.field) },
-]))]);
-const sortSheetOpen = ref(false);
+const availableSortFields = computed(() => sortFields.filter((item) => hasApplicationSortData(packages.value, item.field)));
 const selected = ref<ReadonlySet<string>>(new Set());
 const committedSelected = ref<ReadonlySet<string>>(new Set());
 const saving = ref(false);
@@ -101,6 +97,9 @@ async function load(): Promise<void> {
     uiStores.config.load(config);
     applyPolicy(config.document);
     packages.value = packageList;
+    if (!hasApplicationSortData(packageList, sort.value.field)) {
+      sortPreference.value = serializeApplicationSort({ field: "name", direction: sort.value.direction });
+    }
     index.clear();
     packages.value.forEach((item) => index.upsert(item.packageName, item.appLabel, item.packageName));
   } catch { error.value = "宿主无法读取应用包信息"; }
@@ -115,15 +114,11 @@ function changeMode(context: { value: string | number }): void {
   mode.value = next;
   queuePolicySave();
 }
-function selectSort(_selected: unknown, index: number): void {
-  const option = sortOptions.value[index];
-  if (!option || ("disabled" in option && option.disabled)) return;
-  if (option.value === "selected-first") {
-    selectedFirstPreference.value = selectedFirst.value ? "false" : "true";
-    return;
-  }
-  const [field, direction] = option.value.split(":") as [ApplicationSortField, ApplicationSortDirection];
-  sortPreference.value = serializeApplicationSort({ field, direction });
+function updateSort(value: ApplicationSort): void {
+  sortPreference.value = serializeApplicationSort(value);
+}
+function updateSelectedFirst(value: boolean): void {
+  selectedFirstPreference.value = value ? "true" : "false";
 }
 async function pullRefresh(): Promise<void> { refreshing.value = true; try { await load(); } finally { refreshing.value = false; } }
 function toggle(row: AppRow, checked: unknown): void {
@@ -155,6 +150,25 @@ function responseDigest(value: unknown): string | undefined {
   return typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest) ? digest : undefined;
 }
 
+function responseApplicationRuntime(value: unknown): { state: "synced" | "pending" | "failed"; reason?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result = (value as { result?: unknown }).result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  const runtime = (result as { application_runtime?: unknown }).application_runtime;
+  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) return undefined;
+  const state = (runtime as { state?: unknown }).state;
+  if (state !== "synced" && state !== "pending" && state !== "failed") return undefined;
+  const reason = (runtime as { reason?: unknown }).reason;
+  return typeof reason === "string" ? { state, reason } : { state };
+}
+
+function saveFailureMessage(error: unknown): string {
+  if (!(error instanceof BridgeError) || error.code !== "daemon_error") return "自动保存失败，已恢复上次生效的应用策略";
+  if (error.daemonCode === "NH-CONFIG-CAPABILITY-UNAVAILABLE") return "自动保存失败：Android 应用目录尚未就绪，请稍后重试";
+  if (error.daemonCode === "NH-CONFIG-CONFLICT") return "自动保存失败：配置已被其他操作修改，请重新加载后重试";
+  return "自动保存失败，已恢复上次生效的应用策略";
+}
+
 async function drainSaveQueue(): Promise<void> {
   if (saving.value) return;
   while (saveRequested) {
@@ -173,22 +187,24 @@ async function drainSaveQueue(): Promise<void> {
     try {
       const response = await uploadPrivatePayload(host, "config", "config-mutate", JSON.stringify({ expected_config_digest: digest, mutation }));
       const nextDigest = responseDigest(response) ?? digest;
+      const applicationRuntime = responseApplicationRuntime(response);
       uiStores.config.load({
         ...active,
         observedConfigDigest: nextDigest,
         activeConfigDigest: nextDigest,
         candidateSequence: active.candidateSequence + 1,
         document,
+        ...(applicationRuntime === undefined ? {} : { applicationRuntime }),
       });
       committedMode.value = targetMode;
       committedSelected.value = targetMode === "all" ? new Set() : targetSelected;
-      operations.update("app-policy", "success", { message: "应用策略已自动保存" });
-    } catch {
+      operations.update("app-policy", "success", { message: applicationRuntime?.state === "pending" ? "应用策略已保存，等待 Android 应用目录同步" : "应用策略已自动保存" });
+    } catch (error) {
       saveRequested = false;
       cancelScheduledSave();
       mode.value = committedMode.value;
       selected.value = new Set(committedSelected.value);
-      operations.update("app-policy", "failure", { message: "自动保存失败，已恢复上次生效的应用策略" });
+      operations.update("app-policy", "failure", { message: saveFailureMessage(error) });
     } finally {
       saving.value = false;
     }
@@ -222,7 +238,6 @@ onActivated(() => {
     applyPolicy(config.document);
   }).catch(() => undefined);
 });
-useBackDismiss(() => sortSheetOpen.value, () => { sortSheetOpen.value = false; });
 onBeforeUnmount(() => {
   cancelScheduledSave();
   if (!dirty.value || missingSelection.value) return;
@@ -233,7 +248,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="page applications-page">
-    <div class="page-heading applications-heading"><h2>应用</h2><TButton size="small" shape="square" variant="outline" theme="default" title="排序方式" @click="sortSheetOpen = true"><IconDotsVertical :size="19" /></TButton></div>
+    <div class="page-heading applications-heading"><h2>应用</h2><ApplicationSortDropdown :model-value="sort" :fields="availableSortFields" :selected-first="selectedFirst" :selected-count="selectedCount" @update:model-value="updateSort" @selected-first-change="updateSelectedFirst" /></div>
     <OperationBanner v-if="operations.byId['app-policy']" :phase="operations.byId['app-policy']!.phase" :message="operations.byId['app-policy']!.message ?? ''" @dismiss="operations.clear('app-policy')" />
     <PageState v-if="loading" kind="loading" title="正在读取应用列表" />
     <PageState v-else-if="error" kind="error" title="应用列表不可用" :detail="error" action-label="重试" @action="load" />
@@ -253,13 +268,12 @@ onBeforeUnmount(() => {
           <TPullDownRefresh v-else v-model="refreshing" :disabled="loading || saving" @refresh="pullRefresh">
           <div class="application-list">
             <VirtualListViewport :items="rows" :get-item-key="(_index, app) => app.packageName" :estimate-size="78" :style="{ height: `min(58dvh, ${rows.length * 78}px)` }">
-              <template #default="{ item: app }"><div class="app-row" :data-selected="app.selected"><div class="app-icon"><span>{{ (app.appLabel || app.packageName).slice(0, 1).toUpperCase() }}</span><img v-if="packageIconSource(host.capability.kind, app.packageName)" :src="packageIconSource(host.capability.kind, app.packageName)" @error="($event.target as HTMLImageElement).hidden = true" /></div><div class="app-main"><div class="app-title"><strong>{{ app.appLabel || app.packageName }}</strong><TTag v-if="app.isSystem" size="small" variant="light">系统</TTag></div><small>{{ app.packageName }}</small><em v-if="app.sharedCount > 1">共享 UID，同时影响 {{ app.sharedCount }} 个应用</em><em v-if="app.uid === 0">root UID 受保护</em></div><TSwitch size="small" :value="app.selected" :disabled="app.uid === 0" @change="(value) => toggle(app, value)" /></div></template>
+              <template #default="{ item: app }"><div class="app-row" :data-selected="app.selected"><ApplicationIcon :host="host" :app="app" /><div class="app-main"><div class="app-title"><strong>{{ app.appLabel || app.packageName }}</strong><TTag v-if="app.isSystem" size="small" variant="light">系统</TTag></div><small>{{ app.packageName }}</small><em v-if="app.sharedCount > 1">共享 UID，同时影响 {{ app.sharedCount }} 个应用</em><em v-if="app.uid === 0">root UID 受保护</em></div><TSwitch size="small" :value="app.selected" :disabled="app.uid === 0" @change="(value) => toggle(app, value)" /></div></template>
             </VirtualListViewport>
           </div>
           </TPullDownRefresh>
         </section>
       </Transition>
     </template>
-    <TActionSheet v-model="sortSheetOpen" class="application-sort-sheet" theme="list" align="left" show-cancel cancel-text="取消" description="应用排序" :items="sortOptions" @selected="selectSort" />
   </section>
 </template>

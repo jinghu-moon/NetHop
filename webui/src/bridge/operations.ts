@@ -1,19 +1,19 @@
 export const NETHOPCTL_PATH = "/data/adb/modules/nethop/bin/nethopctl";
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const MAX_COMMAND_ARG_BYTES = 16 * 1024;
 export const MAX_JSON_BYTES = 1024 * 1024;
 export const EVENT_SESSION_MAX_RUNTIME_SECONDS = 300;
 
 export type EventKind = "config" | "runtime" | "subscription" | "generation" | "network" | "traffic" | "subscription-mode" | "subscription-active-set" | "node-selection" | "node-active" | "node-test";
 export type LogChannel = "service" | "subscription" | "core";
-export type PayloadNamespace = "config" | "subscription" | "backup";
-export type PayloadOperation =
-  | "config-validate"
-  | "config-apply"
-  | "config-mutate"
-  | "subscription-import-preview"
-  | "subscription-import-apply"
-  | "backup-restore";
+export interface PayloadOperationByNamespace {
+  readonly config: "config-validate" | "config-apply" | "config-mutate";
+  readonly subscription: "subscription-import-preview" | "subscription-import-apply";
+  readonly backup: "backup-restore";
+  readonly node: "node-override-apply";
+}
+export type PayloadNamespace = keyof PayloadOperationByNamespace;
+export type PayloadOperation = PayloadOperationByNamespace[PayloadNamespace];
 
 export type OperationRequest =
   | { readonly id: "hello"; readonly managerVersion: string }
@@ -35,6 +35,8 @@ export type OperationRequest =
   | { readonly id: "node.select.auto" }
   | { readonly id: "node.select.manual"; readonly nodeId: string }
   | { readonly id: "node.export"; readonly nodeId: string }
+  | { readonly id: "node.override.get"; readonly nodeId: string }
+  | { readonly id: "node.override.remove"; readonly nodeId: string }
   | { readonly id: "node.remove"; readonly nodeId: string; readonly expectedDigest: string }
   | { readonly id: "subscription.list" }
   | { readonly id: "subscription.mode.get" }
@@ -80,6 +82,12 @@ const SAFE_DIGEST = /^[a-f0-9]{64}$/;
 const SAFE_NODE_ID = /^nh1s-[a-f0-9]{16}$/;
 const SAFE_CONNECTION_ID = /^[A-Za-z0-9_.:-]{1,256}$/;
 const allowedKinds: readonly EventKind[] = ["config", "runtime", "subscription", "generation", "network", "traffic", "subscription-mode", "subscription-active-set", "node-selection", "node-active", "node-test"];
+const payloadOperations: { readonly [Namespace in PayloadNamespace]: readonly PayloadOperationByNamespace[Namespace][] } = {
+  config: ["config-validate", "config-apply", "config-mutate"],
+  subscription: ["subscription-import-preview", "subscription-import-apply"],
+  backup: ["backup-restore"],
+  node: ["node-override-apply"],
+};
 
 function assertSafe(value: string, pattern: RegExp, label: string): void {
   if (!pattern.test(value) || /[\0\r\n;&|`$<>]/.test(value)) {
@@ -142,6 +150,12 @@ export function buildCommand(request: OperationRequest): BuiltCommand {
     case "node.export":
       assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
       return { executable: NETHOPCTL_PATH, args: ["node", "export", request.nodeId, "--json"], timeoutMs: 5000, sensitive: true };
+    case "node.override.get":
+      assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
+      return { executable: NETHOPCTL_PATH, args: ["node", "override", "get", request.nodeId, "--json"], timeoutMs: 5000, sensitive: true };
+    case "node.override.remove":
+      assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
+      return { executable: NETHOPCTL_PATH, args: ["node", "override", "remove", request.nodeId, "--json"], timeoutMs: 30000, sensitive: false };
     case "node.remove":
       assertSafe(request.nodeId, SAFE_NODE_ID, "node id");
       assertSafe(request.expectedDigest, SAFE_DIGEST, "config digest");
@@ -206,6 +220,7 @@ export function buildCommand(request: OperationRequest): BuiltCommand {
       return { executable: NETHOPCTL_PATH, args: ["webui", "payload", "append", request.namespace, request.handle, request.chunk, "--json"], timeoutMs: 5000, sensitive: true };
     case "webui.payload.commit":
       assertSafe(request.handle, SAFE_HANDLE, "payload handle");
+      if (!(payloadOperations[request.namespace] as readonly string[]).includes(request.operation)) throw new Error("invalid payload operation");
       return { executable: NETHOPCTL_PATH, args: ["webui", "payload", "commit", request.namespace, request.handle, request.operation, "--json"], timeoutMs: 30000, sensitive: true };
     case "webui.payload.remove":
       assertSafe(request.handle, SAFE_HANDLE, "payload handle");

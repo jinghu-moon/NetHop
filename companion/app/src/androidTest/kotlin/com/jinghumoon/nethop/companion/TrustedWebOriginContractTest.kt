@@ -17,9 +17,9 @@ class TrustedWebOriginContractTest {
         assertFalse(TrustedWebOrigin.accepts(Uri.parse("https://sub.appassets.androidplatform.net"), isMainFrame = true))
         assertFalse(TrustedWebOrigin.accepts(Uri.parse("https://appassets.androidplatform.net:443"), isMainFrame = true))
         assertFalse(TrustedWebOrigin.accepts(Uri.parse(TrustedWebOrigin.ORIGIN), isMainFrame = false))
-        assertTrue(TrustedWebOrigin.isPackageIcon(Uri.parse("${TrustedWebOrigin.ORIGIN}/package-icons/com.example.app")))
-        assertTrue(TrustedWebOrigin.isTrustedResource(Uri.parse("${TrustedWebOrigin.ORIGIN}/package-icons/com.example.app")))
-        assertFalse(TrustedWebOrigin.isPackageIcon(Uri.parse("${TrustedWebOrigin.ORIGIN}/package-icons/com.example.app?x=1")))
+        assertTrue(TrustedWebOrigin.isPackageIcon(Uri.parse("${TrustedWebOrigin.ORIGIN}/package-icons/original/123456/com.example.app")))
+        assertTrue(TrustedWebOrigin.isTrustedResource(Uri.parse("${TrustedWebOrigin.ORIGIN}/package-icons/original/123456/com.example.app")))
+        assertFalse(TrustedWebOrigin.isPackageIcon(Uri.parse("${TrustedWebOrigin.ORIGIN}/package-icons/original/123456/com.example.app?x=1")))
         assertFalse(TrustedWebOrigin.isPackageIcon(Uri.parse("https://example.com/package-icons/com.example.app")))
     }
 }

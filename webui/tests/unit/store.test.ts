@@ -10,7 +10,7 @@ import type { ConfigDto, NodeDto } from "@/model/dto";
 const node = (id: string): NodeDto => ({ id, name: `Node ${id}`, protocol: "vless", isRequested: false, isActive: false, sourceIds: ["source"] });
 const config = (document: Readonly<Record<string, unknown>>): ConfigDto => ({
   observedConfigDigest: "a".repeat(64), activeConfigDigest: "b".repeat(64), candidateSequence: 1,
-  document, sourceStatus: [],
+  document, sourceStatus: [], sourceHistory: [],
 });
 
 describe("runtime stores", () => {

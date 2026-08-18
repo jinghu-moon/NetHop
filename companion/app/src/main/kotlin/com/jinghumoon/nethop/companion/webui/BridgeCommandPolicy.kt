@@ -16,6 +16,7 @@ object BridgeCommandPolicy {
     private val digest = Regex("^[a-f0-9]{64}$")
     private val base64 = Regex("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
     private val integer = Regex("^[0-9]+$")
+    private val PACKAGE_NAME = Regex("^[A-Za-z0-9_.-]{1,256}$")
     private val eventKinds = setOf(
         "config",
         "runtime",
@@ -29,7 +30,7 @@ object BridgeCommandPolicy {
         "node-active",
         "node-test",
     )
-    private val payloadNamespaces = setOf("config", "subscription", "backup")
+    private val payloadNamespaces = setOf("config", "subscription", "backup", "node")
     private val payloadOperations = setOf(
         "config-validate",
         "config-apply",
@@ -37,6 +38,7 @@ object BridgeCommandPolicy {
         "subscription-import-preview",
         "subscription-import-apply",
         "backup-restore",
+        "node-override-apply",
     )
 
     fun operation(operationId: String, args: List<String>, spawn: Boolean): RootOperation? {
@@ -44,7 +46,7 @@ object BridgeCommandPolicy {
         val valid = when (operationId) {
             "hello" -> args.size == 8 && args[0] == "hello" && args[1] == "--json" &&
                 args[2] == "--manager-version" && managerVersion.matches(args[3]) &&
-                args.subList(4, 8) == listOf("--protocol-min", "5", "--protocol-max", "5")
+                args.subList(4, 8) == listOf("--protocol-min", "6", "--protocol-max", "6")
             "status.get" -> args == listOf("status", "--json")
             "service.start" -> args == listOf("start", "--json") || args == listOf("start", "--json", "--wait")
             "service.stop" -> args == listOf("stop", "--json") || args == listOf("stop", "--json", "--wait")
@@ -64,6 +66,8 @@ object BridgeCommandPolicy {
             "node.select.auto" -> args == listOf("node", "select", "auto", "--json")
             "node.select.manual" -> args.size == 5 && args.take(3) == listOf("node", "select", "manual") && nodeId.matches(args[3]) && args[4] == "--json"
             "node.export" -> args.size == 4 && args.take(2) == listOf("node", "export") && nodeId.matches(args[2]) && args[3] == "--json"
+            "node.override.get" -> validNodeOverride(args, "get")
+            "node.override.remove" -> validNodeOverride(args, "remove")
             "node.remove" -> validIdDigestMutation(args, listOf("node", "remove"), nodeId)
             "subscription.list" -> args == listOf("subscription", "list", "--json")
             "subscription.mode.get" -> args == listOf("subscription", "mode", "--json")
@@ -96,7 +100,7 @@ object BridgeCommandPolicy {
         if (!valid || spawn != (operationId == "events.subscribe")) return null
         val timeout = when {
             spawn -> 0L
-            operationId in setOf("service.start", "service.stop", "config.reload", "subscription.update", "ruleset.update") -> 30_000L
+            operationId in setOf("service.start", "service.stop", "config.reload", "subscription.update", "ruleset.update", "webui.payload.commit") -> 30_000L
             operationId == "node.test-all" -> 7_000L
             operationId == "node.test" -> 15_000L
             else -> 5_000L
@@ -131,6 +135,10 @@ object BridgeCommandPolicy {
     }
 
     private fun validLimit(value: String): Boolean = integer.matches(value) && value.toIntOrNull() in 1..128
+
+    private fun validNodeOverride(args: List<String>, action: String): Boolean =
+        args.size == 5 && args.take(3) == listOf("node", "override", action) &&
+            nodeId.matches(args[3]) && args[4] == "--json"
 
     private fun validIdDigestMutation(args: List<String>, prefix: List<String>, idPattern: Regex): Boolean =
         args.size == prefix.size + 4 && args.take(prefix.size) == prefix && idPattern.matches(args[prefix.size]) &&
@@ -180,9 +188,18 @@ object BridgeCommandPolicy {
         args.size == 7 && args.take(3) == listOf("webui", "payload", "append") && args[3] in payloadNamespaces &&
             payloadHandle.matches(args[4]) && args[5].length <= MAX_ARG_BYTES && base64.matches(args[5]) && args[6] == "--json"
 
-    private fun validPayloadCommit(args: List<String>): Boolean =
-        args.size == 7 && args.take(3) == listOf("webui", "payload", "commit") && args[3] in payloadNamespaces &&
-            payloadHandle.matches(args[4]) && args[5] in payloadOperations && args[6] == "--json"
+    private fun validPayloadCommit(args: List<String>): Boolean {
+        if (args.size != 7 || args.take(3) != listOf("webui", "payload", "commit") ||
+            args[3] !in payloadNamespaces || !payloadHandle.matches(args[4]) ||
+            args[5] !in payloadOperations || args[6] != "--json") return false
+        return when (args[3]) {
+            "config" -> args[5] in setOf("config-validate", "config-apply", "config-mutate")
+            "subscription" -> args[5] in setOf("subscription-import-preview", "subscription-import-apply")
+            "backup" -> args[5] == "backup-restore"
+            "node" -> args[5] == "node-override-apply"
+            else -> false
+        }
+    }
 
     private fun validPayloadRemove(args: List<String>): Boolean =
         args.size == 6 && args.take(3) == listOf("webui", "payload", "remove") && args[3] in payloadNamespaces &&
@@ -196,6 +213,7 @@ object BridgeCommandPolicy {
         "node.test-all",
         "node.select.auto",
         "node.select.manual",
+        "node.override.remove",
         "node.remove",
         "subscription.mode.set",
         "subscription.select",

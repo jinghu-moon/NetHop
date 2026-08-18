@@ -1,11 +1,11 @@
 package com.jinghumoon.nethop.companion.webui
 
 import android.content.Context
+import com.jinghumoon.nethop.companion.control.PersistentRootShell
 import com.topjohnwu.superuser.Shell
 import com.topjohnwu.superuser.io.SuFile
 import com.topjohnwu.superuser.io.SuFileInputStream
 import java.io.InputStream
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RootShellSession private constructor(
@@ -25,10 +25,7 @@ class RootShellSession private constructor(
     private fun boundFile(path: String): SuFile = SuFile(path).also { it.setShell(shell) }
 
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        runCatching {
-            if (!shell.waitAndClose(2, TimeUnit.SECONDS)) shell.close()
-        }
+        closed.compareAndSet(false, true)
     }
 
     companion object {
@@ -38,14 +35,8 @@ class RootShellSession private constructor(
 
         fun open(context: Context, expectedManifestBytes: ByteArray): RootShellSession? {
             val expected = WebRootManifestIndex.parse(expectedManifestBytes) ?: return null
-            val shell = runCatching {
-                Shell.Builder.create()
-                    .setContext(context.applicationContext)
-                    .setTimeout(5)
-                    .build("su", "--mount-master")
-            }.getOrNull() ?: return null
+            val shell = PersistentRootShell.acquire(context) ?: return null
             fun fail(): RootShellSession? {
-                runCatching { shell.close() }
                 return null
             }
             if (shell.status != Shell.ROOT_SHELL || !shell.isAlive) return fail()

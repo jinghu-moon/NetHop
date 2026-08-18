@@ -1,6 +1,6 @@
 import type { HostAdapter } from "./host";
 import { runJson } from "./command";
-import type { PayloadNamespace, PayloadOperation } from "./operations";
+import type { PayloadNamespace, PayloadOperationByNamespace } from "./operations";
 
 const CHUNK_BYTES = 12 * 1024;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -20,10 +20,10 @@ function handleFrom(response: unknown): string {
   return handle;
 }
 
-export async function uploadPrivatePayload(
+export async function uploadPrivatePayload<Namespace extends PayloadNamespace>(
   host: HostAdapter,
-  namespace: PayloadNamespace,
-  operation: PayloadOperation,
+  namespace: Namespace,
+  operation: PayloadOperationByNamespace[Namespace],
   text: string,
 ): Promise<unknown> {
   const bytes = new TextEncoder().encode(text);

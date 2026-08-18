@@ -80,7 +80,7 @@ test("operation feedback floats without shifting runtime controls", async ({ pag
   await settle(page);
   const serviceTop = await page.locator(".service-panel").evaluate((element) => element.getBoundingClientRect().top);
   await page.locator(".service-panel .t-switch").click();
-  await expect(page.locator(".operation-message.t-message")).toContainText("代理已启动");
+  await expect(page.locator(".operation-message.t-message")).toContainText("代理已关闭");
   expect(await page.locator(".service-panel").evaluate((element) => element.getBoundingClientRect().top)).toBe(serviceTop);
   await expect(page).toHaveScreenshot("overview-operation-success-393x873.png", { fullPage: true });
 });

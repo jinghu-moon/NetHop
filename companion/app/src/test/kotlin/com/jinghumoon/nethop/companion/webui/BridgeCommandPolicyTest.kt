@@ -15,7 +15,7 @@ class BridgeCommandPolicyTest {
     @Test
     fun acceptsExactTypedOperations() {
         val cases = mapOf(
-            "hello" to listOf("hello", "--json", "--manager-version", "webui-0.1.0", "--protocol-min", "5", "--protocol-max", "5"),
+            "hello" to listOf("hello", "--json", "--manager-version", "webui-0.1.0", "--protocol-min", "6", "--protocol-max", "6"),
             "status.get" to listOf("status", "--json"),
             "service.start" to listOf("start", "--json", "--wait"),
             "service.stop" to listOf("stop", "--json", "--wait"),
@@ -33,6 +33,8 @@ class BridgeCommandPolicyTest {
             "node.select.auto" to listOf("node", "select", "auto", "--json"),
             "node.select.manual" to listOf("node", "select", "manual", node, "--json"),
             "node.export" to listOf("node", "export", node, "--json"),
+            "node.override.get" to listOf("node", "override", "get", node, "--json"),
+            "node.override.remove" to listOf("node", "override", "remove", node, "--json"),
             "node.remove" to listOf("node", "remove", node, "--json", "--expected-digest", digest),
             "subscription.list" to listOf("subscription", "list", "--json"),
             "subscription.mode.get" to listOf("subscription", "mode", "--json"),
@@ -65,6 +67,33 @@ class BridgeCommandPolicyTest {
             val operation = assertNotNull(BridgeCommandPolicy.operation(id, args, spawn = false))
             assertEquals(args, operation.command().args)
         }
+        assertNotNull(
+            BridgeCommandPolicy.operation(
+                "webui.payload.commit",
+                listOf("webui", "payload", "commit", "node", handle, "node-override-apply", "--json"),
+                spawn = false,
+            ),
+        )
+        assertNotNull(
+            BridgeCommandPolicy.operation(
+                "webui.payload.commit",
+                listOf("webui", "payload", "commit", "config", handle, "config-mutate", "--json"),
+                spawn = false,
+            ),
+        )
+    }
+
+    @Test
+    fun privatePayloadCommitUsesTheMutationTimeoutBudget() {
+        val operation = assertNotNull(
+            BridgeCommandPolicy.operation(
+                "webui.payload.commit",
+                listOf("webui", "payload", "commit", "node", handle, "node-override-apply", "--json"),
+                spawn = false,
+            ),
+        )
+
+        assertEquals(30_000L, operation.command().timeoutMillis)
     }
 
     @Test
@@ -102,6 +131,9 @@ class BridgeCommandPolicyTest {
         )
         assertNull(BridgeCommandPolicy.operation("status.get", listOf("status", "--json", "--socket", "/tmp/x"), false))
         assertNull(BridgeCommandPolicy.operation("backup.export", listOf("backup", "export", "--file", "/sdcard/x", "--json"), false))
+        assertNull(BridgeCommandPolicy.operation("node.override.get", listOf("node", "override", "get", "../../etc/passwd", "--json"), false))
+        assertNull(BridgeCommandPolicy.operation("webui.payload.commit", listOf("webui", "payload", "commit", "subscription", handle, "config-mutate", "--json"), false))
+        assertNull(BridgeCommandPolicy.operation("webui.payload.commit", listOf("webui", "payload", "commit", "config", handle, "node-override-apply", "--json"), false))
         assertNull(BridgeCommandPolicy.operation("unknown", listOf("status", "--json"), false))
     }
 }

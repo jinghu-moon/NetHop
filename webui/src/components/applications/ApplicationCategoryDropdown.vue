@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { onClickOutside } from "@vueuse/core";
+import { computed } from "vue";
 import { IconCheck, IconChevronDown } from "@tabler/icons-vue";
+import AnchoredDropdown from "@/components/AnchoredDropdown.vue";
 
 export interface ApplicationCategoryOption {
   readonly value: string;
@@ -10,44 +10,37 @@ export interface ApplicationCategoryOption {
 
 const props = defineProps<{ modelValue: string; options: readonly ApplicationCategoryOption[] }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
-const root = ref<HTMLElement>();
-const open = ref(false);
 const currentLabel = computed(() => props.options.find((option) => option.value === props.modelValue)?.label ?? "请选择");
 
-onClickOutside(root, () => { open.value = false; });
-
-function select(value: string): void {
+function select(value: string, close: () => void): void {
   emit("update:modelValue", value);
-  open.value = false;
+  close();
 }
 </script>
 
 <template>
-  <div ref="root" class="application-category-dropdown" :data-open="open">
-    <button class="application-category-trigger" type="button" @click="open = !open">
-      <span>{{ currentLabel }}</span>
-      <IconChevronDown :size="17" />
-    </button>
-    <Transition name="application-dropdown">
-      <div v-if="open" class="application-category-menu">
-        <button v-for="option in options" :key="option.value" type="button" :data-selected="option.value === modelValue" @click="select(option.value)">
+  <AnchoredDropdown class="application-category-dropdown" menu-label="应用分类" menu-class="application-category-menu" menu-width="148px" :offset="5">
+    <template #trigger="{ open, toggle }">
+      <button class="application-category-trigger" type="button" aria-haspopup="menu" :aria-expanded="open" :data-open="open" @click="toggle">
+        <span>{{ currentLabel }}</span>
+        <IconChevronDown :size="17" />
+      </button>
+    </template>
+    <template #default="{ close }">
+      <div class="anchored-dropdown__options">
+        <button v-for="option in options" :key="option.value" class="anchored-dropdown__option" type="button" role="menuitemradio" :aria-checked="option.value === modelValue" :data-selected="option.value === modelValue" @click="select(option.value, close)">
           <span>{{ option.label }}</span>
-          <IconCheck v-if="option.value === modelValue" :size="16" />
+          <IconCheck v-if="option.value === modelValue" class="anchored-dropdown__option-icon" :size="16" />
         </button>
       </div>
-    </Transition>
-  </div>
+    </template>
+  </AnchoredDropdown>
 </template>
 
 <style scoped>
 .application-category-dropdown {
-  position: relative;
   width: 126px;
   flex: 0 0 126px;
-}
-
-.application-category-dropdown[data-open="true"] {
-  z-index: 40;
 }
 
 .application-category-trigger {
@@ -77,62 +70,12 @@ function select(value: string): void {
   transition: transform .2s cubic-bezier(.4, 0, .2, 1), color .2s ease;
 }
 
-.application-category-dropdown[data-open="true"] .application-category-trigger {
+.application-category-trigger[data-open="true"] {
   border-color: var(--focus-ring);
 }
 
-.application-category-dropdown[data-open="true"] .application-category-trigger svg {
+.application-category-trigger[data-open="true"] svg {
   color: var(--nh-info);
   transform: rotate(180deg);
-}
-
-.application-category-menu {
-  position: absolute;
-  top: calc(100% + 5px);
-  right: 0;
-  width: 148px;
-  overflow: hidden;
-  padding: 4px;
-  border: 1px solid var(--nh-border);
-  border-radius: 6px;
-  background: var(--nh-surface);
-  box-shadow: var(--shadow-2);
-  transform-origin: top right;
-}
-
-.application-category-menu button {
-  display: flex;
-  width: 100%;
-  min-height: 36px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--nh-text);
-  background: transparent;
-  font-size: 12px;
-  text-align: left;
-}
-
-.application-category-menu button:active,
-.application-category-menu button[data-selected="true"] {
-  color: var(--nh-selection);
-  background: color-mix(in srgb, var(--nh-selection) 9%, var(--nh-surface));
-}
-
-.application-category-menu button svg {
-  flex: 0 0 auto;
-}
-
-.application-dropdown-enter-active,
-.application-dropdown-leave-active {
-  transition: opacity .16s ease, transform .18s cubic-bezier(.2, .8, .2, 1);
-}
-
-.application-dropdown-enter-from,
-.application-dropdown-leave-to {
-  opacity: 0;
-  transform: scale(.94) translateY(-5px);
 }
 </style>

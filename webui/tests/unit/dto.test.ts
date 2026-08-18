@@ -7,7 +7,7 @@ const digest = "a".repeat(64);
 
 describe("strict DTO validators", () => {
   it("negotiates protocol v5 and denies unknown hello fields", () => {
-    const hello = { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: ["status.get"], supported_features: ["event_stream", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1"] };
+    const hello = { manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 6, daemon_protocol_max: 6, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: ["status.get"], supported_features: ["event_stream", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1"] };
     expect(parseHello(hello).compatible).toBe(true);
     expect(() => parseHello({ ...hello, unknown: true })).toThrow("unknown field");
     expect(() => parseHello({ ...hello, manager_version: "x".repeat(65) })).toThrow();
@@ -15,7 +15,7 @@ describe("strict DTO validators", () => {
 
   it("validates control envelope and status state", () => {
     const status = { schema_version: 2, state: "running_tproxy", generation: 2, last_update: "succeeded", service: { configured_enabled: true, effective_enabled: true, override: null }, diagnostic_code: null, watcher_health: "healthy", runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} };
-    const envelope = { version: 5, request_id: "test", ok: true, generation: 2, result: status };
+    const envelope = { version: 6, request_id: "test", ok: true, generation: 2, result: status };
     expect(parseControlEnvelope(envelope, parseStatus).result).toMatchObject({ state: "running_tproxy", service: { configuredEnabled: true, effectiveEnabled: true } });
     expect(() => parseStatus({ ...status, state: "invented" })).toThrow("invalid enum");
     expect(() => parseStatus({ ...status, schema_version: 1 })).toThrow();
@@ -24,6 +24,7 @@ describe("strict DTO validators", () => {
     expect(() => parseStatus({ ...status, service: { ...status.service, ssid: "private" } })).toThrow("unknown field");
     expect(() => parseControlEnvelope({ ...envelope, extra: true }, parseStatus)).toThrow("unknown field");
     expect(() => parseControlEnvelope({ ...envelope, version: 3 }, parseStatus)).toThrow("unsupported protocol");
+    expect(() => parseControlEnvelope({ ...envelope, version: 5 }, parseStatus)).toThrow("unsupported protocol");
   });
 
   it("validates capability states and evidence bounds", () => {
@@ -33,15 +34,19 @@ describe("strict DTO validators", () => {
   });
 
   it("keeps TOML document as the only explicit config extension map", () => {
-    const result = parseConfig({ observed_config_digest: digest, active_config_digest: digest, candidate_sequence: 1, watcher_health: "healthy", last_reload: "succeeded", document: { service: { enabled: true } }, source_status: [] });
+    const result = parseConfig({ observed_config_digest: digest, active_config_digest: digest, candidate_sequence: 1, watcher_health: "healthy", last_reload: "succeeded", application_runtime: { state: "pending", reason: "unresolved_packages:1" }, document: { service: { enabled: true } }, source_status: [] });
     expect(result.document).toEqual({ service: { enabled: true } });
+    expect(result.applicationRuntime).toEqual({ state: "pending", reason: "unresolved_packages:1" });
     expect(() => parseConfig({ observed_config_digest: "bad", active_config_digest: digest, candidate_sequence: 1, watcher_health: "healthy", last_reload: "succeeded", document: {}, source_status: [] })).toThrow("digest");
   });
 
   it("parses bounded subscription status without accepting extension fields", () => {
     const status = { source_id: "src_abc", health: "degraded", last_attempt_wall_seconds: 20, last_success_wall_seconds: 10, next_update_wall_seconds: 30, generation: 2, accepted: 56, duplicate: 1, rejected: 2, warnings: 3, subscription_upload_bytes: 128, subscription_download_bytes: 256, subscription_total_bytes: 1024, subscription_expire_at: 2_000_000_000, using_last_known_good: true, diagnostic_code: null };
     expect(parseSourceStatus(status)).toMatchObject({ sourceId: "src_abc", health: "degraded", accepted: 56, subscriptionUploadBytes: 128, subscriptionTotalBytes: 1024, subscriptionExpireAt: 2_000_000_000, usingLastKnownGood: true });
-    expect(parseConfig({ observed_config_digest: digest, active_config_digest: digest, candidate_sequence: 1, watcher_health: "healthy", last_reload: "succeeded", document: {}, source_status: [status] }).sourceStatus[0]?.warnings).toBe(3);
+    const history = { source_id: "src_abc", attempted_at_wall_seconds: 20, health: "degraded", generation: 2, accepted: 56, duplicate: 1, rejected: 2, warnings: 3, using_last_known_good: true, diagnostic_code: null };
+    const config = parseConfig({ observed_config_digest: digest, active_config_digest: digest, candidate_sequence: 1, watcher_health: "healthy", last_reload: "succeeded", document: {}, source_status: [status], source_history: [history] });
+    expect(config.sourceStatus[0]?.warnings).toBe(3);
+    expect(config.sourceHistory[0]).toMatchObject({ sourceId: "src_abc", health: "degraded", usingLastKnownGood: true });
     expect(() => parseSourceStatus({ ...status, secret_url: "https://secret.invalid" })).toThrow("unknown field");
   });
 
@@ -85,12 +90,13 @@ describe("strict DTO validators", () => {
 
   it("validates application, traffic and all event frame variants", () => {
     expect(parseApplication({ package_name: "tv.danmaku.bili", uid: 10123, mode: "blacklist", shared_uid: false }).uid).toBe(10123);
-    expect(parseTraffic({ kind: "traffic", sample: { up: 12, down: 34 }, interval_seconds: 1 }).down).toBe(34);
-    expect(() => parseTraffic({ sample: { up: -1, down: Number.NaN }, interval_seconds: 1 })).toThrow();
-    const snapshot = { version: 5, request_id: "events", sequence: 1, kind: "item", payload: { kind: "snapshot", runtime: {} } };
+    expect(parseTraffic({ kind: "traffic", state: "ok", sample: { up_bps: 12, down_bps: 34 }, observed_at_unix_ms: 1_700_000_000_000, interval_ms: 1_000 }).down).toBe(34);
+    expect(parseTraffic({ kind: "traffic", state: "gap", sample: { up_bps: 0, down_bps: 0 }, observed_at_unix_ms: 1_700_000_000_000, interval_ms: 2_000 }).state).toBe("gap");
+    expect(() => parseTraffic({ state: "ok", sample: { up_bps: -1, down_bps: Number.NaN }, observed_at_unix_ms: 1, interval_ms: 1_000 })).toThrow();
+    const snapshot = { version: 6, request_id: "events", sequence: 1, kind: "item", payload: { kind: "snapshot", runtime: {} } };
     expect(parseEventFrame(snapshot).type).toBe("item");
-    expect(parseEventFrame({ version: 5, request_id: "events", sequence: 2, kind: "end" }).type).toBe("end");
-    expect(parseEventFrame({ version: 5, request_id: "events", sequence: 3, kind: "error", error: { code: "NH-CORE-UNAVAILABLE", message: "unavailable" } }).type).toBe("error");
+    expect(parseEventFrame({ version: 6, request_id: "events", sequence: 2, kind: "end" }).type).toBe("end");
+    expect(parseEventFrame({ version: 6, request_id: "events", sequence: 3, kind: "error", error: { code: "NH-CORE-UNAVAILABLE", message: "unavailable" } }).type).toBe("error");
     expect(() => parseEventFrame({ ...snapshot, sequence: 0 })).toThrow();
   });
 
@@ -98,7 +104,7 @@ describe("strict DTO validators", () => {
     const logs = parseLogs({ entries: [{ seq: 7, kind: "runtime", channel: "core", payload: { kind: "core_started", message: "ready", token: "[REDACTED]" }, raw: "{\"kind\":\"runtime\"}" }], channel: "core", newest_first: true });
     expect(logs[0]).toMatchObject({ id: "7", channel: "core", kind: "core_started", message: "ready" });
     expect(() => parseLogs({ entries: [{ seq: 1, kind: "runtime", channel: "unknown", payload: {}, raw: "{}" }] })).toThrow();
-    const metrics = parseRuntimeMetrics({ schema_version: 1, runtime_state: "running_tproxy", generation: 3, uptime_seconds: 90, core: { pid: 12, cpu_percent: 1.5, memory_rss_bytes: 4096 }, traffic: { upload_bytes: 10, download_bytes: 20 }, outbound: { interface: "wlan0", local_address: "192.0.2.2", public_ip: null } });
+    const metrics = parseRuntimeMetrics({ schema_version: 2, runtime_state: "running_tproxy", generation: 3, uptime_seconds: 90, core: { pid: 12, cpu_percent: 1.5, memory_rss_bytes: 4096 }, traffic: { upload_bytes: 10, download_bytes: 20 }, outbound: { interface: "wlan0", local_address: "192.0.2.2", public_ip: null } });
     expect(metrics).toMatchObject({ runtimeState: "running_tproxy", generation: 3, uptimeSeconds: 90, interface: "wlan0", uploadBytes: 10 });
   });
 

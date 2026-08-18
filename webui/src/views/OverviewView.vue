@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { IconActivityHeartbeat, IconArrowDown, IconArrowUp, IconBolt, IconChevronRight, IconClock, IconPower } from "@tabler/icons-vue";
+import { IconActivityHeartbeat, IconArrowDown, IconArrowUp, IconBolt, IconChevronRight, IconClock, IconCpu, IconPower } from "@tabler/icons-vue";
 import { Button as TButton, Switch as TSwitch } from "tdesign-mobile-vue";
-import { computed, onActivated, ref } from "vue";
+import { computed, onActivated, onDeactivated, ref } from "vue";
 import { RouterLink } from "vue-router";
 import OperationBanner from "@/components/OperationBanner.vue";
 import SegmentedControl from "@/components/SegmentedControl.vue";
@@ -10,8 +10,9 @@ import { runJson } from "@/bridge/command";
 import { useHost } from "@/bridge/context";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { validatedQuery } from "@/model/client";
-import { parseConfig, parseNodeList, parseRuntimeMetrics, parseStatus, parseTraffic, type RuntimeMetricsDto, type StatusDto } from "@/model/dto";
+import { parseConfig, parseNodeList, parseRuntimeMetrics, parseStatus, parseTraffic, type RuntimeMetricsDto } from "@/model/dto";
 import { activeNodeView } from "@/model/node-view";
+import { presentServiceStatus } from "@/model/service-presentation";
 import { liveTrafficPoints } from "@/runtime/live-store";
 import { createActionLock, createOperationStore } from "@/runtime/operation";
 import { uiStores } from "@/runtime/store";
@@ -21,9 +22,11 @@ type OutboundMode = "rule" | "global" | "direct";
 type CaptureMode = "auto" | "tproxy" | "tun";
 
 const host = useHost();
-const status = ref<StatusDto>();
+const status = computed(() => uiStores.session.status.value);
+const statusLoadFailed = ref(false);
+const service = computed(() => presentServiceStatus(status.value, statusLoadFailed.value));
 const metrics = ref<RuntimeMetricsDto>();
-const running = computed(() => status.value?.state === "running_tproxy" || status.value?.state === "running_tun");
+const running = computed(() => service.value.phase === "running");
 const pending = ref(false);
 const modePending = ref(false);
 const capturePending = ref(false);
@@ -37,7 +40,7 @@ const lock = createActionLock();
 const ring = new TrafficRing(60);
 const fallbackPoints = ref(ring.snapshot());
 const points = computed(() => liveTrafficPoints.value.length > 0 ? liveTrafficPoints.value : fallbackPoints.value);
-const currentTraffic = computed(() => points.value.at(-1) ?? { up: 0, down: 0 });
+const currentTraffic = computed(() => points.value.at(-1) ?? { up: 0, down: 0, state: "gap" as const });
 const selection = computed(() => uiStores.runtime.selection.value);
 const sourceNames = computed(() => Object.fromEntries(uiStores.runtime.subscriptionOrder.value.map((id) => [id, uiStores.runtime.subscriptionsById.value[id]?.name ?? id])));
 const nodeSummary = computed(() => activeNodeView(selection.value, uiStores.runtime.nodesById.value, sourceNames.value, running.value));
@@ -45,6 +48,9 @@ const currentNode = computed(() => nodeSummary.value.kind === "node" ? nodeSumma
 const nodeLatency = computed(() => nodeSummary.value.kind === "node" ? nodeSummary.value.latency.text : "--");
 const nodeStateLabel = computed(() => nodeSummary.value.kind === "node" ? nodeSummary.value.node.name : nodeSummary.value.title);
 const qualityTesting = ref(false);
+let metricsTimer: number | undefined;
+let metricsPollingActive = false;
+let metricsRefreshing = false;
 const modeDescription = computed(() => ({ rule: "按路由规则分流", global: "全部流量代理", direct: "全部流量直连" })[outboundMode.value]);
 const captureDescription = computed(() => ({ auto: "使用 daemon 默认接管策略", tproxy: "通过内核透明代理接管", tun: "通过虚拟网络接口接管" })[captureMode.value]);
 const modeOptions: Array<{ value: OutboundMode; label: string }> = [
@@ -58,7 +64,9 @@ const captureOptions: Array<{ value: CaptureMode; label: string }> = [
   { value: "tun", label: "TUN" },
 ];
 
-function formatRate(bytes: number): { value: string; unit: string } {
+function formatRate(bytes: number, available = true): { value: string; unit: string } {
+  if (!available) return { value: "--", unit: "" };
+  if (bytes >= 1024 ** 3) return { value: (bytes / 1024 ** 3).toFixed(bytes >= 10 * 1024 ** 3 ? 0 : 1), unit: "GB/s" };
   if (bytes >= 1024 * 1024) return { value: (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1), unit: "MB/s" };
   if (bytes >= 1024) return { value: (bytes / 1024).toFixed(bytes >= 10 * 1024 ? 0 : 1), unit: "KB/s" };
   return { value: String(Math.max(0, Math.round(bytes))), unit: "B/s" };
@@ -80,6 +88,11 @@ function formatDuration(seconds: number | undefined): string {
   return `${minutes} 分钟`;
 }
 
+function formatCpu(percent: number | undefined): string {
+  if (percent === undefined) return "--";
+  return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
+}
+
 function modeFrom(document: Readonly<Record<string, unknown>>): OutboundMode | undefined {
   const proxy = document.proxy;
   if (!proxy || typeof proxy !== "object" || Array.isArray(proxy)) return undefined;
@@ -94,20 +107,28 @@ function captureModeFrom(document: Readonly<Record<string, unknown>>): CaptureMo
   return value === "auto" || value === "tproxy" || value === "tun" ? value : undefined;
 }
 
-const downloadRate = computed(() => formatRate(currentTraffic.value.down));
-const uploadRate = computed(() => formatRate(currentTraffic.value.up));
+const downloadRate = computed(() => formatRate(currentTraffic.value.down, currentTraffic.value.state === "ok"));
+const uploadRate = computed(() => formatRate(currentTraffic.value.up, currentTraffic.value.state === "ok"));
 
 async function refresh(): Promise<void> {
-  const [statusResult, trafficResult, configResult, nodesResult, metricsResult] = await Promise.allSettled([
+  const [statusResult] = await Promise.allSettled([
     validatedQuery(host, { id: "status.get" }, parseStatus),
+  ]);
+  if (statusResult.status === "fulfilled") {
+    uiStores.session.setStatus(statusResult.value);
+    statusLoadFailed.value = false;
+  } else if (status.value === undefined) {
+    statusLoadFailed.value = true;
+  }
+
+  const [trafficResult, configResult, nodesResult, metricsResult] = await Promise.allSettled([
     validatedQuery(host, { id: "traffic.get" }, parseTraffic),
     validatedQuery(host, { id: "config.get" }, parseConfig),
     validatedQuery(host, { id: "node.list", limit: 128 }, parseNodeList),
     validatedQuery(host, { id: "metrics.get" }, parseRuntimeMetrics),
   ]);
-  if (statusResult.status === "fulfilled") status.value = statusResult.value;
   if (trafficResult.status === "fulfilled") {
-    ring.push(trafficResult.value, Date.now());
+    ring.push(trafficResult.value);
     fallbackPoints.value = ring.snapshot();
   }
   if (nodesResult.status === "fulfilled") uiStores.runtime.loadNodeSnapshot(nodesResult.value);
@@ -131,6 +152,27 @@ async function refresh(): Promise<void> {
     modeReady.value = false;
   }
   if ([statusResult, trafficResult, configResult, nodesResult, metricsResult].every((result) => result.status === "rejected")) throw new Error("overview unavailable");
+}
+
+async function refreshMetrics(): Promise<void> {
+  if (metricsRefreshing) return;
+  metricsRefreshing = true;
+  try {
+    metrics.value = await validatedQuery(host, { id: "metrics.get" }, parseRuntimeMetrics);
+  } finally {
+    metricsRefreshing = false;
+  }
+}
+
+function scheduleMetricsRefresh(): void {
+  if (!metricsPollingActive || metricsTimer !== undefined) return;
+  metricsTimer = window.setTimeout(() => {
+    metricsTimer = undefined;
+    if (!metricsPollingActive) return;
+    void refreshMetrics()
+      .catch(() => undefined)
+      .finally(scheduleMetricsRefresh);
+  }, 3_000);
 }
 
 async function testProxyQuality(): Promise<void> {
@@ -207,7 +249,16 @@ async function changeMode(context: { value: string | number }): Promise<void> {
   }
 }
 
-onActivated(() => { void refresh().catch(() => { modeReady.value = false; }); });
+onActivated(() => {
+  void refresh().catch(() => { modeReady.value = false; });
+  metricsPollingActive = true;
+  scheduleMetricsRefresh();
+});
+onDeactivated(() => {
+  metricsPollingActive = false;
+  if (metricsTimer !== undefined) window.clearTimeout(metricsTimer);
+  metricsTimer = undefined;
+});
 </script>
 
 <template>
@@ -221,10 +272,10 @@ onActivated(() => { void refresh().catch(() => { modeReady.value = false; }); })
     <section class="service-panel">
       <div class="service-control">
         <div class="service-summary">
-          <span class="service-symbol" :data-running="running"><IconPower :size="18" /></span>
-          <div><strong>{{ running ? "代理运行中" : "代理已关闭" }}</strong><span>{{ running ? "流量接管已生效" : "当前网络未经过 NetHop" }}</span></div>
+          <span class="service-symbol" :data-running="running" :data-state="service.phase"><IconPower :size="18" /></span>
+          <div><strong>{{ service.title }}</strong><span>{{ service.description }}</span></div>
         </div>
-        <TSwitch :value="running" :loading="pending" :disabled="pending" @change="toggle" />
+        <TSwitch :value="service.switchValue" :loading="pending || service.switchLoading" :disabled="pending || service.switchDisabled" @change="toggle" />
       </div>
     </section>
 
@@ -242,13 +293,15 @@ onActivated(() => { void refresh().catch(() => { modeReady.value = false; }); })
       <div class="traffic-heading">
         <div><h3>实时流量</h3><span>最近 60 秒</span></div>
         <div class="traffic-rates">
-          <div class="traffic-rate">
-            <IconArrowDown :size="13" />
-            <strong>{{ downloadRate.value }} <small>{{ downloadRate.unit }}</small></strong>
+          <div class="traffic-rate" data-direction="download">
+            <IconArrowDown class="traffic-rate__icon" :size="13" aria-hidden="true" />
+            <strong>{{ downloadRate.value }}</strong>
+            <small>{{ downloadRate.unit }}</small>
           </div>
-          <div class="traffic-rate">
-            <IconArrowUp :size="13" />
-            <strong>{{ uploadRate.value }} <small>{{ uploadRate.unit }}</small></strong>
+          <div class="traffic-rate" data-direction="upload">
+            <IconArrowUp class="traffic-rate__icon" :size="13" aria-hidden="true" />
+            <strong>{{ uploadRate.value }}</strong>
+            <small>{{ uploadRate.unit }}</small>
           </div>
         </div>
       </div>
@@ -284,6 +337,17 @@ onActivated(() => { void refresh().catch(() => { modeReady.value = false; }); })
         <div class="runtime-traffic">
           <span><IconArrowDown :size="12" />{{ formatBytes(metrics?.downloadBytes) }}</span>
           <span><IconArrowUp :size="12" />{{ formatBytes(metrics?.uploadBytes) }}</span>
+        </div>
+      </section>
+
+      <section class="overview-insight-card resource-card">
+        <div class="insight-heading">
+          <span class="insight-icon resource-icon"><IconCpu :size="17" /></span>
+          <strong>核心资源</strong>
+        </div>
+        <div class="resource-metrics">
+          <div><span>CPU</span><strong>{{ formatCpu(metrics?.core?.cpuPercent) }}</strong></div>
+          <div><span>内存</span><strong>{{ formatBytes(metrics?.core?.memoryRssBytes) }}</strong></div>
         </div>
       </section>
     </div>

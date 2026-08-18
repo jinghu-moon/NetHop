@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NetHop</string>
+    <string name="webui_loading">正在连接 NetHop</string>
     <string name="webui_unavailable">NetHop WebUI 暂不可用</string>
 </resources>

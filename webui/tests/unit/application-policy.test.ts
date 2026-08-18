@@ -36,7 +36,6 @@ describe("application policy document", () => {
       targets: [
         { kind: "package", android_user_id: 0, package: "com.example.alpha" },
         { kind: "package", android_user_id: 0, package: "com.example.beta" },
-        { kind: "uid", uid: 10123 },
       ],
     });
     expect(source.applications.targets).toEqual([{ kind: "uid", uid: 10123 }]);
@@ -65,7 +64,6 @@ describe("application policy document", () => {
       targets: [
         { kind: "package", android_user_id: 0, package: "com.example.alpha" },
         { kind: "package", android_user_id: 0, package: "com.example.beta" },
-        { kind: "uid", uid: 10123 },
       ],
     });
   });

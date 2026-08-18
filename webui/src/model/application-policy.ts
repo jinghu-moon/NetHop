@@ -64,7 +64,7 @@ export function buildApplicationPolicyDocument(
   packages: ReadonlySet<string>,
 ): Record<string, unknown> {
   const result = structuredClone(document) as Record<string, unknown>;
-  const preservedTargets = mode === "all" ? [] : targets(document).filter((item) => item.kind === "uid" || item.android_user_id !== 0);
+  const preservedTargets = mode === "all" ? [] : targets(document).filter((item) => item.kind === "package" && item.android_user_id !== 0);
   const packageTargets: PackageTarget[] = mode === "all" ? [] : [...packages]
     .sort((left, right) => left.localeCompare(right))
     .map((packageName) => ({ kind: "package", android_user_id: 0, package: packageName }));

@@ -1,94 +1,96 @@
 package com.jinghumoon.nethop.companion.control
 
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.test.assertEquals
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 class RootCommandExecutorTest {
     @Test
     fun mapsSuccessFailureAndOutputLimit() = runBlocking {
-        val success = RootCommandExecutor { FakeProcess("ok", "", 0) }.execute(RootOperation.StatusGet)
+        val success = executor(RootJobResult(0, "ok".encodeToByteArray(), byteArrayOf()))
+            .execute(RootOperation.StatusGet)
         assertTrue(success is CommandResult.Success)
         assertContentEquals("ok".encodeToByteArray(), success.stdout)
         assertContentEquals(byteArrayOf(), success.stderr)
 
-        val failure = RootCommandExecutor { FakeProcess("", "bad", 9) }.execute(RootOperation.StatusGet)
+        val failure = executor(RootJobResult(9, byteArrayOf(), "bad".encodeToByteArray()))
+            .execute(RootOperation.StatusGet)
         assertTrue(failure is CommandResult.Failure)
         assertEquals("command_failed", failure.code)
         assertContentEquals("bad".encodeToByteArray(), failure.stderr)
 
-        val oversized = RootCommandExecutor { FakeProcess("x".repeat(256 * 1024 + 1), "", 0) }.execute(RootOperation.StatusGet)
+        val oversized = executor(RootJobResult(0, ByteArray(256 * 1024 + 1), byteArrayOf()))
+            .execute(RootOperation.StatusGet)
         assertEquals("command_output_exceeded", (oversized as CommandResult.Failure).code)
     }
 
     @Test
-    fun mapsStartupAndTimeoutFailures() = runBlocking {
-        val unavailable = RootCommandExecutor { error("no root") }.execute(RootOperation.StatusGet)
-        assertTrue(unavailable is CommandResult.Failure)
-        assertEquals("root_unavailable", unavailable.code)
+    fun mapsUnavailableTimeoutAndUnexpectedFailures() = runBlocking {
+        val unavailable = RootCommandExecutor(RootJobRunner { _, _, _, _ -> throw RootShellUnavailableException() })
+            .execute(RootOperation.StatusGet)
+        assertEquals("root_unavailable", (unavailable as CommandResult.Failure).code)
 
-        val process = FakeProcess(blockUntilDestroyed = true)
-        val timeout = RootCommandExecutor { process }.execute(
-            RootOperation.webUi(listOf("status", "--json"), timeoutMillis = 1, mutating = false),
-        )
-        assertTrue(timeout is CommandResult.Failure)
-        assertEquals("command_timeout", timeout.code)
-        assertTrue(process.destroyed)
+        val timeout = RootCommandExecutor(RootJobRunner { _, _, _, _ -> throw RootShellTimeoutException() })
+            .execute(RootOperation.StatusGet)
+        assertEquals("command_timeout", (timeout as CommandResult.Failure).code)
+
+        val failed = RootCommandExecutor(RootJobRunner { _, _, _, _ -> error("broken shell") })
+            .execute(RootOperation.StatusGet)
+        assertEquals("command_failed", (failed as CommandResult.Failure).code)
     }
 
     @Test
-    fun cancellationDestroysOwnedProcessAndClosesStreams() = runBlocking {
-        val process = FakeProcess(blockUntilDestroyed = true)
-        val job = async(Dispatchers.Default) { RootCommandExecutor { process }.execute(RootOperation.StatusGet) }
-        assertTrue(process.started.await(2, TimeUnit.SECONDS))
-        job.cancel()
-        job.join()
-        assertTrue(process.destroyed)
-        assertTrue(process.stdoutClosed)
-        assertTrue(process.stderrClosed)
+    fun reusesOneRunnerAndSerializesConcurrentRootJobs() = runBlocking {
+        val calls = AtomicInteger(0)
+        val active = AtomicInteger(0)
+        val maxActive = AtomicInteger(0)
+        val runner = RootJobRunner { command, _, _, _ ->
+            assertTrue(command.startsWith("'/data/adb/modules/nethop/bin/nethopctl'"))
+            calls.incrementAndGet()
+            val nowActive = active.incrementAndGet()
+            maxActive.accumulateAndGet(nowActive, ::maxOf)
+            Thread.sleep(20)
+            active.decrementAndGet()
+            RootJobResult(0, "{}".encodeToByteArray(), byteArrayOf())
+        }
+        val executor = RootCommandExecutor(runner)
+
+        List(4) { async(Dispatchers.Default) { executor.execute(RootOperation.StatusGet) } }.awaitAll()
+
+        assertEquals(4, calls.get())
+        assertEquals(1, maxActive.get())
     }
-}
 
-private class FakeProcess(
-    stdout: String = "",
-    stderr: String = "",
-    private val code: Int = 0,
-    private val blockUntilDestroyed: Boolean = false,
-) : Process() {
-    val started = CountDownLatch(1)
-    private val completion = CountDownLatch(if (blockUntilDestroyed) 1 else 0)
-    private val stdoutStream = TrackingInputStream(stdout.encodeToByteArray())
-    private val stderrStream = TrackingInputStream(stderr.encodeToByteArray())
-    @Volatile var destroyed = false
-        private set
-    val stdoutClosed get() = stdoutStream.closed
-    val stderrClosed get() = stderrStream.closed
+    @Test
+    fun cancellationInterruptsTheActivePersistentShellJob() = runBlocking {
+        val started = CountDownLatch(1)
+        val interrupted = CountDownLatch(1)
+        val executor = RootCommandExecutor(RootJobRunner { _, _, _, _ ->
+            started.countDown()
+            try {
+                Thread.sleep(TimeUnit.MINUTES.toMillis(1))
+            } catch (failure: InterruptedException) {
+                interrupted.countDown()
+                throw failure
+            }
+            RootJobResult(0, byteArrayOf(), byteArrayOf())
+        })
+        val job = async(Dispatchers.Default) { executor.execute(RootOperation.StatusGet) }
+        assertTrue(started.await(2, TimeUnit.SECONDS))
 
-    override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
-    override fun getInputStream(): InputStream = stdoutStream
-    override fun getErrorStream(): InputStream = stderrStream
-    override fun waitFor(): Int { started.countDown(); completion.await(); return code }
-    override fun waitFor(timeout: Long, unit: TimeUnit): Boolean {
-        started.countDown()
-        return completion.await(timeout, unit)
+        job.cancelAndJoin()
+
+        assertTrue(interrupted.await(2, TimeUnit.SECONDS))
     }
-    override fun exitValue(): Int { check(completion.count == 0L); return code }
-    override fun destroy() { destroyed = true; completion.countDown() }
-    override fun destroyForcibly(): Process { destroy(); return this }
-    override fun isAlive(): Boolean = completion.count > 0L
-}
 
-private class TrackingInputStream(bytes: ByteArray) : ByteArrayInputStream(bytes) {
-    @Volatile var closed = false
-    override fun close() { closed = true; super.close() }
+    private fun executor(result: RootJobResult) = RootCommandExecutor(RootJobRunner { _, _, _, _ -> result })
 }

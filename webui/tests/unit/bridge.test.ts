@@ -9,10 +9,11 @@ import { parseSingleJsonEnvelope } from "@/bridge/json";
 import { createEventSessionId } from "@/bridge/event-process";
 import { buildCommand, EVENT_SESSION_MAX_RUNTIME_SECONDS, NETHOPCTL_PATH, redactCommand, type OperationRequest } from "@/bridge/operations";
 import { readPackages } from "@/bridge/package-adapter";
-import { packageIconSource } from "@/bridge/package-icon";
+import { originalPackageIconSource } from "@/bridge/package-icon";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { validatedQuery } from "@/model/client";
 import { parseConfig, parseNodeList, parseStatus, parseTraffic } from "@/model/dto";
+import { buildNodeOverridePayload, parseNodeOverride } from "@/model/node-editor";
 
 function host(run: (request: OperationRequest) => Promise<ExecResult>, packages: readonly PackageInfo[] = []): HostAdapter {
   const child: HostChild = {
@@ -38,6 +39,14 @@ describe("operation allowlist", () => {
     expect(() => buildCommand({ id: "node.list", query: "x;id" })).toThrow("invalid query");
     expect(() => buildCommand({ id: "connections.get", query: "$(id)" })).toThrow("invalid query");
     expect(() => buildCommand({ id: "webui.payload.append", namespace: "config", handle: "../../etc/passwd", chunk: "AAAA" })).toThrow("invalid payload handle");
+    expect(() => buildCommand({ id: "webui.payload.commit", namespace: "subscription", handle: `p_${"a".repeat(32)}`, operation: "config-mutate" })).toThrow("invalid payload operation");
+    expect(buildCommand({ id: "node.override.get", nodeId: "nh1s-0123456789abcdef" }).args).toEqual([
+      "node", "override", "get", "nh1s-0123456789abcdef", "--json",
+    ]);
+    expect(buildCommand({ id: "node.override.remove", nodeId: "nh1s-0123456789abcdef" }).args).toEqual([
+      "node", "override", "remove", "nh1s-0123456789abcdef", "--json",
+    ]);
+    expect(() => buildCommand({ id: "node.override.get", nodeId: "../../etc/passwd" })).toThrow("invalid node id");
   });
 
   it("redacts every private payload command preview", () => {
@@ -50,11 +59,11 @@ describe("operation allowlist", () => {
 describe("host capability", () => {
   it("uses host-owned package icon transports without exposing Android files", () => {
     const localOrigin = "https://appassets.androidplatform.net";
-    expect(packageIconSource("android", "com.example.app", localOrigin)).toBe(`${localOrigin}/package-icons/com.example.app`);
-    expect(packageIconSource("kernelsu", "com.example.app")).toBe("ksu://icon/com.example.app");
-    expect(packageIconSource("apatch", "com.example.app")).toBe("ksu://icon/com.example.app");
-    expect(packageIconSource("browser", "com.example.app")).toBeUndefined();
-    expect(packageIconSource("android", "com.example/a b", localOrigin)).toBe(`${localOrigin}/package-icons/com.example%2Fa%20b`);
+    expect(originalPackageIconSource("android", "com.example.app", 123, localOrigin)).toBe(`${localOrigin}/package-icons/original/123/com.example.app`);
+    expect(originalPackageIconSource("kernelsu", "com.example.app")).toBe("ksu://icon/com.example.app");
+    expect(originalPackageIconSource("apatch", "com.example.app")).toBe("ksu://icon/com.example.app");
+    expect(originalPackageIconSource("browser", "com.example.app")).toBeUndefined();
+    expect(originalPackageIconSource("android", "com.example/a b", 123, localOrigin)).toBeUndefined();
   });
   it("supports stateful typed mock responses without bypassing command validation", async () => {
     let mode: "single" | "merge" = "single";
@@ -71,6 +80,15 @@ describe("host capability", () => {
     await expect(adapter.run({ id: "subscription.mode.set", mode: "single", expectedDigest: "0".repeat(64) })).rejects.toThrow("single mode requires source id");
   });
 
+  it("accepts JSON larger than the legacy 128 KiB bridge bound", async () => {
+    const adapter = host(async () => ({
+      errno: 0,
+      stderr: "",
+      stdout: JSON.stringify({ version: 6, request_id: "large-json", ok: true, result: { padding: "x".repeat(140_000) } }),
+    }));
+    await expect(runJson(adapter, { id: "status.get" })).resolves.toMatchObject({ errno: 0 });
+  });
+
   it("keeps every overview preview payload valid", async () => {
     const adapter = createAppHost();
     const [status, traffic, config, nodes] = await Promise.all([
@@ -80,9 +98,32 @@ describe("host capability", () => {
       validatedQuery(adapter, { id: "node.list", limit: 128 }, parseNodeList),
     ]);
     expect(status.lastUpdate).toBe("never");
-    expect(traffic.intervalSeconds).toBe(1);
+    expect(traffic.intervalMs).toBe(1_000);
     expect(config.document).toMatchObject({ proxy: { outbound_mode: "rule" } });
     expect(nodes.nodes.find((node) => node.isActive)?.name).toBe("新加坡 · 高速");
+  });
+
+  it("supports the complete node override lifecycle in browser preview", async () => {
+    const adapter = createAppHost();
+    const nodeId = "nh1s-0123456789abcdef";
+    const original = await validatedQuery(adapter, { id: "node.override.get", nodeId }, parseNodeOverride);
+    expect(original).toMatchObject({ nodeId, overridden: false, displayName: "新加坡 · 高速" });
+
+    await uploadPrivatePayload(adapter, "node", "node-override-apply", buildNodeOverridePayload(
+      nodeId,
+      "东京 · 编辑",
+      { ...original.outbound, server: "edited.example.com" },
+    ));
+    const edited = await validatedQuery(adapter, { id: "node.override.get", nodeId }, parseNodeOverride);
+    expect(edited).toMatchObject({ nodeId, overridden: true, displayName: "东京 · 编辑" });
+    expect(edited.outbound.server).toBe("edited.example.com");
+
+    await runJson(adapter, { id: "node.override.remove", nodeId });
+    await expect(validatedQuery(adapter, { id: "node.override.get", nodeId }, parseNodeOverride)).resolves.toMatchObject({
+      nodeId,
+      overridden: false,
+      displayName: "新加坡 · 高速",
+    });
   });
 
   const complete = { exec: () => undefined, spawn: () => undefined, toast: () => undefined };
@@ -113,6 +154,15 @@ describe("bounded JSON bridge", () => {
     await vi.runAllTimersAsync();
     vi.useRealTimers();
   });
+
+  it("surfaces structured daemon failures instead of treating them as success", async () => {
+    const adapter = host(async () => ({
+      errno: 0,
+      stderr: "",
+      stdout: JSON.stringify({ version: 6, request_id: "daemon-error", ok: false, error: { code: "NH-CONFIG-CAPABILITY-UNAVAILABLE", message: "requested service is unavailable" } }),
+    }));
+    await expect(runJson(adapter, { id: "status.get" })).rejects.toMatchObject({ code: "daemon_error", daemonCode: "NH-CONFIG-CAPABILITY-UNAVAILABLE" });
+  });
 });
 
 describe("JSONL decoder", () => {
@@ -140,12 +190,31 @@ describe("private payload and package boundaries", () => {
     const adapter = host(async (request) => {
       requests.push(request);
       const result = request.id === "webui.payload.create" ? { handle: `p_${"b".repeat(32)}` } : { accepted: true };
-      return { errno: 0, stdout: JSON.stringify({ version: 5, request_id: "mock", ok: true, result }), stderr: "" };
+      return { errno: 0, stdout: JSON.stringify({ version: 6, request_id: "mock", ok: true, result }), stderr: "" };
     });
     await uploadPrivatePayload(adapter, "config", "config-apply", "配置".repeat(8_000));
     expect(requests[0]?.id).toBe("webui.payload.create");
     expect(requests.at(-1)?.id).toBe("webui.payload.commit");
     expect(requests.filter((request) => request.id === "webui.payload.append").length).toBeGreaterThan(1);
+  });
+
+  it("keeps node override credentials inside the node private-payload namespace", async () => {
+    const requests: OperationRequest[] = [];
+    const adapter = host(async (request) => {
+      requests.push(request);
+      const result = request.id === "webui.payload.create" ? { handle: `p_${"d".repeat(32)}` } : { accepted: true };
+      return { errno: 0, stdout: JSON.stringify({ version: 6, request_id: "mock", ok: true, result }), stderr: "" };
+    });
+    const payload = JSON.stringify({
+      target: "nh1s-0123456789abcdef",
+      node_override: { display_name: "东京", outbound: { type: "trojan", tag: "proxy", server: "example.com", server_port: 443, password: "secret" } },
+    });
+
+    await uploadPrivatePayload(adapter, "node", "node-override-apply", payload);
+
+    expect(requests[0]).toMatchObject({ id: "webui.payload.create", namespace: "node" });
+    expect(requests.at(-1)).toMatchObject({ id: "webui.payload.commit", namespace: "node", operation: "node-override-apply" });
+    expect(JSON.stringify(requests.at(-1))).not.toContain("secret");
   });
 
   it("removes staging state after append failure", async () => {
@@ -154,7 +223,7 @@ describe("private payload and package boundaries", () => {
       ids.push(request.id);
       if (request.id === "webui.payload.append") throw new Error("fail");
       const result = request.id === "webui.payload.create" ? { handle: `p_${"c".repeat(32)}` } : {};
-      return { errno: 0, stdout: JSON.stringify({ version: 5, request_id: "mock", ok: true, result }), stderr: "" };
+      return { errno: 0, stdout: JSON.stringify({ version: 6, request_id: "mock", ok: true, result }), stderr: "" };
     });
     await expect(uploadPrivatePayload(adapter, "config", "config-apply", "secret")).rejects.toThrow();
     expect(ids.at(-1)).toBe("webui.payload.remove");

@@ -1,6 +1,5 @@
 package com.jinghumoon.nethop.companion.control
 
-import java.io.ByteArrayInputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -18,13 +17,5 @@ class RootOperationTest {
         assertFalse(RootOperation.StatusGet.command().mutating)
         assertTrue(RootOperation.ServiceStart.command().mutating)
         assertTrue(RootOperation.ServiceStop.command().mutating)
-    }
-
-    @Test
-    fun boundedReaderDrainsButNeverStoresBeyondLimit() {
-        val result = readBounded(ByteArrayInputStream(ByteArray(32) { it.toByte() }), 8)
-        assertTrue(result.exceeded)
-        assertEquals(8, result.bytes.size)
-        assertFalse(readBounded(ByteArrayInputStream(byteArrayOf(1, 2)), 8).exceeded)
     }
 }

@@ -6,7 +6,7 @@ import { createAndroidHost } from "./android-host";
 import { createMockHost } from "./mock-host";
 
 const hostKey: InjectionKey<HostAdapter> = Symbol("nethop-host");
-const envelope = (result: unknown): string => JSON.stringify({ version: 5, request_id: "mock", ok: true, result });
+const envelope = (result: unknown): string => JSON.stringify({ version: 6, request_id: "mock", ok: true, result });
 const mockNowSeconds = Math.floor(Date.now() / 1_000);
 
 export function createAppHost(): HostAdapter {
@@ -21,6 +21,16 @@ export function createAppHost(): HostAdapter {
   let mockManualNodeId: string | undefined;
   const autoNodeId = "nh1s-0123456789abcdef";
   const manualNodeId = "nh1s-fedcba9876543210";
+  const originalNodeDocuments: Readonly<Record<string, { readonly displayName: string; readonly outbound: Readonly<Record<string, unknown>> }>> = {
+    [autoNodeId]: { displayName: "新加坡 · 高速", outbound: { type: "vless", tag: "proxy", server: "sg.example.com", server_port: 443, uuid: "11111111-1111-4111-8111-111111111111", tls: { enabled: true } } },
+    [manualNodeId]: { displayName: "东京 · 低延迟", outbound: { type: "trojan", tag: "proxy", server: "jp.example.com", server_port: 443, password: "preview-secret", tls: { enabled: true } } },
+    "nh1s-1111111111111111": { displayName: "洛杉矶 · 备用", outbound: { type: "hysteria2", tag: "proxy", server: "us.example.com", server_port: 443, password: "preview-secret" } },
+    "nh1s-2222222222222222": { displayName: "法兰克福", outbound: { type: "vmess", tag: "proxy", server: "de.example.com", server_port: 443, uuid: "22222222-2222-4222-8222-222222222222" } },
+  };
+  const mockNodeOverrides = new Map<string, { readonly displayName: string; readonly outbound: Readonly<Record<string, unknown>> }>();
+  let mockPayloadNamespace: string | undefined;
+  let mockPayloadBytes: number[] = [];
+  const nodeDocument = (nodeId: string) => mockNodeOverrides.get(nodeId) ?? originalNodeDocuments[nodeId];
   const mockDigest = (): string => mockConfigRevision.toString(16).padStart(64, "0");
   const subscriptionSnapshot = () => ({ mode: mockSubscriptionMode, active_source_ids: mockActiveSourceIds, config_digest: mockDigest(), sources: [
     { id: primaryId, name: "Primary", configured: true, active: mockActiveSourceIds.includes(primaryId), node_count: 48, auto_candidate_count: 48 },
@@ -28,16 +38,16 @@ export function createAppHost(): HostAdapter {
   ] });
   const nodeSelection = () => ({ version: 2, intent: mockManualNodeId ? { mode: "manual", node_id: mockManualNodeId } : { mode: "auto" }, active_terminal: { kind: "node", node_id: mockManualNodeId ?? autoNodeId }, changed_at: mockNowSeconds });
   const nodeSnapshot = () => ({ nodes: [
-    { id: autoNodeId, name: "新加坡 · 高速", protocol: "vless", latency_ms: 42, alive: true, is_requested: mockManualNodeId === autoNodeId, is_active: (mockManualNodeId ?? autoNodeId) === autoNodeId, source_ids: [primaryId], display_territory_code: "SG" },
-    { id: manualNodeId, name: "东京 · 低延迟", protocol: "trojan", latency_ms: null, alive: null, is_requested: mockManualNodeId === manualNodeId, is_active: mockManualNodeId === manualNodeId, source_ids: [primaryId], display_territory_code: "JP" },
-    { id: "nh1s-1111111111111111", name: "洛杉矶 · 备用", protocol: "hysteria2", latency_ms: 31, alive: true, is_requested: false, is_active: false, source_ids: [backupId], display_territory_code: "US" },
-    { id: "nh1s-2222222222222222", name: "法兰克福", protocol: "vmess", latency_ms: 180, alive: true, is_requested: false, is_active: false, source_ids: [backupId], display_territory_code: "DE" },
+    { id: autoNodeId, name: nodeDocument(autoNodeId)!.displayName, protocol: nodeDocument(autoNodeId)!.outbound.type, latency_ms: 42, alive: true, is_requested: mockManualNodeId === autoNodeId, is_active: (mockManualNodeId ?? autoNodeId) === autoNodeId, source_ids: [primaryId], display_territory_code: "SG" },
+    { id: manualNodeId, name: nodeDocument(manualNodeId)!.displayName, protocol: nodeDocument(manualNodeId)!.outbound.type, latency_ms: null, alive: null, is_requested: mockManualNodeId === manualNodeId, is_active: mockManualNodeId === manualNodeId, source_ids: [primaryId], display_territory_code: "JP" },
+    { id: "nh1s-1111111111111111", name: nodeDocument("nh1s-1111111111111111")!.displayName, protocol: nodeDocument("nh1s-1111111111111111")!.outbound.type, latency_ms: 31, alive: true, is_requested: false, is_active: false, source_ids: [backupId], display_territory_code: "US" },
+    { id: "nh1s-2222222222222222", name: nodeDocument("nh1s-2222222222222222")!.displayName, protocol: nodeDocument("nh1s-2222222222222222")!.outbound.type, latency_ms: 180, alive: true, is_requested: false, is_active: false, source_ids: [backupId], display_territory_code: "DE" },
   ], selection: nodeSelection() });
   return createMockHost({ responses: {
-    hello: { errno: 0, stdout: envelope({ manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 5, daemon_protocol_max: 5, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: ["subscription_selection_v3", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1"] }), stderr: "" },
+    hello: { errno: 0, stdout: envelope({ manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 6, daemon_protocol_max: 6, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: ["subscription_selection_v3", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1", "webui_icon_v1"] }), stderr: "" },
     "status.get": { errno: 0, stdout: envelope({ schema_version: 2, state: "fail_open_direct", generation: null, last_update: "never", service: { configured_enabled: true, effective_enabled: true, override: null }, diagnostic_code: "fail_open_direct", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} }), stderr: "" },
-    "traffic.get": { errno: 0, stdout: envelope({ kind: "traffic", sample: { up: 0, down: 0 }, interval_seconds: 1 }), stderr: "" },
-    "metrics.get": { errno: 0, stdout: envelope({ schema_version: 1, runtime_state: "running_tproxy", generation: 1, uptime_seconds: 3600, core: { pid: 123, cpu_percent: 1.2, memory_rss_bytes: 33554432 }, traffic: { upload_bytes: 1024, download_bytes: 2048 }, outbound: { interface: "wlan0", local_address: "192.0.2.2", public_ip: null } }), stderr: "" },
+    "traffic.get": { errno: 0, stdout: envelope({ kind: "traffic", state: "ok", sample: { up_bps: 0, down_bps: 0 }, observed_at_unix_ms: mockNowSeconds * 1_000, interval_ms: 1_000 }), stderr: "" },
+    "metrics.get": { errno: 0, stdout: envelope({ schema_version: 2, runtime_state: "running_tproxy", generation: 1, uptime_seconds: 3600, core: { pid: 123, cpu_percent: 1.2, memory_rss_bytes: 33554432 }, traffic: { upload_bytes: 1024, download_bytes: 2048 }, outbound: { interface: "wlan0", local_address: "192.0.2.2", public_ip: null } }), stderr: "" },
     "subscription.list": { errno: 0, stdout: envelope({ subscriptions: [
       { id: "src_11111111111111111111111111111111", name: "Primary", configured: true, active: true, url_redacted: "[REDACTED]" },
       { id: "src_22222222222222222222222222222222", name: "Backup", configured: true, active: false, url_redacted: "[REDACTED]" },
@@ -92,6 +102,17 @@ export function createAppHost(): HostAdapter {
       mockManualNodeId = request.nodeId;
       return { errno: 0, stdout: envelope(nodeSelection()), stderr: "" };
     },
+    "node.override.get": (request) => {
+      if (request.id !== "node.override.get") throw new Error("invalid mock operation");
+      const document = nodeDocument(request.nodeId);
+      if (!document) throw new Error("node is not active");
+      return { errno: 0, stdout: envelope({ node_id: request.nodeId, overridden: mockNodeOverrides.has(request.nodeId), display_name: document.displayName, outbound: document.outbound }), stderr: "" };
+    },
+    "node.override.remove": (request) => {
+      if (request.id !== "node.override.remove") throw new Error("invalid mock operation");
+      const changed = mockNodeOverrides.delete(request.nodeId);
+      return { errno: 0, stdout: envelope({ accepted: true, changed, completed: true }), stderr: "" };
+    },
     "node.test-all": () => ({ errno: 0, stdout: envelope({ operation_id: `bench_${"1".repeat(29)}`, phase: "completed", report: { status: "success", trigger: "manual", generation: 1, bootstrap_ms: 1, elapsed_ms: 100, timing: { thread_spawn_us: 100, runtime_init_us: 900, candidate_dispatch_us: 200, probe_us: 98_000, result_assembly_us: 300, total_us: 100_000 }, probe: { first_result_us: 40_000, last_result_us: 70_000, last_success_us: 70_000, completed_within_500ms: 4, completed_within_1s: 4, completed_within_2s: 4, completed_within_3s: 4, completed_before_cutoff: 4, cutoff_pending: 0, cutoff_tail_us: 0 }, tested: 4, succeeded: 4, timed_out: 0, failed: 0, nodes: [
       { node_id: "nh1s-0123456789abcdef", state: "success", latency_ms: 64, request_elapsed_us: 39_000, completed_at_us: 40_000 },
       { node_id: "nh1s-fedcba9876543210", state: "success", latency_ms: 91, request_elapsed_us: 49_000, completed_at_us: 50_000 },
@@ -103,10 +124,33 @@ export function createAppHost(): HostAdapter {
     "topology.get": { errno: 0, stdout: envelope({ capture_mode: "mock", ipv4: "direct", ipv6: "direct" }), stderr: "" },
     "ruleset.status": { errno: 0, stdout: envelope({ state: "current" }), stderr: "" },
     "core.version-check": { errno: 0, stdout: envelope({ current_version: "1.13.15" }), stderr: "" },
-    "webui.payload.create": { errno: 0, stdout: envelope({ handle: "p_11111111111111111111111111111111" }), stderr: "" },
-    "webui.payload.append": { errno: 0, stdout: envelope({ accepted: true }), stderr: "" },
-    "webui.payload.commit": { errno: 0, stdout: envelope({ accepted: true, changed: true, completed: true, observed_config_digest: "1".repeat(64) }), stderr: "" },
-    "webui.payload.remove": { errno: 0, stdout: envelope({ removed: true }), stderr: "" },
+    "webui.payload.create": (request) => {
+      if (request.id !== "webui.payload.create") throw new Error("invalid mock operation");
+      mockPayloadNamespace = request.namespace;
+      mockPayloadBytes = [];
+      return { errno: 0, stdout: envelope({ handle: "p_11111111111111111111111111111111" }), stderr: "" };
+    },
+    "webui.payload.append": (request) => {
+      if (request.id !== "webui.payload.append" || request.namespace !== mockPayloadNamespace) throw new Error("invalid mock payload");
+      for (const character of atob(request.chunk)) mockPayloadBytes.push(character.charCodeAt(0));
+      return { errno: 0, stdout: envelope({ accepted: true }), stderr: "" };
+    },
+    "webui.payload.commit": (request) => {
+      if (request.id !== "webui.payload.commit" || request.namespace !== mockPayloadNamespace) throw new Error("invalid mock payload");
+      if (request.namespace === "node" && request.operation === "node-override-apply") {
+        const payload = JSON.parse(new TextDecoder().decode(Uint8Array.from(mockPayloadBytes))) as { target?: unknown; node_override?: { display_name?: unknown; outbound?: unknown } };
+        if (typeof payload.target !== "string" || !nodeDocument(payload.target) || typeof payload.node_override?.display_name !== "string" || !payload.node_override.outbound || typeof payload.node_override.outbound !== "object" || Array.isArray(payload.node_override.outbound)) throw new Error("invalid node override payload");
+        mockNodeOverrides.set(payload.target, { displayName: payload.node_override.display_name, outbound: payload.node_override.outbound as Readonly<Record<string, unknown>> });
+      }
+      mockPayloadNamespace = undefined;
+      mockPayloadBytes = [];
+      return { errno: 0, stdout: envelope({ accepted: true, changed: true, completed: true, observed_config_digest: "1".repeat(64) }), stderr: "" };
+    },
+    "webui.payload.remove": () => {
+      mockPayloadNamespace = undefined;
+      mockPayloadBytes = [];
+      return { errno: 0, stdout: envelope({ removed: true }), stderr: "" };
+    },
   }, packages: [
     { packageName: "tv.danmaku.bili", versionName: "8.68.0", versionCode: 8680000, appLabel: "哔哩哔哩", isSystem: false, uid: 10123, lastUpdateTimeMs: 2_000_000_000_000, storageBytes: 640_000_000, lastUsedTimeMs: 2_000_000_300_000 },
     { packageName: "com.google.android.youtube", versionName: "21.30", versionCode: 2130000, appLabel: "YouTube", isSystem: false, uid: 10124, lastUpdateTimeMs: 2_000_000_100_000, storageBytes: 920_000_000, lastUsedTimeMs: 2_000_000_200_000 },

@@ -9,8 +9,8 @@ import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.jinghumoon.nethop.companion.control.CommandResult
-import com.jinghumoon.nethop.companion.control.RootCommandExecutor
-import com.jinghumoon.nethop.companion.packages.AndroidPackageAdapter
+import com.jinghumoon.nethop.companion.control.CommandExecutor
+import com.jinghumoon.nethop.companion.packages.AndroidPackageRepository
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -69,11 +69,11 @@ internal object BridgeRequestPolicy {
 class AndroidWebUiBridge private constructor(
     private val activity: Activity,
     private val webView: WebView,
+    private val packages: AndroidPackageRepository,
+    private val executor: CommandExecutor,
 ) : AutoCloseable {
     private val closed = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val executor = RootCommandExecutor()
-    private val packages = AndroidPackageAdapter(activity)
     private val children = ConcurrentHashMap<String, EventProcess>()
     private val json = Json { ignoreUnknownKeys = false; explicitNulls = false }
 
@@ -214,9 +214,14 @@ class AndroidWebUiBridge private constructor(
         private val REQUEST_ID = Regex("^a_[a-f0-9]{32}$")
         private val CLEANUP_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-        fun attach(activity: Activity, webView: WebView): AndroidWebUiBridge? {
+        fun attach(
+            activity: Activity,
+            webView: WebView,
+            repository: AndroidPackageRepository,
+            executor: CommandExecutor,
+        ): AndroidWebUiBridge? {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return null
-            val bridge = AndroidWebUiBridge(activity, webView)
+            val bridge = AndroidWebUiBridge(activity, webView, repository, executor)
             WebViewCompat.addWebMessageListener(
                 webView,
                 BRIDGE_NAME,

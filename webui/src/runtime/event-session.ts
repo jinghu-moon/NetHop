@@ -64,7 +64,8 @@ export class EventSession {
     try {
       const hello = await validatedQuery(this.options.host, { id: "hello", managerVersion: this.options.managerVersion }, parseHello);
       if (epoch !== this.connectionEpoch || !this.active || !this.visible || this.manualStop) return;
-      if (!hello.compatible || hello.daemonProtocolMin !== PROTOCOL_VERSION || hello.daemonProtocolMax !== PROTOCOL_VERSION) {
+      const legacyProtocol = hello.daemonProtocolMin === 5 && hello.daemonProtocolMax === 5;
+      if (!hello.compatible || (!legacyProtocol && (hello.daemonProtocolMin !== PROTOCOL_VERSION || hello.daemonProtocolMax !== PROTOCOL_VERSION))) {
         this.connecting = false;
         this.active = false;
         this.status = "incompatible";

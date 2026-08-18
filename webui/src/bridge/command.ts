@@ -1,9 +1,13 @@
 import type { ExecResult, HostAdapter } from "./host";
-import { buildCommand, type OperationRequest } from "./operations";
+import { buildCommand, MAX_JSON_BYTES, type OperationRequest } from "./operations";
 import { parseSingleJsonEnvelope } from "./json";
 
 export class BridgeError extends Error {
-  constructor(readonly code: "timeout" | "host_error" | "nonzero" | "invalid_json" | "limit", message: string) { super(message); }
+  constructor(
+    readonly code: "timeout" | "host_error" | "nonzero" | "invalid_json" | "limit" | "daemon_error",
+    message: string,
+    readonly daemonCode?: string,
+  ) { super(message); }
 }
 
 export interface BoundedResult {
@@ -12,11 +16,24 @@ export interface BoundedResult {
   readonly errno: number;
 }
 
-const MAX_OUTPUT_BYTES = 128 * 1024;
+const MAX_OUTPUT_BYTES = MAX_JSON_BYTES;
 
 function bounded(value: string): string {
   if (new TextEncoder().encode(value).byteLength > MAX_OUTPUT_BYTES) throw new BridgeError("limit", "command output exceeded bound");
   return value;
+}
+
+function daemonFailure(response: unknown): BridgeError | undefined {
+  if (!response || typeof response !== "object" || Array.isArray(response) || (response as { ok?: unknown }).ok !== false) return undefined;
+  const error = (response as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return new BridgeError("daemon_error", "daemon operation failed");
+  const code = (error as { code?: unknown }).code;
+  const message = (error as { message?: unknown }).message;
+  return new BridgeError(
+    "daemon_error",
+    typeof message === "string" && message.length > 0 ? message : "daemon operation failed",
+    typeof code === "string" ? code : undefined,
+  );
 }
 
 export async function runJson(host: HostAdapter, request: OperationRequest): Promise<BoundedResult> {
@@ -31,7 +48,10 @@ export async function runJson(host: HostAdapter, request: OperationRequest): Pro
     bounded(result.stderr);
     if (timedOut) throw new BridgeError("timeout", "operation timed out");
     if (result.errno !== 0) throw new BridgeError("nonzero", "operation failed");
-    return { response: parseSingleJsonEnvelope(result.stdout), stderr: result.stderr, errno: result.errno };
+    const response = parseSingleJsonEnvelope(result.stdout);
+    const failure = daemonFailure(response);
+    if (failure) throw failure;
+    return { response, stderr: result.stderr, errno: result.errno };
   } catch (error) {
     if (error instanceof BridgeError) throw error;
     throw new BridgeError("host_error", "host operation failed");

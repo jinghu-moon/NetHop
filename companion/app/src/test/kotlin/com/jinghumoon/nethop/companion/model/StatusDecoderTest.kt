@@ -29,6 +29,6 @@ class StatusDecoderTest {
             effective: Boolean = true,
             override: String = "null",
             diagnostic: String = "null",
-        ) = """{"version":5,"request_id":"tile","ok":true,"result":{"schema_version":2,"state":"$state","generation":1,"last_update":"succeeded","service":{"configured_enabled":$configured,"effective_enabled":$effective,"override":$override},"diagnostic_code":$diagnostic,"watcher_health":{},"runtime":{},"subscription":{},"core_update":{},"rule_set":{},"dns_split":{},"capture":{},"operational":{}}}"""
+        ) = """{"version":6,"request_id":"tile","ok":true,"result":{"schema_version":2,"state":"$state","generation":1,"last_update":"succeeded","service":{"configured_enabled":$configured,"effective_enabled":$effective,"override":$override},"diagnostic_code":$diagnostic,"watcher_health":{},"runtime":{},"subscription":{},"core_update":{},"rule_set":{},"dns_split":{},"capture":{},"operational":{}}}"""
     }
 }

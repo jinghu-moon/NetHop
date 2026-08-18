@@ -11,9 +11,9 @@ export class TrafficRing {
     if (!Number.isInteger(capacity) || capacity < 1 || capacity > 3600) throw new Error("invalid traffic ring capacity");
     this.values = new Array<TrafficPoint | undefined>(capacity);
   }
-  push(sample: TrafficDto, timestampMs: number): void {
-    if (!Number.isSafeInteger(timestampMs) || timestampMs < 0) throw new Error("invalid traffic timestamp");
-    const timestamp = Math.max(timestampMs, this.lastTimestamp + (this.length > 0 ? 1 : 0));
+  push(sample: TrafficDto): void {
+    if (!Number.isSafeInteger(sample.observedAtMs) || sample.observedAtMs < 0) throw new Error("invalid traffic timestamp");
+    const timestamp = Math.max(sample.observedAtMs, this.lastTimestamp + (this.length > 0 ? 1 : 0));
     this.lastTimestamp = timestamp;
     this.values[this.cursor] = Object.freeze({ ...sample, timestampMs: timestamp });
     this.cursor = (this.cursor + 1) % this.capacity;

@@ -1,9 +1,9 @@
 package com.jinghumoon.nethop.companion
 
+import android.graphics.drawable.Icon
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import com.jinghumoon.nethop.companion.control.RootCommandExecutor
-import com.jinghumoon.nethop.companion.model.StatusDecoder
+import com.jinghumoon.nethop.companion.tile.TileIconMapper
 import com.jinghumoon.nethop.companion.tile.TileOperationCoordinator
 import com.jinghumoon.nethop.companion.tile.TilePresentation
 import com.jinghumoon.nethop.companion.tile.TileVisualState
@@ -16,7 +16,9 @@ import kotlinx.coroutines.launch
 
 class NetHopTileService : TileService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val coordinator = TileOperationCoordinator(RootCommandExecutor(), StatusDecoder())
+    private val coordinator by lazy(LazyThreadSafetyMode.NONE) {
+        companionServices.createTileCoordinator()
+    }
     private var refreshJob: Job? = null
     private var clickJob: Job? = null
 
@@ -60,6 +62,7 @@ class NetHopTileService : TileService() {
             TileVisualState.INACTIVE -> Tile.STATE_INACTIVE
             TileVisualState.UNAVAILABLE -> Tile.STATE_UNAVAILABLE
         }
+        tile.icon = Icon.createWithResource(this, TileIconMapper.resourceFor(presentation.state))
         tile.label = getString(R.string.app_name)
         tile.subtitle = presentation.subtitle
         tile.contentDescription = "${tile.label}, ${tile.subtitle}"

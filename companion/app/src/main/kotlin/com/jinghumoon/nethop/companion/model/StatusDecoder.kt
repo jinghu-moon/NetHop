@@ -106,7 +106,7 @@ class StatusDecoder(
         val envelope = runCatching {
             json.decodeFromString<ControlEnvelope<StatusDocument>>(bytes.decodeToString())
         }.getOrElse { return StatusDecodeResult.Failure("status_json_invalid") }
-        if (envelope.version != 5 || !envelope.ok || envelope.requestId.isBlank()) {
+        if (envelope.version !in setOf(5, 6) || !envelope.ok || envelope.requestId.isBlank()) {
             return StatusDecodeResult.Failure("status_envelope_invalid")
         }
         if (envelope.result.schemaVersion != 2) {

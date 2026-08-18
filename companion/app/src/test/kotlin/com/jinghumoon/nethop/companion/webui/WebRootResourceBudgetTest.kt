@@ -15,4 +15,21 @@ class WebRootResourceBudgetTest {
         budget.releaseStream()
         assertFalse(budget.acquire(1))
     }
+
+    @Test
+    fun defaultBudgetSupportsLazyRouteDependencyBurst() {
+        val burstSize = 32
+        val budget = WebRootResourceBudget(
+            maxRequests = burstSize,
+            maxConcurrentStreams = DEFAULT_MAX_CONCURRENT_WEBROOT_STREAMS,
+            maxTotalBytes = burstSize.toLong(),
+        )
+
+        repeat(burstSize) {
+            assertTrue(budget.acquire(1))
+        }
+        repeat(burstSize) {
+            budget.releaseStream()
+        }
+    }
 }

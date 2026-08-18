@@ -10,6 +10,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
+internal const val DEFAULT_MAX_CONCURRENT_WEBROOT_STREAMS = 64
+
 internal class WebRootResourceBudget(
     private val maxRequests: Int,
     private val maxConcurrentStreams: Int,
@@ -42,7 +44,7 @@ internal class WebRootResourceBudget(
 
 class RootWebRootPathHandler(
     private val session: RootShellSession,
-    private val maxConcurrentStreams: Int = 16,
+    private val maxConcurrentStreams: Int = DEFAULT_MAX_CONCURRENT_WEBROOT_STREAMS,
     maxRequests: Int = 2_048,
     maxTotalBytes: Long = 128L * 1024 * 1024,
 ) : WebViewAssetLoader.PathHandler, AutoCloseable {
@@ -71,7 +73,7 @@ class RootWebRootPathHandler(
             charset,
             200,
             "OK",
-            mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"),
+            WebRootCachePolicy.responseHeaders(asset),
             tracked,
         )
     }

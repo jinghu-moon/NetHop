@@ -43,7 +43,7 @@ export function createMockHost(script: MockHostScript = {}): HostAdapter {
       const response = responses[request.id];
       await new Promise((resolve) => setTimeout(resolve, script.latencyMs ?? 0));
       if (typeof response === "function") return response(request);
-      return response ?? { errno: 0, stdout: JSON.stringify({ version: 5, request_id: "mock", ok: true, result: {} }), stderr: "" };
+      return response ?? { errno: 0, stdout: JSON.stringify({ version: 6, request_id: "mock", ok: true, result: {} }), stderr: "" };
     },
     spawn(request) {
       buildCommand(request);

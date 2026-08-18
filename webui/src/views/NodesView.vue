@@ -1,32 +1,39 @@
 <script setup lang="ts">
-import { computed, h, nextTick, onActivated, ref } from "vue";
-import { IconBolt, IconCopy, IconDotsVertical, IconRefresh, IconTrash, IconX } from "@tabler/icons-vue";
-import { ActionSheet as TActionSheet, Button as TButton, PullDownRefresh as TPullDownRefresh } from "tdesign-mobile-vue";
+import { computed, onActivated, ref } from "vue";
+import { IconBolt } from "@tabler/icons-vue";
+import { Button as TButton, Input as TInput, Popup as TPopup, PullDownRefresh as TPullDownRefresh, Textarea as TTextarea } from "tdesign-mobile-vue";
 import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
 import ActiveNodeSummary from "@/components/nodes/ActiveNodeSummary.vue";
+import NodeActionsDropdown from "@/components/nodes/NodeActionsDropdown.vue";
 import NodeCard from "@/components/nodes/NodeCard.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
 import PageState from "@/components/PageState.vue";
 import { useHost } from "@/bridge/context";
 import { runJson } from "@/bridge/command";
+import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { validatedQuery } from "@/model/client";
 import { parseControlEnvelope, parseNodeBenchmarkResult, parseNodeList, parseNodeSelection, parseSubscriptionSnapshot, type NodeDto } from "@/model/dto";
 import { uiStores } from "@/runtime/store";
 import { createActionLock, createOperationStore } from "@/runtime/operation";
 import { activeNodeId, activeNodeView, parseNodeSort, sortNodes, type NodeSort } from "@/model/node-view";
+import { buildNodeOverridePayload, parseNodeOutbound, parseNodeOverride, serializeNodeOutbound } from "@/model/node-editor";
 import { useUiPreference } from "@/runtime/storage";
-import { useBackDismiss } from "@/shell/useBackDispatcher";
 
-type PageAction = "refresh" | "sort-default" | "sort-name" | "sort-latency-asc" | "sort-latency-desc" | "clear-delay" | "export" | "exclude";
 type NodeListItem = { readonly kind: "heading"; readonly id: string; readonly label: string; readonly count: number } | { readonly kind: "row"; readonly id: string; readonly nodes: readonly NodeDto[] };
 
 const host = useHost();
 const loading = ref(false);
 const error = ref("");
 const pendingExclude = ref<NodeDto>();
-const actionSheetOpen = ref(false);
-const queuedAction = ref<PageAction>();
+const editorOpen = ref(false);
+const editorLoading = ref(false);
+const editorSaving = ref(false);
+const editorNode = ref<NodeDto>();
+const editorName = ref("");
+const editorOutbound = ref("");
+const editorError = ref("");
+const editorOverridden = ref(false);
 const lock = createActionLock();
 const operations = createOperationStore();
 const refreshing = ref(false);
@@ -66,18 +73,9 @@ const nodeItems = computed<readonly NodeListItem[]>(() => {
   return items;
 });
 const selectedNode = computed(() => allNodes.value.find((node) => node.isRequested) ?? allNodes.value.find((node) => node.isActive));
+const hasDelayResults = computed(() => allNodes.value.some((node) => node.latencyMs !== undefined));
 const testOperation = computed(() => operations.byId["node-test-all"]);
 const testingAll = computed(() => testOperation.value?.phase === "accepted" || testOperation.value?.phase === "running");
-const actionItems = computed(() => [
-  { label: "刷新节点列表", icon: () => h(IconRefresh, { size: 20 }) },
-  { label: "默认排序", disabled: nodeSort.value === "default" },
-  { label: "按名称排序", disabled: nodeSort.value === "name" },
-  { label: "延迟：低到高", disabled: nodeSort.value === "latency-asc" },
-  { label: "延迟：高到低", disabled: nodeSort.value === "latency-desc" },
-  { label: "清除测速结果", icon: () => h(IconX, { size: 20 }), disabled: allNodes.value.every((node) => node.latencyMs === undefined) },
-  { label: "导出当前节点", icon: () => h(IconCopy, { size: 20 }), disabled: !selectedNode.value },
-  { label: "排除当前节点", icon: () => h(IconTrash, { size: 20 }), color: "var(--nh-danger)", disabled: !selectedNode.value },
-]);
 
 async function load(): Promise<void> {
   if (loading.value) return;
@@ -135,6 +133,45 @@ async function exportNode(node: NodeDto): Promise<void> {
   const envelope = response.response as { result?: unknown };
   if (envelope.result !== undefined) await navigator.clipboard.writeText(typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result));
 }
+async function openNodeEditor(): Promise<void> {
+  const node = selectedNode.value; if (!node) return;
+  editorNode.value = node; editorOpen.value = true; editorLoading.value = true; editorError.value = "";
+  try {
+    const value = await validatedQuery(host, { id: "node.override.get", nodeId: node.id }, parseNodeOverride);
+    editorName.value = value.displayName;
+    editorOutbound.value = serializeNodeOutbound(value.outbound);
+    editorOverridden.value = value.overridden;
+  } catch { editorError.value = "节点编辑数据加载失败"; }
+  finally { editorLoading.value = false; }
+}
+async function saveNodeEditor(): Promise<void> {
+  const node = editorNode.value; if (!node || editorSaving.value) return;
+  editorError.value = "";
+  let outbound: Readonly<Record<string, unknown>>;
+  try { outbound = parseNodeOutbound(editorOutbound.value); }
+  catch (cause) { editorError.value = cause instanceof Error ? cause.message : "节点 outbound 无效"; return; }
+  editorSaving.value = true;
+  try {
+    await uploadPrivatePayload(host, "node", "node-override-apply", buildNodeOverridePayload(node.id, editorName.value, outbound));
+    editorOpen.value = false;
+    await load();
+  } catch { editorError.value = "节点保存失败，当前运行配置保持不变"; }
+  finally { editorSaving.value = false; }
+}
+async function restoreNodeEditor(): Promise<void> {
+  const node = editorNode.value; if (!node || !editorOverridden.value || editorSaving.value) return;
+  editorSaving.value = true; editorError.value = "";
+  try {
+    await runJson(host, { id: "node.override.remove", nodeId: node.id });
+    editorOpen.value = false;
+    await load();
+  } catch { editorError.value = "恢复订阅原值失败"; }
+  finally { editorSaving.value = false; }
+}
+function closeNodeEditor(): void {
+  if (editorSaving.value) return;
+  editorOpen.value = false; editorNode.value = undefined; editorError.value = "";
+}
 function clearDelays(): void {
   uiStores.runtime.clearNodeProbeStates();
   for (const node of allNodes.value) {
@@ -142,23 +179,16 @@ function clearDelays(): void {
     uiStores.runtime.upsertNode(withoutLatency);
   }
 }
-function selectAction(_selected: unknown, actionIndex: number): void {
-  queuedAction.value = (["refresh", "sort-default", "sort-name", "sort-latency-asc", "sort-latency-desc", "clear-delay", "export", "exclude"] as const)[actionIndex];
+function changeSort(value: NodeSort): void {
+  sortPreference.value = value;
 }
-function finishActionSheet(): void {
-  const action = queuedAction.value;
-  queuedAction.value = undefined;
-  if (!action) return;
-  void nextTick().then(async () => {
-    if (action === "refresh") await load();
-    else if (action.startsWith("sort-")) sortPreference.value = action.slice(5) as NodeSort;
-    else if (action === "clear-delay") clearDelays();
-    else if (action === "export" && selectedNode.value) await exportNode(selectedNode.value);
-    else if (action === "exclude" && selectedNode.value) pendingExclude.value = selectedNode.value;
-  });
+function exportSelectedNode(): void {
+  if (selectedNode.value) void exportNode(selectedNode.value);
+}
+function requestExcludeSelectedNode(): void {
+  pendingExclude.value = selectedNode.value;
 }
 onActivated(() => { void load(); });
-useBackDismiss(() => actionSheetOpen.value, () => { actionSheetOpen.value = false; });
 </script>
 
 <template>
@@ -167,7 +197,17 @@ useBackDismiss(() => actionSheetOpen.value, () => { actionSheetOpen.value = fals
       <div><span class="eyebrow">OUTBOUNDS</span><h2>节点</h2><p>{{ allNodes.length }} 个可用节点</p></div>
       <div class="heading-actions">
         <TButton size="small" shape="square" theme="primary" title="测试全部节点" :loading="testingAll" :disabled="testingAll || allNodes.length === 0" @click="testAllNodes"><IconBolt :size="18" /></TButton>
-        <TButton size="small" shape="square" variant="outline" theme="default" title="更多操作" @click="actionSheetOpen = true"><IconDotsVertical :size="19" /></TButton>
+        <NodeActionsDropdown
+          :sort="nodeSort"
+          :has-delay-results="hasDelayResults"
+          :has-selected-node="Boolean(selectedNode)"
+          @refresh="load"
+          @sort-change="changeSort"
+          @clear-delays="clearDelays"
+          @export="exportSelectedNode"
+          @edit="openNodeEditor"
+          @exclude="requestExcludeSelectedNode"
+        />
       </div>
     </div>
     <OperationBanner v-if="testOperation" :phase="testOperation.phase" :message="testOperation.message ?? ''" @dismiss="operations.clear('node-test-all')" />
@@ -192,7 +232,22 @@ useBackDismiss(() => actionSheetOpen.value, () => { actionSheetOpen.value = fals
       </template>
     </VirtualListViewport>
     </TPullDownRefresh>
-    <TActionSheet v-model="actionSheetOpen" class="node-actions-sheet" theme="list" align="left" show-cancel cancel-text="取消" description="节点操作" :items="actionItems" @selected="selectAction" @close="finishActionSheet" />
+    <TPopup v-model="editorOpen" placement="bottom" :duration="160" destroy-on-close @visible-change="(visible) => { if (!visible) closeNodeEditor(); }">
+      <div class="subscription-editor node-editor">
+        <div class="editor-heading"><h3>编辑节点</h3><span>保存后由 daemon 校验并事务化发布</span></div>
+        <PageState v-if="editorLoading" kind="loading" title="正在读取节点" />
+        <template v-else>
+          <TInput v-model="editorName" label="显示名称" :maxlength="128" />
+          <TTextarea v-model="editorOutbound" label="终端 outbound JSON" :maxlength="65536" :autosize="{ minRows: 12, maxRows: 24 }" />
+          <span v-if="editorError" class="form-error">{{ editorError }}</span>
+          <div class="editor-actions">
+            <TButton v-if="editorOverridden" variant="outline" theme="danger" :disabled="editorSaving" @click="restoreNodeEditor">恢复订阅原值</TButton>
+            <TButton variant="outline" :disabled="editorSaving" @click="closeNodeEditor">取消</TButton>
+            <TButton theme="primary" :loading="editorSaving" @click="saveNodeEditor">保存</TButton>
+          </div>
+        </template>
+      </div>
+    </TPopup>
     <ConfirmDialog :visible="Boolean(pendingExclude)" title="排除节点" :description="`排除“${pendingExclude?.name ?? ''}”后，后续订阅更新也不会重新加入该节点。`" confirm-label="排除" @update:visible="(value) => { if (!value) pendingExclude = undefined; }" @confirm="excludeNode" />
   </section>
 </template>

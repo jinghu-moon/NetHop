@@ -14,7 +14,7 @@ object TrustedWebOrigin {
 
     fun isPackageIcon(url: Uri): Boolean =
         url.scheme == "https" && url.host == "appassets.androidplatform.net" && url.port == -1 &&
-            url.path?.startsWith("/package-icons/") == true && url.query == null && url.fragment == null
+            url.path?.startsWith("/package-icons/original/") == true && url.query == null && url.fragment == null
 
     fun isTrustedResource(url: Uri): Boolean = isLocal(url) || isPackageIcon(url)
 

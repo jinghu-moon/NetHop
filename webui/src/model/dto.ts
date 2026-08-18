@@ -4,7 +4,7 @@ import { territoryCodes, type TerritoryCode } from "@/generated/territories";
 export const RUNTIME_STATES = ["init", "probing", "starting_core", "running_tproxy", "starting_tun", "running_tun", "degraded", "fail_open_direct", "backoff", "circuit_open", "stopping"] as const;
 export const EVENT_KINDS = ["snapshot", "config", "runtime", "subscription", "generation", "network", "traffic", "subscription_mode", "subscription_active_set", "node_selection", "node_active", "node_test", "resync_required", "operation"] as const;
 
-export interface ControlEnvelope<T> { readonly version: 5; readonly requestId: string; readonly generation?: number; readonly result: T }
+export interface ControlEnvelope<T> { readonly version: 6; readonly requestId: string; readonly generation?: number; readonly result: T }
 export interface HelloDto { readonly compatible: boolean; readonly daemonProtocolMin: number; readonly daemonProtocolMax: number; readonly supportedOperations: readonly string[]; readonly supportedFeatures: readonly string[] }
 export type ServiceOverrideDto = "wifi_scene";
 export type StatusDiagnosticCodeDto = "config_unavailable" | "fail_open_direct" | "runtime_degraded" | "runtime_backoff" | "runtime_circuit_open";
@@ -31,7 +31,20 @@ export interface SourceStatusDto {
   readonly usingLastKnownGood: boolean;
   readonly diagnosticCode?: string;
 }
-export interface ConfigDto { readonly observedConfigDigest: string; readonly activeConfigDigest: string; readonly candidateSequence: number; readonly document: Readonly<Record<string, unknown>>; readonly sourceStatus: readonly SourceStatusDto[] }
+export interface SourceUpdateHistoryDto {
+  readonly sourceId: string;
+  readonly attemptedAtWallSeconds: number;
+  readonly health: Exclude<SubscriptionHealth, "never">;
+  readonly generation?: number;
+  readonly accepted: number;
+  readonly duplicate: number;
+  readonly rejected: number;
+  readonly warnings: number;
+  readonly usingLastKnownGood: boolean;
+  readonly diagnosticCode?: string;
+}
+export interface ApplicationRuntimeSyncDto { readonly state: "synced" | "pending" | "failed"; readonly reason?: string }
+export interface ConfigDto { readonly observedConfigDigest: string; readonly activeConfigDigest: string; readonly candidateSequence: number; readonly document: Readonly<Record<string, unknown>>; readonly sourceStatus: readonly SourceStatusDto[]; readonly sourceHistory: readonly SourceUpdateHistoryDto[]; readonly applicationRuntime?: ApplicationRuntimeSyncDto }
 export type SubscriptionModeDto = "single" | "merge";
 export interface SubscriptionDto { readonly id: string; readonly name: string; readonly configured: boolean; readonly active: boolean; readonly nodeCount?: number; readonly autoCandidateCount?: number; readonly state?: string; readonly status?: SourceStatusDto }
 export interface SubscriptionSnapshotDto { readonly mode: SubscriptionModeDto; readonly activeSourceIds: readonly string[]; readonly sources: readonly SubscriptionDto[]; readonly configDigest: string }
@@ -67,7 +80,14 @@ export interface NodeBenchmarkReportDto { readonly status: "success" | "partial"
 export interface NodeBenchmarkAckDto { readonly operationId: string; readonly phase: "running"; readonly joinedExisting: boolean; readonly trigger: "manual" | "periodic"; readonly candidateCount: number; readonly fastSelectionEarliestMs: 2000; readonly fastSelectionLatestMs: 2800; readonly fastSelectionDeadlineMs: 3000; readonly probeCutoffMs: 4500; readonly deadlineMs: 4900; readonly fastSelection: NodeBenchmarkFastSelectionDto }
 export interface NodeBenchmarkResultDto { readonly operationId: string; readonly phase: "completed"; readonly report: NodeBenchmarkReportDto; readonly selection?: NodeSelectionDto; readonly fastSelection: Exclude<NodeBenchmarkFastSelectionDto, { readonly state: "pending" }>; readonly timing: BenchmarkTerminalTimingDto }
 export interface ApplicationDto { readonly packageName: string; readonly uid: number; readonly mode: "all" | "blacklist" | "whitelist"; readonly sharedUid: boolean }
-export interface TrafficDto { readonly up: number; readonly down: number; readonly intervalSeconds: number }
+export type TrafficStateDto = "ok" | "gap";
+export interface TrafficDto {
+  readonly up: number;
+  readonly down: number;
+  readonly intervalMs: number;
+  readonly observedAtMs: number;
+  readonly state: TrafficStateDto;
+}
 export interface ConfigSchemaFieldDto { readonly id: string; readonly path: string; readonly valueType: string; readonly title: string; readonly group: string; readonly order: number; readonly advanced: boolean; readonly experimental: boolean; readonly sensitive: boolean; readonly readOnly: boolean; readonly applyImpact: string; readonly riskLevel: string; readonly capabilityKey?: string; readonly options: readonly string[] }
 export interface ConfigSchemaDto { readonly schemaVersion: number; readonly fields: readonly ConfigSchemaFieldDto[] }
 
@@ -80,13 +100,14 @@ export interface ErrorDto { readonly code: string; readonly message: string; rea
 
 export function parseControlEnvelope<T>(value: unknown, parseResult: (value: unknown) => T): ControlEnvelope<T> {
   const object = record(value, "$", ["version", "request_id", "ok", "generation", "result", "error"]);
-  if (integer(object.version, "$.version", 1, 255) !== 5) throw new ValidationError("$.version", "unsupported protocol");
+  const version = integer(object.version, "$.version", 1, 255);
+  if (version !== 6) throw new ValidationError("$.version", "unsupported protocol");
   const requestId = string(object.request_id, "$.request_id", 96);
   const ok = boolean(object.ok, "$.ok");
   const generation = object.generation === undefined || object.generation === null ? undefined : integer(object.generation, "$.generation", 1);
   if (!ok) throw parseError(object.error);
   if (object.error !== undefined) throw new ValidationError("$.error", "unexpected error");
-  return { version: 5, requestId, ...(generation === undefined ? {} : { generation }), result: parseResult(object.result) };
+  return { version: 6, requestId, ...(generation === undefined ? {} : { generation }), result: parseResult(object.result) };
 }
 
 export function parseError(value: unknown): ValidationError {
@@ -161,12 +182,22 @@ export function parseCapability(value: unknown): CapabilityDto {
 }
 
 export function parseConfig(value: unknown): ConfigDto {
-  const object = record(value, "$.result", ["observed_config_digest", "active_config_digest", "candidate_sequence", "watcher_health", "last_reload", "document", "source_status"]);
+  const object = record(value, "$.result", ["observed_config_digest", "active_config_digest", "candidate_sequence", "watcher_health", "last_reload", "document", "source_status", "source_history", "application_runtime"]);
   const document = record(safeExtension(object.document, "$.result.document"), "$.result.document");
   const sourceStatus = array(object.source_status, "$.result.source_status", 256).map((item, index) => parseSourceStatus(item, `$.result.source_status[${index}]`));
+  const sourceHistory = object.source_history === undefined
+    ? []
+    : array(object.source_history, "$.result.source_history", 128).map((item, index) => parseSourceUpdateHistory(item, `$.result.source_history[${index}]`));
   string(object.watcher_health, "$.result.watcher_health", 64);
   string(object.last_reload, "$.result.last_reload", 64);
-  return { observedConfigDigest: digest(object.observed_config_digest, "$.result.observed_config_digest"), activeConfigDigest: digest(object.active_config_digest, "$.result.active_config_digest"), candidateSequence: integer(object.candidate_sequence, "$.result.candidate_sequence"), document, sourceStatus };
+  const runtime = object.application_runtime === undefined || object.application_runtime === null
+    ? undefined
+    : record(object.application_runtime, "$.result.application_runtime", ["state", "reason"]);
+  const applicationRuntime = runtime === undefined ? undefined : {
+    state: enumeration(runtime.state, "$.result.application_runtime.state", ["synced", "pending", "failed"] as const),
+    ...(runtime.reason === undefined || runtime.reason === null ? {} : { reason: string(runtime.reason, "$.result.application_runtime.reason", 256) }),
+  };
+  return { observedConfigDigest: digest(object.observed_config_digest, "$.result.observed_config_digest"), activeConfigDigest: digest(object.active_config_digest, "$.result.active_config_digest"), candidateSequence: integer(object.candidate_sequence, "$.result.candidate_sequence"), document, sourceStatus, sourceHistory, ...(applicationRuntime === undefined ? {} : { applicationRuntime }) };
 }
 
 function optionalInteger(value: unknown, path: string): number | undefined {
@@ -198,6 +229,23 @@ export function parseSourceStatus(value: unknown, path = "$.source_status"): Sou
     ...(subscriptionDownloadBytes === undefined ? {} : { subscriptionDownloadBytes }),
     ...(subscriptionTotalBytes === undefined ? {} : { subscriptionTotalBytes }),
     ...(subscriptionExpireAt === undefined ? {} : { subscriptionExpireAt }),
+    usingLastKnownGood: boolean(object.using_last_known_good, `${path}.using_last_known_good`),
+    ...(object.diagnostic_code === undefined || object.diagnostic_code === null ? {} : { diagnosticCode: string(object.diagnostic_code, `${path}.diagnostic_code`, 64) }),
+  };
+}
+
+export function parseSourceUpdateHistory(value: unknown, path = "$.source_history"): SourceUpdateHistoryDto {
+  const object = record(value, path, ["source_id", "attempted_at_wall_seconds", "health", "generation", "accepted", "duplicate", "rejected", "warnings", "using_last_known_good", "diagnostic_code"]);
+  const generation = optionalInteger(object.generation, `${path}.generation`);
+  return {
+    sourceId: string(object.source_id, `${path}.source_id`, 96),
+    attemptedAtWallSeconds: integer(object.attempted_at_wall_seconds, `${path}.attempted_at_wall_seconds`),
+    health: enumeration(object.health, `${path}.health`, ["healthy", "degraded", "failed"] as const),
+    ...(generation === undefined ? {} : { generation }),
+    accepted: integer(object.accepted, `${path}.accepted`),
+    duplicate: integer(object.duplicate, `${path}.duplicate`),
+    rejected: integer(object.rejected, `${path}.rejected`),
+    warnings: integer(object.warnings, `${path}.warnings`),
     usingLastKnownGood: boolean(object.using_last_known_good, `${path}.using_last_known_good`),
     ...(object.diagnostic_code === undefined || object.diagnostic_code === null ? {} : { diagnosticCode: string(object.diagnostic_code, `${path}.diagnostic_code`, 64) }),
   };
@@ -545,10 +593,17 @@ export function parseApplicationList(value: unknown): readonly ApplicationDto[] 
 }
 
 export function parseTraffic(value: unknown): TrafficDto {
-  const object = record(value, "$.traffic", ["kind", "sample", "interval_seconds"]);
+  const object = record(value, "$.traffic", ["kind", "state", "sample", "observed_at_unix_ms", "interval_ms"]);
   if (object.kind !== undefined && object.kind !== "traffic") throw new ValidationError("$.traffic.kind", "invalid traffic kind");
-  const sample = record(object.sample, "$.traffic.sample", ["up", "down"]);
-  return { up: integer(sample.up, "$.traffic.sample.up"), down: integer(sample.down, "$.traffic.sample.down"), intervalSeconds: integer(object.interval_seconds, "$.traffic.interval_seconds", 1, 60) };
+  const state = enumeration(object.state, "$.traffic.state", ["ok", "gap"] as const);
+  const sample = record(object.sample, "$.traffic.sample", ["up_bps", "down_bps"]);
+  return {
+    up: integer(sample.up_bps, "$.traffic.sample.up_bps"),
+    down: integer(sample.down_bps, "$.traffic.sample.down_bps"),
+    intervalMs: integer(object.interval_ms, "$.traffic.interval_ms", 1),
+    observedAtMs: integer(object.observed_at_unix_ms, "$.traffic.observed_at_unix_ms", 1),
+    state,
+  };
 }
 
 export function parseLogs(value: unknown): readonly LogEntryDto[] {
@@ -566,7 +621,7 @@ export function parseLogs(value: unknown): readonly LogEntryDto[] {
 
 export function parseRuntimeMetrics(value: unknown): RuntimeMetricsDto {
   const object = record(value, "$.metrics", ["schema_version", "runtime_state", "generation", "uptime_seconds", "core", "traffic", "outbound"]);
-  integer(object.schema_version, "$.metrics.schema_version", 1, 1);
+  integer(object.schema_version, "$.metrics.schema_version", 2, 2);
   const core = object.core === null || object.core === undefined ? undefined : record(object.core, "$.metrics.core", ["pid", "cpu_percent", "memory_rss_bytes"]);
   const traffic = record(object.traffic, "$.metrics.traffic", ["upload_bytes", "download_bytes"]);
   const outbound = record(object.outbound, "$.metrics.outbound", ["interface", "local_address", "public_ip"]);
@@ -598,7 +653,8 @@ export function parseRuntimeMetrics(value: unknown): RuntimeMetricsDto {
 
 export function parseEventFrame(value: unknown): EventFrameDto {
   const object = record(value, "$", ["version", "request_id", "sequence", "kind", "payload", "error"]);
-  if (integer(object.version, "$.version", 1, 255) !== 5) throw new ValidationError("$.version", "unsupported protocol");
+  const version = integer(object.version, "$.version", 1, 255);
+  if (version !== 6) throw new ValidationError("$.version", "unsupported protocol");
   const requestId = string(object.request_id, "$.request_id", 96);
   const sequence = integer(object.sequence, "$.sequence", 1);
   const kind = enumeration(object.kind, "$.kind", ["item", "end", "error"] as const);
