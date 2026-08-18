@@ -1,0 +1,29 @@
+{
+  "schema": "nethop-data-plane-benchmark-summary-v1",
+  "evidence_sha256": "d39d25cd1f403b737c59d424d3de17d905bd3ad3952483910b1bfc4a0f98aba0",
+  "status": "observational_nonpaired_public_endpoint",
+  "modes": {
+    "tproxy": {
+      "runs": 5,
+      "median_throughput_mbps": 19.97,
+      "worst_latency_p95_ms": 3390.756,
+      "worst_ready_ms": 2565.147,
+      "worst_update_interruption_ms": 368.226,
+      "peak_rss_bytes": 11341824
+    },
+    "tun": {
+      "runs": 5,
+      "median_throughput_mbps": 24.765,
+      "worst_latency_p95_ms": 1736.888,
+      "worst_ready_ms": 5291.823,
+      "worst_update_interruption_ms": 1134.301,
+      "peak_rss_bytes": 11403264
+    }
+  },
+  "decision": {
+    "default_capture_mode": "tproxy",
+    "promote_tethering": false,
+    "promote_ebpf": false,
+    "reason": "The public HTTPS workload has no paired direct baseline; TUN also has materially slower ready time and higher CPU/reload cost."
+  }
+}

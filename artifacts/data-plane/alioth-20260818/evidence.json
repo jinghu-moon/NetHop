@@ -1,0 +1,164 @@
+{
+  "schema": "nethop-data-plane-benchmark-v1",
+  "status": "measured_nonpaired_public_endpoint",
+  "build_manifest_sha256": "00f765ceb8373ee13a568ca5e97467543acee3a9c50a33e1c01b90a4dc7850a7",
+  "device": {
+    "serial": "dc39c31d",
+    "model": "M2012K11AC",
+    "api_level": 33,
+    "kernel_release": "4.19.157-perf-g9607d8651312",
+    "build_fingerprint_sha256": "ace0541c1e70b90da0b51c8f0e32dcadd2af1b8df10a7a12d16a7dc1046a5ec9"
+  },
+  "workload": {
+    "id": "https-fixed-download-v1",
+    "endpoint": "https://speed.cloudflare.com/__down?bytes=20000000",
+    "duration_seconds": 30,
+    "transfer_bytes": 20000000,
+    "latency_endpoint": "https://cp.cloudflare.com/generate_204",
+    "latency_samples_per_run": 20,
+    "clock_ticks_per_second": 100,
+    "pairing": "none_public_endpoint"
+  },
+  "modes": [
+    {
+      "mode": "tproxy",
+      "runs": [
+        {
+          "run": 1,
+          "ready_ms": 2467.18,
+          "latency_p95_ms": 2266.594,
+          "latency_sample_count": 20,
+          "throughput_mbps": 33.168,
+          "cpu_percent": 0.165,
+          "rss_bytes": 11251712,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 308.914,
+          "raw_sha256": "4f169414ab12e19d041e158975a183f70ecbc547d7a725ea27872d0113f3ef3d",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tproxy-run-1.raw.json"
+        },
+        {
+          "run": 2,
+          "ready_ms": 2508.294,
+          "latency_p95_ms": 1838.448,
+          "latency_sample_count": 20,
+          "throughput_mbps": 15.447,
+          "cpu_percent": 0.095,
+          "rss_bytes": 11259904,
+          "power_delta_mah": 1.0,
+          "update_interruption_ms": 193.535,
+          "raw_sha256": "0f1ab024d5abaa5cfec8f90ab605bbce65acbb07c8e1ca06623999edaab0f1d7",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tproxy-run-2.raw.json"
+        },
+        {
+          "run": 3,
+          "ready_ms": 2565.147,
+          "latency_p95_ms": 693.715,
+          "latency_sample_count": 20,
+          "throughput_mbps": 9.085,
+          "cpu_percent": 0.448,
+          "rss_bytes": 11210752,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 368.226,
+          "raw_sha256": "bc1dc9d4f67b2cac126b885e56d21f85aab68bd7e1b12b557780c6fe54046feb",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tproxy-run-3.raw.json"
+        },
+        {
+          "run": 4,
+          "ready_ms": 2498.37,
+          "latency_p95_ms": 3390.756,
+          "latency_sample_count": 20,
+          "throughput_mbps": 19.97,
+          "cpu_percent": 0.113,
+          "rss_bytes": 11341824,
+          "power_delta_mah": 1.0,
+          "update_interruption_ms": 360.443,
+          "raw_sha256": "0d458c71fb5dea6547ac72ea51643a535a55833741e3c1fe7d1686fc0c1b104a",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tproxy-run-4.raw.json"
+        },
+        {
+          "run": 5,
+          "ready_ms": 2400.372,
+          "latency_p95_ms": 1824.692,
+          "latency_sample_count": 20,
+          "throughput_mbps": 29.903,
+          "cpu_percent": 0.15,
+          "rss_bytes": 11341824,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 194.413,
+          "raw_sha256": "244adc7801aabe28d7eb7de2bd2dd30996fb78de86f0a5f6bb289a92ec0331e0",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tproxy-run-5.raw.json"
+        }
+      ]
+    },
+    {
+      "mode": "tun",
+      "runs": [
+        {
+          "run": 1,
+          "ready_ms": 5250.55,
+          "latency_p95_ms": 825.936,
+          "latency_sample_count": 20,
+          "throughput_mbps": 24.765,
+          "cpu_percent": 2.072,
+          "rss_bytes": 11345920,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 297.818,
+          "raw_sha256": "02da8b114aab70abe1f78b20ec982679d4153cb309ce3e82478f47bbacd605f2",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tun-run-1.raw.json"
+        },
+        {
+          "run": 2,
+          "ready_ms": 5263.573,
+          "latency_p95_ms": 1736.888,
+          "latency_sample_count": 20,
+          "throughput_mbps": 10.611,
+          "cpu_percent": 1.44,
+          "rss_bytes": 11341824,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 951.104,
+          "raw_sha256": "318b1bf6c04e86ffecc271c6be9805f07e3fb479f088f07cca99697a5c5a9c9f",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tun-run-2.raw.json"
+        },
+        {
+          "run": 3,
+          "ready_ms": 5291.823,
+          "latency_p95_ms": 1638.371,
+          "latency_sample_count": 20,
+          "throughput_mbps": 36.005,
+          "cpu_percent": 1.992,
+          "rss_bytes": 11370496,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 847.027,
+          "raw_sha256": "3383e71d9ff8293f909e2d65d83bddd50335b1eb3d744187bebd71dfc228bd26",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tun-run-3.raw.json"
+        },
+        {
+          "run": 4,
+          "ready_ms": 5189.647,
+          "latency_p95_ms": 793.012,
+          "latency_sample_count": 20,
+          "throughput_mbps": 25.291,
+          "cpu_percent": 2.066,
+          "rss_bytes": 11386880,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 1134.301,
+          "raw_sha256": "5f631eb91d1dbdb866d4b4613aec216112ca01aad38a48690a2746175ca20a34",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tun-run-4.raw.json"
+        },
+        {
+          "run": 5,
+          "ready_ms": 5227.786,
+          "latency_p95_ms": 754.14,
+          "latency_sample_count": 20,
+          "throughput_mbps": 20.987,
+          "cpu_percent": 1.937,
+          "rss_bytes": 11403264,
+          "power_delta_mah": 0.0,
+          "update_interruption_ms": 472.497,
+          "raw_sha256": "7e95d192c76689ad9cf488127421f3e2234b9abddbcf3b72a1a2b00642901911",
+          "raw_artifact": "artifacts/data-plane/alioth-20260818/tun-run-5.raw.json"
+        }
+      ]
+    }
+  ]
+}

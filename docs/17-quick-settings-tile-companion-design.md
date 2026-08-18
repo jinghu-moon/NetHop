@@ -204,6 +204,8 @@ Android 快捷设置磁贴由 APK 内的 `TileService` 提供，纯 Magisk/Kerne
 
 ## 5. 工程结构
 
+2026-08-17 实施补充：Companion 增加 `NetHopCompanionApplication -> CompanionServices` 应用组合根。`RootCommandExecutor` 由组合根唯一创建并供 Tile/WebUI 使用，`AndroidPackageRepository` 仍保持 Activity scope；不引入 DI 框架、ViewModel 或第二套 Manager。
+
 建议新增独立 Android 工程目录：
 
 ```text

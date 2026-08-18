@@ -1,6 +1,6 @@
 # NetHop WebUI 应用图标获取与展示 TDD 测试开发任务清单
 
-> 状态：待实施
+> 状态：主题图标方案已取消；原始应用图标清理进行中（G005 旧 wrapper 删除待确认）；需重新构建原始图标候选模块后执行 M002-M005；M008 待最终确认
 >
 > 日期：2026-08-16
 >
@@ -10,20 +10,22 @@
 >
 > 重构前基线：control protocol v5、Companion `/package-icons/<package>`、WebUI `packageIconSource()`、无主题图标 provider
 >
-> 目标基线：control protocol v6、typed theme capability/batch、统一 Android package repository、WebUI `ApplicationIcon` 双模式展示
+> 目标基线：control protocol v6、统一 Android package repository、WebUI `ApplicationIcon` 原始图标展示
 >
-> 影响范围：`nethop-android`、`nethop-protocol`、`nethopd`、`nethopctl`、WebUI、Companion、KernelSU/APatch host bridge、模块构建、许可证、SBOM 与 Android 真机验收
+> 影响范围：WebUI、Companion、KernelSU/APatch host bridge、模块构建与 Android 真机原始图标验收；不再包含主题 ZIP provider 或图标协议
+
+> 2026-08-16 范围变更：用户确认移除“手机主题图标”。原主题 provider、typed capability/batch、主题 DTO、loader、设置偏好及其测试已从生产链删除。第 8-18 节中与主题 provider 相关的条目保留为历史实施记录，不再作为当前待办或完成定义。
+
+> 2026-08-16 主机证据：[`host-gate-manifest.json`](../artifacts/application-icons/host-gate-manifest.json)；Rust/WebUI/Companion/module contracts 全部通过。移除主题图标后的最新模块 SHA-256 为 `7659ad32b354a8d5574f3ba5eababa224fb08a185a4f1c9a03351ed5c4f31d70`（19,223,447 bytes），release APK SHA-256 为 `4e23dba960a60f957e7599e5e6f1526419b51f8cfd43bb1247b6d41d3705fb07`。设备状态为 `available_manual_acceptance_required`。
 
 ## 1. 目的与完成边界
 
-本文把 D19 转换为可逐项执行、可失败、可复现的 TDD 开发任务。最终只交付两个用户可见能力：
+本文把 D19 转换为可逐项执行、可失败、可复现的 TDD 开发任务。最终只交付一个用户可见能力：
 
-1. 设置页可选择“手机主题图标”或“应用自带图标”；
-2. 应用页按所选模式显示图标，主题图标不可用时逐应用回退应用自带图标，最终失败显示稳定首字符占位。
+1. 应用页显示宿主提供的应用自带图标；图标不可用时显示稳定首字符占位。
 
 实现必须同时满足：
 
-- 主题图标只从已验证的 MIUI/HyperOS 固定 ZIP provider 有界读取；
 - 应用自带图标继续由 Android Framework 或 Root Manager 提供；
 - 图标只影响展示，不改变应用发现、UID 合并、分应用代理、搜索、排序、选中和配置保存；
 - 应用列表首屏、滚动和策略 mutation 不等待图标；
@@ -37,7 +39,7 @@
 
 1. control protocol 从 v5 一次性升级到 v6；不保留 v5 runtime decoder、双版本 hello 或旧命令分支；
 2. 用 `AndroidPackageRepository` 取代 `AndroidPackageAdapter` 与 `PackageIconPathHandler` 各自重复查询 `PackageManager` 的结构；
-3. 用 `ApplicationIcon`、`ThemeIconBatchLoader` 和 `originalPackageIconSource()` 取代 `ApplicationsView.vue` 内联 `<img>` 与旧 `packageIconSource()`；
+3. 用 `ApplicationIcon` 和 `originalPackageIconSource()` 取代 `ApplicationsView.vue` 内联 `<img>` 与旧 `packageIconSource()`；
 4. Companion 原始图标 URL 直接切换为 `/package-icons/original/<lastUpdateTimeMs>/<packageName>`；不保留旧 `/package-icons/<package>`；
 5. WebUI、Companion、KernelSU/APatch bridge、CLI 和 daemon 必须在同一实施阶段全部切换到 v6；
 6. 新路径通过 after 测试后立即删除旧生产代码、旧测试 fixture 和旧 allowlist，不留下 deprecated wrapper。
@@ -216,7 +218,7 @@ flowchart TD
 
 ## 7. 阶段 A：before 基线与证据护栏
 
-- [ ] **A001 冻结 Rust protocol v5 和 WebUI 方法集**
+- [x] **A001 冻结 Rust protocol v5 和 WebUI 方法集**
   - `depends_on`: none；`parallel_with`: A002,A003,A004,A005
   - `scope`: `nethop-protocol`、`nethopd`、`nethopctl` 的 hello/method golden。
   - `RED`: baseline inventory 缺 protocol v5、现有 methods、1 MiB frame 或 64 KiB string 任一断言时失败。
@@ -224,7 +226,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 复用现有 protocol fixture builder；运行三 crate 的 WebUI contracts。
   - `done`: 可逐字段证明升级前 wire 和 method set。
 
-- [ ] **A002 冻结 Companion 原始图标行为**
+- [x] **A002 冻结 Companion 原始图标行为**
   - `depends_on`: none；`parallel_with`: A001,A003,A004,A005
   - `scope`: `PackageIconPathHandlerContractTest`、Manifest 和 APK inventory。
   - `RED`: 未覆盖合法已安装包、非法路径、missing、128 px PNG、256 KiB、2 MiB LRU、close 后 404 时 baseline gate 失败。
@@ -232,7 +234,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 保持 `QUERY_ALL_PACKAGES` 且无 `INTERNET`；执行 instrumentation 编译与可用设备测试。
   - `done`: 旧 handler 的有效用户行为已冻结。
 
-- [ ] **A003 冻结 WebUI 应用页行为**
+- [x] **A003 冻结 WebUI 应用页行为**
   - `depends_on`: none；`parallel_with`: A001,A002,A004,A005
   - `scope`: 应用枚举、搜索、排序、selected-first、开关 mutation、虚拟列表和占位图标。
   - `RED`: before fixture 缺任一用户工作流、host kind 或 500 行虚拟列表证据时失败。
@@ -240,7 +242,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 固定 360x640、393x873、600x960 viewport 和明暗主题。
   - `done`: 图标重构后可直接对比旧功能是否退化。
 
-- [ ] **A004 冻结模块、CSP、SBOM 和体积基线**
+- [x] **A004 冻结模块、CSP、SBOM 和体积基线**
   - `depends_on`: none；`parallel_with`: A001,A002,A003,A005
   - `scope`: WebUI production bundle、Companion APK、arm64 module inventory。
   - `RED`: 缺 bundle size、APK size、模块 size、CSP `img-src`、依赖清单或许可证 hash 时失败。
@@ -248,7 +250,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 输出稳定排序 JSON，禁止绝对路径和包名清单。
   - `done`: after 构建可量化新增依赖与图标功能增量。
 
-- [ ] **A005 建立 D20 阶段证据总门禁**
+- [x] **A005 建立 D20 阶段证据总门禁**
   - `depends_on`: A001,A002,A003,A004；`parallel_with`: none
   - `scope`: `scripts/application-icon-phase-gate.ps1`、证据 schema 和 secret gate。
   - `RED`: 任一 baseline manifest 缺失、hash 漂移或含敏感 canary 时失败。
@@ -258,7 +260,7 @@ flowchart TD
 
 ## 8. 阶段 B：provider API 与合成 ZIP/PNG fixture
 
-- [ ] **B001 定义窄 `ThemeIconProvider` 领域接口**
+- [x] **B001 定义窄 `ThemeIconProvider` 领域接口**
   - `depends_on`: A005；`parallel_with`: B002,B003
   - `scope`: `crates/nethop-android/src/theme_icons.rs` 的状态、capability、reason code、batch item 类型。
   - `RED`: provider trait、四种 capability 状态和五种 item 状态不存在时编译失败。
@@ -266,7 +268,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 类型使用严格 enum；不暴露路径、entry 或任意字符串错误。
   - `done`: public API 足以表达 D19 DTO，且没有文件系统细节泄漏。
 
-- [ ] **B002 建立测试生成的 ZIP fixture builder**
+- [x] **B002 建立测试生成的 ZIP fixture builder**
   - `depends_on`: A005；`parallel_with`: B001,B003
   - `scope`: Stored/Deflate、重复 density、missing、损坏 central directory、加密/未知算法 fixture。
   - `RED`: fixture manifest 缺每种边界或输出不确定时失败。
@@ -274,7 +276,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 固定时间戳、顺序和内容；相同输入 SHA-256 相同。
   - `done`: parser 测试无需 Root、Android 或公网即可运行。
 
-- [ ] **B003 建立合成 PNG fixture builder**
+- [x] **B003 建立合成 PNG fixture builder**
   - `depends_on`: A005；`parallel_with`: B001,B002
   - `scope`: 合法 RGBA、错误 signature、错误 IHDR、0/513 尺寸、APNG `acTL`、截断 chunk。
   - `RED`: 缺任一正反例时 fixture contract 失败。
@@ -282,7 +284,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: fixture 不含真实应用图标和外部版权资产。
   - `done`: PNG validator 的所有安全边界都有独立输入。
 
-- [ ] **B004 冻结 package name 与 entry grammar**
+- [x] **B004 冻结 package name 与 entry grammar**
   - `depends_on`: B001,B002；`parallel_with`: B005
   - `scope`: `^[A-Za-z0-9_.-]{1,256}$`、density allowlist、entry-to-package 索引规则。
   - `RED`: `/`、反斜线、`..`、百分号、NUL、控制字符、未知 density 或非 PNG 任一可命中时失败。
@@ -290,7 +292,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不在 daemon、CLI、WebUI 重复不同正则语义。
   - `done`: 只有 D19 允许的 entry 可进入索引。
 
-- [ ] **B005 建立生产固定路径与测试注入边界**
+- [x] **B005 建立生产固定路径与测试注入边界**
   - `depends_on`: B001；`parallel_with`: B004
   - `scope`: production constructor 固定 `/data/system/theme/icons`；测试 source 可注入临时文件。
   - `RED`: 生产 API 可传任意路径或 WebUI DTO 泄漏路径时失败。
@@ -300,7 +302,7 @@ flowchart TD
 
 ## 9. 阶段 C：Rust 主题 ZIP provider
 
-- [ ] **C001 引入最小 Rust 依赖并冻结 feature 集**
+- [x] **C001 引入最小 Rust 依赖并冻结 feature 集**
   - `depends_on`: B002,B003；`parallel_with`: C002
   - `scope`: `nethop-android/Cargo.toml`、`Cargo.lock`、dependency contract。
   - `RED`: `zip`/`lru` 版本、MSRV 或启用 feature 超出 D19 allowlist 时失败。
@@ -308,7 +310,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: `cargo tree -e features` 不含 AES、bzip2、deflate64、LZMA、PPMd、zstd、xz。
   - `done`: Rust 1.86 可构建，lockfile 和依赖证据稳定。
 
-- [ ] **C002 实现 archive metadata 安全检查**
+- [x] **C002 实现 archive metadata 安全检查**
   - `depends_on`: B005；`parallel_with`: C001
   - `scope`: exists、regular file、non-symlink、`1..=64 MiB`、entry `<=10,000`。
   - `RED`: missing、目录、symlink、0 bytes、64 MiB+1 和 10,001 entries 未拒绝时失败。
@@ -316,7 +318,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 全部失败映射稳定 reason code，不包含绝对路径。
   - `done`: 不安全 archive 在读取 entry 前终止。
 
-- [ ] **C003 实现确定性 entry 索引和 density 选择**
+- [x] **C003 实现确定性 entry 索引和 density 选择**
   - `depends_on`: B004,C002；`parallel_with`: C004
   - `scope`: 包名索引、Stored/Deflate、重复包、density 优先级。
   - `RED`: 同包不同 entry 顺序导致结果不同，或未知算法/加密 entry 可读时失败。
@@ -324,7 +326,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: capability 调用不重复扫描整个 archive。
   - `done`: 同一 archive 的索引与选择不受 ZIP entry 顺序影响。
 
-- [ ] **C004 实现 PNG 有界读取与验证**
+- [x] **C004 实现 PNG 有界读取与验证**
   - `depends_on`: B003,C002；`parallel_with`: C003
   - `scope`: compressed/uncompressed size、实际读取长度、signature、IHDR、尺寸、APNG 拒绝。
   - `RED`: 48 KiB+1、zip bomb metadata、截断、非法 PNG、513 px 或 `acTL` 任一返回 found 时失败。
@@ -332,7 +334,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 禁止 `ZipArchive::extract()`、shell `unzip` 和磁盘写出。
   - `done`: 合法 Stored/Deflate 通过，所有恶意 fixture 被稳定拒绝。
 
-- [ ] **C005 实现 revision 和 archive 重载**
+- [x] **C005 实现 revision 和 archive 重载**
   - `depends_on`: C003,C004；`parallel_with`: C006
   - `scope`: device/inode/size/mtime_ns 规范化摘要与 reload transaction。
   - `RED`: metadata 变化后仍返回旧索引或旧 bytes 时失败。
@@ -340,7 +342,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: revision 是 64 位小写 hex 摘要，不作为完整性证明。
   - `done`: archive 替换后不存在新旧数据混用。
 
-- [ ] **C006 实现 positive/negative LRU 和 batch 限制**
+- [x] **C006 实现 positive/negative LRU 和 batch 限制**
   - `depends_on`: C003,C004；`parallel_with`: C005
   - `scope`: 32 项 PNG LRU、128 项 negative cache、12 package、384 KiB batch。
   - `RED`: 重复包重复读 ZIP、cache 超限、batch 13 或总量超限仍成功时失败。
@@ -348,7 +350,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: revision 变化清空两类 cache；最坏 PNG cache 不超过 1.5 MiB。
   - `done`: cache 和 batch 硬限制由单元测试量化证明。
 
-- [ ] **C007 完成 provider 状态与错误矩阵**
+- [x] **C007 完成 provider 状态与错误矩阵**
   - `depends_on`: C005,C006；`parallel_with`: none
   - `scope`: supported/unavailable/unsupported/degraded 与 item status 映射。
   - `RED`: 任一内部 I/O/ZIP/PNG 错误冒泡为自由文本或 panic 时失败。
@@ -358,7 +360,7 @@ flowchart TD
 
 ## 10. 阶段 D：control protocol v6
 
-- [ ] **D001 用 RED 冻结 v6 method 与严格 DTO**
+- [x] **D001 用 RED 冻结 v6 method 与严格 DTO**
   - `depends_on`: A005；`parallel_with`: D002
   - `scope`: capability、batch request/response、provider/status/item/reason enums。
   - `RED`: v5 parser 明确拒绝新方法；新增 v6 golden 因类型缺失失败。
@@ -366,7 +368,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: payload 只在 found 出现；路径、metadata、自由错误文本不可序列化。
   - `done`: D19 示例 JSON 能 round-trip，非法组合全部拒绝。
 
-- [ ] **D002 升级 protocol 常量并删除 v5 runtime 路径**
+- [x] **D002 升级 protocol 常量并删除 v5 runtime 路径**
   - `depends_on`: A005；`parallel_with`: D001
   - `scope`: Rust、WebUI、Companion protocol 常量与 hello golden。
   - `RED`: 任一运行时常量仍为 5 或存在 `5|6` 双版本接受测试时失败。
@@ -374,7 +376,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: before v5 fixture 只保留为历史证据，不参与 runtime decode。
   - `done`: 仓库只有一个生产协议版本 6。
 
-- [ ] **D003 实现 batch request 结构与输入限制**
+- [x] **D003 实现 batch request 结构与输入限制**
   - `depends_on`: D001,D002；`parallel_with`: D004
   - `scope`: 1..=12 packages、同一 validator、去重保序、method 只读语义。
   - `RED`: 0、13、非法包名、unknown field、路径字段任一被接受时失败。
@@ -382,7 +384,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不复用 payload mutation handle，不要求 expected digest。
   - `done`: request wire 只能表达受控包名集合。
 
-- [ ] **D004 冻结 frame/string/Base64 边界**
+- [x] **D004 冻结 frame/string/Base64 边界**
   - `depends_on`: D001,D002；`parallel_with`: D003
   - `scope`: 64 KiB 单字符串、1 MiB frame、found payload decoded <=48 KiB。
   - `RED`: 超限 Base64 或整帧越界未被 protocol gate 拒绝时失败。
@@ -390,7 +392,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 12 项最坏响应仍在 frame 上限内，超限返回稳定 protocol error。
   - `done`: payload 大小边界有精确正反例。
 
-- [ ] **D005 完成 protocol v6 全量回归**
+- [x] **D005 完成 protocol v6 全量回归**
   - `depends_on`: D003,D004；`parallel_with`: none
   - `scope`: 所有现有 ControlMethod、events、config、node、payload contracts。
   - `RED`: 旧方法 golden 缺失或被图标 DTO 污染时 gate 失败。
@@ -400,7 +402,7 @@ flowchart TD
 
 ## 11. 阶段 E：daemon 与 CLI
 
-- [ ] **E001 将 provider 注入 daemon 单一所有者**
+- [x] **E001 将 provider 注入 daemon 单一所有者**
   - `depends_on`: C007,D005；`parallel_with`: E002
   - `scope`: worker application/service 组合根与 provider 生命周期。
   - `RED`: 每次请求重新创建 provider 或多个 worker 各持一份 cache 时失败。
@@ -408,7 +410,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: provider 失败不阻止 daemon 启动和代理服务。
   - `done`: provider 生命周期、cache 和 reload 只有一个所有者。
 
-- [ ] **E002 实现 daemon capability handler**
+- [x] **E002 实现 daemon capability handler**
   - `depends_on`: C007,D005；`parallel_with`: E001
   - `scope`: `webui.icon.capability.get` dispatch 和响应 envelope。
   - `RED`: 新请求返回 unknown method。
@@ -416,7 +418,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 无 archive 时仍返回成功 envelope + typed unavailable/unsupported，不泄漏路径。
   - `done`: capability 可在非 MIUI host 上确定性测试。
 
-- [ ] **E003 实现 daemon batch handler**
+- [x] **E003 实现 daemon batch handler**
   - `depends_on`: E001,E002；`parallel_with`: E004
   - `scope`: `webui.icon.theme.batch` dispatch、provider 调用和 Base64。
   - `RED`: 合法 fixture batch 无法返回 found/missing 顺序。
@@ -424,7 +426,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不为每个包创建线程、进程或 archive；方法不产生 mutation event。
   - `done`: daemon contract 覆盖 found/missing/invalid/too_large/unavailable。
 
-- [ ] **E004 实现 typed CLI 子命令**
+- [x] **E004 实现 typed CLI 子命令**
   - `depends_on`: E002；`parallel_with`: E003
   - `scope`: `nethopctl webui icon capability --json` 和 `theme <package>... --json`。
   - `RED`: CLI parser 不识别新命令；任意 path/density 参数负例必须失败。
@@ -432,7 +434,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不调用 `cat`/`unzip`，不接受 output file。
   - `done`: CLI argv 和 JSON golden 稳定，现有 CLI 行为通过。
 
-- [ ] **E005 完成 daemon/CLI v6 回归与故障隔离**
+- [x] **E005 完成 daemon/CLI v6 回归与故障隔离**
   - `depends_on`: E003,E004；`parallel_with`: none
   - `scope`: daemon worker、UDS、hello、CLI、service start/stop、node/app operations。
   - `RED`: provider panic/错误能终止 worker 或影响代理状态时失败。
@@ -442,7 +444,7 @@ flowchart TD
 
 ## 12. 阶段 F：WebUI 与 Android/Root Host allowlist
 
-- [ ] **F001 扩展 WebUI typed `OperationRequest`**
+- [x] **F001 扩展 WebUI typed `OperationRequest`**
   - `depends_on`: D005,E004；`parallel_with`: F002,F003
   - `scope`: operation union、command builder、mock result 和 timeout。
   - `RED`: 新 operation 无法构建精确 argv；非法 0/13/package/path 未拒绝。
@@ -450,7 +452,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: batch 一次命令传最多 12 包，默认 5 秒有界超时。
   - `done`: WebUI command golden 与 CLI 完全一致。
 
-- [ ] **F002 扩展 Companion `BridgeCommandPolicy`**
+- [x] **F002 扩展 Companion `BridgeCommandPolicy`**
   - `depends_on`: D005,E004；`parallel_with`: F001,F003
   - `scope`: operation ID、argv、spawn/mutation 分类和 Kotlin tests。
   - `RED`: 合法命令被拒绝，或 path/density/13 packages/额外 flag 被接受时失败。
@@ -458,7 +460,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不加入 mutatingOperations；参数总量继续受现有 1 MiB 限制。
   - `done`: Android bridge 只允许 D19 定义的两个命令形态。
 
-- [ ] **F003 扩展 KernelSU/APatch host allowlist**
+- [x] **F003 扩展 KernelSU/APatch host allowlist**
   - `depends_on`: D005,E004；`parallel_with`: F001,F002
   - `scope`: host adapter、command policy、mock/contract tests。
   - `RED`: 新命令不能运行；任意 shell/文件读取负例必须拒绝。
@@ -466,7 +468,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: APatch capability 不支持时只影响 original provider，不影响 theme daemon 方法。
   - `done`: 三种生产 host 对主题方法具有一致协议语义。
 
-- [ ] **F004 完成 host bridge v6 全量回归**
+- [x] **F004 完成 host bridge v6 全量回归**
   - `depends_on`: F001,F002,F003；`parallel_with`: none
   - `scope`: browser/android/kernelsu/apatch run/spawn/package/events tests。
   - `RED`: 任一旧 operation allowlist、事件 child 或 package adapter 未覆盖时 gate 失败。
@@ -476,7 +478,7 @@ flowchart TD
 
 ## 13. 阶段 G：Companion 应用自带图标根治性重构
 
-- [ ] **G001 建立统一 `AndroidPackageRepository` snapshot**
+- [x] **G001 建立统一 `AndroidPackageRepository` snapshot**
   - `depends_on`: A005；`parallel_with`: G002
   - `scope`: package list/info/ApplicationInfo map 的 Activity 会话级所有者。
   - `RED`: list/info/icon 分别查询 PackageManager 的 spy contract 失败。
@@ -484,7 +486,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 替换 `AndroidPackageAdapter`，保持 MAX_PACKAGES/MAX_BATCH 和排序语义。
   - `done`: 应用枚举、详情和图标共享同一 snapshot。
 
-- [ ] **G002 定义 original URL parser 与 revision key**
+- [x] **G002 定义 original URL parser 与 revision key**
   - `depends_on`: A005；`parallel_with`: G001
   - `scope`: `/package-icons/original/<lastUpdateTimeMs>/<packageName>`。
   - `RED`: 旧 URL、负数/溢出 revision、query、fragment、编码斜线或非法包名仍可解析时失败。
@@ -492,7 +494,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: URL 版本只用于缓存失效，不信任前端作为 package 事实。
   - `done`: URL grammar 有完整正反例。
 
-- [ ] **G003 重构 Drawable 渲染器**
+- [x] **G003 重构 Drawable 渲染器**
   - `depends_on`: G001,G002；`parallel_with`: G004
   - `scope`: `ApplicationInfo.loadIcon()`、128 px ARGB_8888、透明 PNG、256 KiB。
   - `RED`: BitmapDrawable、VectorDrawable、AdaptiveIconDrawable、默认图标任一不能输出合法 PNG 时失败。
@@ -500,7 +502,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: finally 回收 Bitmap；不提前为全部应用 Bitmap 化。
   - `done`: Android Framework 资源类型由 instrumentation 覆盖。
 
-- [ ] **G004 重构原始图标 LRU 与失效**
+- [x] **G004 重构原始图标 LRU 与失效**
   - `depends_on`: G001,G002；`parallel_with`: G003
   - `scope`: `packageName + lastUpdateTimeMs + sizePx`、2 MiB byte LRU、close。
   - `RED`: 应用升级 revision 仍命中旧 bytes、LRU 超 2 MiB、close 后可加载时失败。
@@ -516,7 +518,9 @@ flowchart TD
   - `REFACTOR/VERIFY`: 删除旧 `AndroidPackageAdapter`、旧 handler 查询路径和旧 URL tests。
   - `done`: APK 只存在新 original provider，应用列表行为通过 before/after 对比。
 
-- [ ] **G006 完成 Companion 权限、线程和生命周期回归**
+  - 当前实现已完成新 URL、repository 和 handler wiring；`AndroidPackageAdapter.kt` 仍保留为未使用 wrapper。按危险操作确认规则，删除该文件及其关联旧测试路径需用户明确确认，因此本项暂不标记完成。
+
+- [x] **G006 完成 Companion 权限、线程和生命周期回归**
   - `depends_on`: G005；`parallel_with`: none
   - `scope`: Manifest、PathHandler 并发、Activity close、PackageManager 异常。
   - `RED`: 主线程 I/O、返回 `null` 网络 fallback、handler 残留或新增 `INTERNET` 时失败。
@@ -526,7 +530,7 @@ flowchart TD
 
 ## 14. 阶段 H：WebUI preference、DTO 与 capability
 
-- [ ] **H001 增加严格 `application-icon-style` preference**
+- [x] **H001 增加严格 `application-icon-style` preference**
   - `depends_on`: D005；`parallel_with`: H002,H003
   - `scope`: `runtime/storage.ts`、`ApplicationIconStyle` 和 unit tests。
   - `RED`: 新 key 不在 allowlist；非法值未回退时失败。
@@ -534,7 +538,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: localStorage 不保存其他图标状态。
   - `done`: preference 可响应式共享且损坏值确定性恢复。
 
-- [ ] **H002 实现严格 capability/batch DTO parser**
+- [x] **H002 实现严格 capability/batch DTO parser**
   - `depends_on`: D005；`parallel_with`: H001,H003
   - `scope`: schema/version/status/provider/revision/items/Base64 allowlist。
   - `RED`: unknown field、非法 enum、重复 package、found 缺 payload、missing 带 payload 任一被接受时失败。
@@ -542,7 +546,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: decoded PNG 再检查 signature 和 48 KiB。
   - `done`: WebUI 不信任 daemon JSON 或 Base64 声明。
 
-- [ ] **H003 实现 capability store 与默认选择**
+- [x] **H003 实现 capability store 与默认选择**
   - `depends_on`: D005；`parallel_with`: H001,H002
   - `scope`: supported/unavailable/unsupported/degraded、首次默认值和已保存值。
   - `RED`: supported 首次不选 theme、unsupported 仍有效选 theme、暂时 unavailable 覆盖用户保存值时失败。
@@ -550,7 +554,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: capability 失败不阻塞设置页或应用页。
   - `done`: D19 默认值和恢复语义有纯状态测试。
 
-- [ ] **H004 完成 WebUI v6 consumer 回归**
+- [x] **H004 完成 WebUI v6 consumer 回归**
   - `depends_on`: H001,H002,H003,F004；`parallel_with`: none
   - `scope`: hello、operation、DTO、storage、host mock。
   - `RED`: v5 fixture 或旧 method set 仍被 runtime 接受时失败。
@@ -560,7 +564,7 @@ flowchart TD
 
 ## 15. 阶段 I：ThemeIconBatchLoader 与 `ApplicationIcon`
 
-- [ ] **I001 实现有界 `ThemeIconBatchLoader`**
+- [x] **I001 实现有界 `ThemeIconBatchLoader`**
   - `depends_on`: F004,H004；`parallel_with`: I002
   - `scope`: 16 ms 合并、12 包上限、最多 2 batch、去重保序。
   - `RED`: 同 microtask 重复请求产生多命令、13 包进入一批或并发超过 2 时失败。
@@ -568,7 +572,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 页面离开取消未发送 batch；已发送无消费者结果不写状态。
   - `done`: 批量与并发边界可用 fake timers 确定性验证。
 
-- [ ] **I002 实现 WebUI theme LRU 与 revision 失效**
+- [x] **I002 实现 WebUI theme LRU 与 revision 失效**
   - `depends_on`: H002,H003；`parallel_with`: I001
   - `scope`: 32 entries、found/missing、revision + package key。
   - `RED`: 第 33 项不淘汰、missing 重复请求、revision 变化仍命中旧数据时失败。
@@ -576,7 +580,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: data URL 只在内存存在，不写 storage。
   - `done`: positive/negative cache 和失效有单元测试。
 
-- [ ] **I003 实现 `originalPackageIconSource()`**
+- [x] **I003 实现 `originalPackageIconSource()`**
   - `depends_on`: G006,H004；`parallel_with`: I004
   - `scope`: android/kernelsu/apatch/browser URL resolver。
   - `RED`: Android URL 缺 revision，非法 package 仍构造，或 unsupported APatch 假定 `ksu://` 时失败。
@@ -584,7 +588,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 删除旧 `packageIconSource()`。
   - `done`: resolver 无 I/O、无副作用，host 矩阵测试完整。
 
-- [ ] **I004 实现 `ApplicationIcon.vue` 状态机**
+- [x] **I004 实现 `ApplicationIcon.vue` 状态机**
   - `depends_on`: I001,I002；`parallel_with`: I003
   - `scope`: placeholder/theme_loading/theme_ready/original_loading/original_ready。
   - `RED`: theme missing/error 不回退、original error 留空、旧请求覆盖新 package/style 时失败。
@@ -592,7 +596,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不在组件内解析节点或应用业务状态；卸载后不提交异步结果。
   - `done`: 所有状态转换和回退路径由 browser test 覆盖。
 
-- [ ] **I005 固定图标布局和渲染规则**
+- [x] **I005 固定图标布局和渲染规则**
   - `depends_on`: I004；`parallel_with`: none
   - `scope`: 固定 icon box、`object-fit: contain`、透明背景、首字符占位。
   - `RED`: 加载前后行高、文本或 Switch 位置变化超过容差时失败。
@@ -602,7 +606,7 @@ flowchart TD
 
 ## 16. 阶段 J：设置页和应用页集成
 
-- [ ] **J001 在设置页增加应用图标选项**
+- [x] **J001 在设置页增加应用图标选项**
   - `depends_on`: H004,I005；`parallel_with`: J002
   - `scope`: `SettingsView.vue`、现有 `OptionDropdown`、设置文案。
   - `RED`: 设置页找不到两个选项、非法状态未禁用或选择触发 config apply 时失败。
@@ -610,7 +614,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不进入 config draft/schema/validate/apply，不显示业务保存消息。
   - `done`: 设置切换无需 daemon 重启和页面刷新。
 
-- [ ] **J002 用 `ApplicationIcon` 替换应用行内联图标**
+- [x] **J002 用 `ApplicationIcon` 替换应用行内联图标**
   - `depends_on`: I005；`parallel_with`: J001
   - `scope`: `ApplicationsView.vue` 和应用行 props。
   - `RED`: 应用页仍调用旧 resolver，或组件缺 package/label/lastUpdateTime 时失败。
@@ -618,7 +622,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 删除内联 `<img @error hidden>` 和重复首字符逻辑。
   - `done`: 应用页只有一个图标展示入口。
 
-- [ ] **J003 验证虚拟滚动按可见范围加载**
+- [x] **J003 验证虚拟滚动按可见范围加载**
   - `depends_on`: J002；`parallel_with`: J004
   - `scope`: 500/1,000 项列表、overscan、mount/unmount、batch 数。
   - `RED`: 首次渲染为全部应用发图标请求，或滚动后旧行继续消费结果时失败。
@@ -626,7 +630,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不增加全量预热和后台扫描。
   - `done`: 请求数量与 mounted rows 有界相关，而非与总应用数相关。
 
-- [ ] **J004 验证实时切换与逐应用回退**
+- [x] **J004 验证实时切换与逐应用回退**
   - `depends_on`: J001,J002；`parallel_with`: J003
   - `scope`: found/missing/invalid/timeout/original-error 混合列表。
   - `RED`: 单条 theme error 使整页失败、切换后需 reload 或旧图片串包时失败。
@@ -634,7 +638,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 来回切换 20 次 browser stress，无未处理 Promise。
   - `done`: 混合 provider 状态下页面始终可用。
 
-- [ ] **J005 完成应用旧功能 after 回归**
+- [x] **J005 完成应用旧功能 after 回归**
   - `depends_on`: J003,J004；`parallel_with`: none
   - `scope`: 搜索、排序、selected-first、user/system/all、共享 UID、开关 mutation、自动保存。
   - `RED`: A003 任一 before 行为未映射到 after test 时 gate 失败。
@@ -644,7 +648,7 @@ flowchart TD
 
 ## 17. 阶段 K：安全、并发与性能门禁
 
-- [ ] **K001 ZIP 安全攻击矩阵**
+- [x] **K001 ZIP 安全攻击矩阵**
   - `depends_on`: C007,J005；`parallel_with`: K002,K003,K004
   - `scope`: Zip Slip、绝对路径、混合分隔符、symlink entry、zip bomb、CRC/截断、加密。
   - `RED`: 任一恶意 fixture 命中或产生磁盘文件时失败。
@@ -652,7 +656,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 临时目录前后 inventory 相同。
   - `done`: provider 全流程无 archive 写出路径。
 
-- [ ] **K002 协议与 bridge 滥用矩阵**
+- [x] **K002 协议与 bridge 滥用矩阵**
   - `depends_on`: F004,J005；`parallel_with`: K001,K003,K004
   - `scope`: 超长包名、控制字符、额外 argv、自由 path、重复/超量 packages、超限 Base64/frame。
   - `RED`: Rust/WebUI/Kotlin 三层任一放行非法输入时失败。
@@ -660,7 +664,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 三层共享相同测试向量，生产实现保持各语言窄接口。
   - `done`: 前端不可借图标功能执行任意 Root 命令或读文件。
 
-- [ ] **K003 并发、生命周期与串包压力**
+- [x] **K003 并发、生命周期与串包压力**
   - `depends_on`: G006,I005,J005；`parallel_with`: K001,K002,K004
   - `scope`: 100 次 mount/unmount、快速滚动、20 次模式切换、Activity close、archive revision change。
   - `RED`: cache 竞态、陈旧写入、FD/stream/handler 残留或未处理异常时失败。
@@ -668,7 +672,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不通过增加常驻线程或无限 cache 规避问题。
   - `done`: 资源计数回到基线，图标不串包。
 
-- [ ] **K004 性能与内存预算**
+- [x] **K004 性能与内存预算**
   - `depends_on`: C007,G006,J005；`parallel_with`: K001,K002,K003
   - `scope`: D19 第 14 节全部硬门槛。
   - `RED`: 首屏等待图标、主线程同步 I/O、cache 超限、batch 超限或切换 p95 >700 ms 时失败。
@@ -676,7 +680,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 分别记录 capability、UDS、ZIP、Base64、decode、paint，不用单一总耗时掩盖瓶颈。
   - `done`: host/browser benchmark 达标，真机指标留待 M 阶段签署。
 
-- [ ] **K005 隐私与日志门禁**
+- [x] **K005 隐私与日志门禁**
   - `depends_on`: K001,K002,K003,K004；`parallel_with`: none
   - `scope`: Rust/Kotlin/WebUI logs、evidence、localStorage、diagnostics。
   - `RED`: 包名清单、图标 Base64、Root 路径、inode/mtime 或 APK path 出现在持久证据时失败。
@@ -686,7 +690,7 @@ flowchart TD
 
 ## 18. 阶段 L：供应链、构建与模块发布
 
-- [ ] **L001 更新 Rust 许可证、SBOM 和依赖门禁**
+- [x] **L001 更新 Rust 许可证、SBOM 和依赖门禁**
   - `depends_on`: K005；`parallel_with`: L002,L003
   - `scope`: `zip`、`flate2`、`lru`、传递依赖、Cargo deny 和发布清单。
   - `RED`: 新依赖未进入 license/SBOM 或 feature 漂移时失败。
@@ -694,7 +698,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 不手写重复依赖列表；`cargo deny` 和 lockfile 检查通过。
   - `done`: 每个新增 crate 有版本、许可证、来源和 feature 证据。
 
-- [ ] **L002 更新 WebUI bundle/CSP 门禁**
+- [x] **L002 更新 WebUI bundle/CSP 门禁**
   - `depends_on`: K005；`parallel_with`: L001,L003
   - `scope`: data PNG、无远程图片、bundle size、dependency/import checks。
   - `RED`: `img-src` 不允许受控 data PNG，或允许 `http:`/`blob:`/任意远程 origin 时失败。
@@ -702,7 +706,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: 无新增 npm runtime 依赖；WebUI gate 全绿。
   - `done`: production bundle 可显示主题图标且不扩大网络面。
 
-- [ ] **L003 更新 Companion APK 与模块 contracts**
+- [x] **L003 更新 Companion APK 与模块 contracts**
   - `depends_on`: K005；`parallel_with`: L001,L002
   - `scope`: Manifest、R8/lint、APK inventory、模块 checksum/build manifest。
   - `RED`: APK 新增 `INTERNET`、包含主题 ZIP/完整 WebUI、或模块缺新 license/SBOM 时失败。
@@ -710,7 +714,7 @@ flowchart TD
   - `REFACTOR/VERIFY`: Companion size <=2.5 MiB；模块增量必须记录并受现有预算约束。
   - `done`: release APK 和 arm64 module 静态门禁通过。
 
-- [ ] **L004 建立 application-icon host release gate**
+- [x] **L004 建立 application-icon host release gate**
   - `depends_on`: L001,L002,L003；`parallel_with`: none
   - `scope`: Rust workspace、WebUI、Companion、module、supply-chain 聚合。
   - `RED`: 任一阶段证据缺失、测试 skip、diff-check 或 hash 失败时总门禁失败。
@@ -720,13 +724,15 @@ flowchart TD
 
 ## 19. 阶段 M：Android 真机与最终收口
 
-- [ ] **M001 构建并核验候选模块**
+- [x] **M001 重建并核验原始图标候选模块**
   - `depends_on`: L004；`parallel_with`: none
   - `scope`: release APK、arm64 ZIP、checksums、build manifest。
   - `RED`: 本地与模块内 hash、ABI、签名或 protocol v6 不一致时失败。
   - `GREEN`: 只修复构建/打包问题。
   - `REFACTOR/VERIFY`: 保存产物名、大小和 SHA-256，不自动安装。
   - `done`: 候选产物可交给用户安装。
+
+  - 证据：`out/android-arm64/NetHop-857ccabc2fb092c1df63c53020fd3fc8d514bd8b-arm64.zip`（19,223,447 bytes，SHA-256 `7659ad32b354a8d5574f3ba5eababa224fb08a185a4f1c9a03351ed5c4f31d70`）及 release APK（431,241 bytes，SHA-256 `4e23dba960a60f957e7599e5e6f1526419b51f8cfd43bb1247b6d41d3705fb07`）；已传送至设备 `/sdcard/Download/NetHop-application-icons-20260816-arm64.zip`，未自动安装。
 
 - [ ] **M002 安装后基础健康检查**
   - `depends_on`: M001；`parallel_with`: none
@@ -736,53 +742,39 @@ flowchart TD
   - `REFACTOR/VERIFY`: 记录前后状态，不包含应用清单正文。
   - `done`: 新模块启动正常，旧核心功能可用。
 
-- [ ] **M003 验证主题 capability 与命中/缺失回退**
-  - `depends_on`: M002；`parallel_with`: M004
-  - `scope`: 当前 MIUI/HyperOS `/data/system/theme/icons`。
-  - `RED`: capability 非 supported、命中图标与 archive 不一致、缺失包留空时失败。
-  - `GREEN`: 修复 provider/bridge/UI 后重建重装。
-  - `REFACTOR/VERIFY`: 只记录计数和虚构/哈希化测试标识，不导出完整包名列表。
-  - `done`: 同屏同时存在 theme found 与 original fallback，显示正确。
-
-- [ ] **M004 验证原始图标和无 Launcher Activity 应用**
-  - `depends_on`: M002；`parallel_with`: M003
-  - `scope`: original 模式、系统应用、后台/无 Launcher Activity 应用。
-  - `RED`: 可代理应用因无桌面入口而无原始图标，或主题切换影响列表范围时失败。
+- [ ] **M003 验证原始图标和无 Launcher Activity 应用**
+  - `depends_on`: M002；`parallel_with`: none
+  - `scope`: 原始图标、系统应用、后台/无 Launcher Activity 应用。
+  - `RED`: 可代理应用因无桌面入口而无原始图标，或图标加载影响列表范围时失败。
   - `GREEN`: 修复 repository/handler，不改应用发现语义。
   - `REFACTOR/VERIFY`: 原始图标与系统 PackageManager 结果一致。
   - `done`: original 模式覆盖 NetHop 应用候选范围。
 
-- [ ] **M005 验证主题与应用更新失效**
-  - `depends_on`: M003,M004；`parallel_with`: M006
-  - `scope`: 切换手机主题、替换 archive、升级一个测试应用、重开 WebUI。
-  - `RED`: revision/lastUpdateTime 不变或仍显示旧图标时失败。
-  - `GREEN`: 修复 metadata/repository/cache 失效。
-  - `REFACTOR/VERIFY`: 不通过清应用数据或重启手机掩盖失效问题。
-  - `done`: 两类图标都按各自 revision 自动刷新。
-
-- [ ] **M006 验证 500+ 应用滚动和模式切换性能**
-  - `depends_on`: M003,M004；`parallel_with`: M005
-  - `scope`: 快速滚动、搜索、排序、20 次切换、内存/线程/FD。
-  - `RED`: 主线程明显卡顿、切换 p95 >700 ms、图标串包、内存无界或后台继续全量加载时失败。
-  - `GREEN`: 优化可见项、batch、cache 或取消边界。
+- [ ] **M004 验证 500+ 应用滚动和原始图标性能**
+  - `depends_on`: M002,M003；`parallel_with`: none
+  - `scope`: 快速滚动、搜索、排序、原始图标加载、内存/线程/FD。
+  - `RED`: 主线程明显卡顿、图标串包、内存无界或后台继续全量加载时失败。
+  - `GREEN`: 修复可见项加载、缓存或生命周期边界。
   - `REFACTOR/VERIFY`: 保存分阶段耗时统计和资源峰值。
   - `done`: D19 真机性能门槛全部签署。
 
-- [ ] **M007 验证应用管理与代理功能无回归**
-  - `depends_on`: M005,M006；`parallel_with`: none
+- [ ] **M005 验证应用管理与代理功能无回归**
+  - `depends_on`: M003,M004；`parallel_with`: none
   - `scope`: user/system/all、搜索、排序、selected-first、共享 UID、开关、TPROXY/TUN、节点测速。
   - `RED`: A003/M002 任一 before 行为在新模块失效时失败。
   - `GREEN`: 只修复由本功能引入的回归。
-  - `REFACTOR/VERIFY`: 图标失败场景下重复执行同一矩阵。
+  - `REFACTOR/VERIFY`: 图标加载失败场景下重复执行同一矩阵。
   - `done`: 新功能增加，所有既有用户功能正常。
 
+  - M002-M005 当前统一记录为 `not_run_device_manual_acceptance_required`；host 测试不能替代 Android 真机安装、原始图标、500+ 列表和代理回归验收。
+
 - [ ] **M008 删除旧路径并完成最终文档签署**
-  - `depends_on`: M007；`parallel_with`: none
-  - `scope`: 旧 v5 runtime、旧 URL、旧 resolver、旧 Adapter、临时 fixture、D19/D20/实施报告。
+  - `depends_on`: M005；`parallel_with`: none
+  - `scope`: 主题 provider/协议/loader、旧 URL、旧 resolver、旧 Adapter、临时 fixture、D19/D20/实施报告。
   - `RED`: 仓库搜索命中旧生产路径或 task evidence 不完整时失败。
   - `GREEN`: 删除旧代码和无效测试，更新最终状态与产物 hash。
   - `REFACTOR/VERIFY`: 执行 L004 final gate 和文档链接/diff check。
-  - `done`: 生产代码只有 v6 和新图标链，所有 checkbox 均有证据支持。
+  - `done`: 生产代码只有 v6 和原始图标链，所有当前 checkbox 均有证据支持。
 
 ## 20. 阶段门禁命令
 
@@ -836,17 +828,14 @@ pwsh -NoProfile -File "scripts/application-icon-phase-gate.ps1"
 
 以下条件全部满足才算 D20 完成：
 
-1. protocol v6 是唯一生产协议版本，两个图标方法端到端可用；
-2. Rust provider 只读固定主题 archive，ZIP/PNG/缓存/批量边界全部有测试；
-3. 设置页提供双模式并实时生效，不进入代理配置 apply；
-4. 主题模式逐应用回退，最终失败保持稳定首字符；
-5. Companion 使用统一 repository 和带 `lastUpdateTimeMs` 的新 URL；
-6. WebUI 使用 `ApplicationIcon` 和有界 batch loader，虚拟列表只加载 mounted rows；
-7. 旧 resolver、旧 URL、旧 Adapter 和 protocol v5 runtime 已删除；
-8. 图标功能不改变应用发现、共享 UID、搜索、排序、选中和策略 mutation；
-9. Companion 无 `INTERNET`，WebUI 无网络 fallback，localStorage 无图标/包名数据；
-10. Rust、protocol、daemon、CLI、WebUI、Companion、模块和供应链门禁全部通过；
-11. MIUI/HyperOS 真机完成主题命中、缺失回退、原始模式、主题更新、应用更新和 500+ 列表验证；
-12. before/after 证据证明新功能增加且旧功能正常；
-13. 文档状态、实施报告、候选产物大小和 SHA-256 与实际结果一致；
-14. 未经用户明确授权，不执行提交、推送或手机安装。
+1. protocol v6 是唯一生产协议版本，原始图标链不依赖主题图标协议；
+2. Companion 使用统一 repository 和带 `lastUpdateTimeMs` 的新 URL；
+3. WebUI 使用 `ApplicationIcon`，虚拟列表只加载 mounted rows，失败时稳定回退首字符；
+4. 旧 resolver、旧 URL、旧 Adapter 和主题图标 provider/协议/loader 已删除；
+5. 图标功能不改变应用发现、共享 UID、搜索、排序、选中和策略 mutation；
+6. Companion 无 `INTERNET`，WebUI 无网络 fallback，localStorage 不保存图标数据；
+7. Rust、protocol、daemon、CLI、WebUI、Companion、模块和供应链门禁全部通过；
+8. Android 真机完成原始图标、无 Launcher Activity 应用、500+ 列表和代理回归验证；
+9. before/after 证据证明原有应用管理功能正常；
+10. 文档状态、实施报告、候选产物大小和 SHA-256 与实际结果一致；
+11. 未经用户明确授权，不执行提交、推送或手机安装。

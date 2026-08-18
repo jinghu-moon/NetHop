@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetHop 磁贴图标 · 环形跳点</title>
+<style>
+  :root{
+    --page:#F4F6F5; --surface:#fff; --text:#18201D; --muted:#65716C; --line:#D9E0DC;
+    --accent:#477B94; --accent-d:#98C3D5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--text);font:15px/1.5 system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+  main{width:min(900px,calc(100% - 32px));margin:0 auto;padding:40px 0 70px}
+  h1{font-size:22px;margin:0 0 6px}
+  p.lead{margin:0 0 30px;color:var(--muted);max-width:660px}
+  .concept{border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden;box-shadow:0 12px 32px rgba(28,45,38,.06);margin-bottom:24px}
+  .chead{padding:16px 20px 0}
+  .chead .name{font-size:15px;font-weight:700}
+  .chead .note{font-size:12.5px;color:var(--muted);margin-top:5px;max-width:700px;line-height:1.6}
+  .preview{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px 20px 20px}
+  .stage{display:grid;place-items:center;gap:8px;padding:18px 10px 14px;border-radius:10px}
+  .stage.light{background:#F7FAF8} .stage.dark{background:#181D1B}
+  .tile{display:grid;place-items:center;width:96px;height:96px;border-radius:26px}
+  .tile.off{background:#DFE5E2;color:#53615B}
+  .tile.on-d{background:var(--accent-d);color:#0F2933}
+  .tlabel{color:var(--muted);font-size:12px}
+  .dark .tlabel{color:#AEBBB5}
+</style>
+</head>
+<body>
+<main>
+  <h1>NetHop · 环形跳点</h1>
+  <p class="lead">三个节点分布在同一条圆形路径上，分别表示入口、中间跳点和代理出口。曲线与节点始终保持约 1.2 个 SVG 单位的间距；关闭时三个节点均为空心，开启时三个节点均为实心。</p>
+
+  <div class="concept">
+    <div class="chead"><div class="name">推荐方案 · 环形跳点</div>
+      <div class="note">三段圆弧共同表示网络路径，三个独立圆点保留 NetHop 的跳点特征。启停状态使用完全相同的圆弧几何：全部空心表示关闭，全部实心表示开启，切换时图标轮廓不会移动。</div></div>
+    <div class="preview">
+      <div class="stage light"><div class="tile off"><svg width="55" height="55" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15.59 4.3A8.5 8.5 0 0 1 20.47 12.74"></path>
+        <path d="M16.88 18.96A8.5 8.5 0 0 1 7.12 18.96"></path>
+        <path d="M3.53 12.74A8.5 8.5 0 0 1 8.41 4.3"></path>
+        <circle cx="12" cy="3.5" r="1.6" stroke-width="1.4"></circle>
+        <circle cx="4.64" cy="16.25" r="1.6" stroke-width="1.4"></circle>
+        <circle cx="19.36" cy="16.25" r="1.6" stroke-width="1.4"></circle>
+      </svg></div><span class="tlabel">关闭 · 空心跳点</span></div>
+      <div class="stage dark"><div class="tile on-d"><svg width="55" height="55" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15.59 4.3A8.5 8.5 0 0 1 20.47 12.74"></path>
+        <path d="M16.88 18.96A8.5 8.5 0 0 1 7.12 18.96"></path>
+        <path d="M3.53 12.74A8.5 8.5 0 0 1 8.41 4.3"></path>
+        <circle cx="12" cy="3.5" r="2" fill="currentColor" stroke="none"></circle>
+        <circle cx="4.64" cy="16.25" r="2" fill="currentColor" stroke="none"></circle>
+        <circle cx="19.36" cy="16.25" r="2" fill="currentColor" stroke="none"></circle>
+      </svg></div><span class="tlabel">开启 · 实心跳点</span></div>
+    </div>
+  </div>
+
+</main>
+</body>
+</html>

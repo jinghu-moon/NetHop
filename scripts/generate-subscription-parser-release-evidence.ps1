@@ -30,6 +30,7 @@ $AllowedLicenseExpressions = @(
     "MIT OR Zlib OR Apache-2.0",
     "Unicode-3.0",
     "Unlicense OR MIT"
+    "Zlib"
 )
 
 function Get-Sha256File {

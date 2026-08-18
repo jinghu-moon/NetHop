@@ -1,6 +1,6 @@
 # NetHop WebUI 应用图标获取与展示设计
 
-> 状态：Design Baseline v0.1
+> 状态：主题图标方案已于 2026-08-16 经用户确认取消。本文件中的 MIUI/HyperOS 主题 ZIP、主题 capability/batch 和双模式设置均为历史设计记录，不属于当前生产实现；当前仅保留 Android Framework/Root Manager 原始图标 provider 与首字符回退。
 >
 > 日期：2026-08-16
 >

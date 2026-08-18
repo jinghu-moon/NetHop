@@ -1,0 +1,104 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust 1.86
+        uses: dtolnay/rust-toolchain@1.86.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check locked metadata
+        run: cargo metadata --locked --format-version 1
+      - name: Test workspace
+        run: cargo test --workspace --locked --all-features
+      - name: Reject Clippy warnings
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+
+  webui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run WebUI gate
+        run: npm run gate
+
+  companion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run Companion gate
+        run: |
+          chmod +x companion/gradlew
+          companion/gradlew --no-configuration-cache -p companion testDebugUnitTest lintRelease assembleDebugAndroidTest writeReleaseRuntimeComponents
+
+  module-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate unified CI
+        shell: pwsh
+        run: ./scripts/ci-contracts.ps1
+      - name: Validate module packaging
+        shell: pwsh
+        run: ./scripts/module-contracts.ps1
+      - name: Validate Android build provenance
+        shell: pwsh
+        run: ./scripts/android-build-contracts.ps1
+      - name: Validate data-plane benchmark evidence schema
+        shell: pwsh
+        run: ./scripts/data-plane-benchmark-contracts.ps1
+
+  required:
+    if: ${{ always() }}
+    needs: [rust, webui, companion, module-contracts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          WEBUI_RESULT: ${{ needs.webui.result }}
+          COMPANION_RESULT: ${{ needs.companion.result }}
+          MODULE_RESULT: ${{ needs.module-contracts.result }}
+        run: |
+          test "$RUST_RESULT" = success
+          test "$WEBUI_RESULT" = success
+          test "$COMPANION_RESULT" = success
+          test "$MODULE_RESULT" = success

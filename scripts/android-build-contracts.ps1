@@ -25,7 +25,7 @@ Assert-Contains 'Machine:\s+AArch64' "build must verify ELF architecture"
 Assert-Contains 'checksums.sha256' "build must publish the installer checksum manifest"
 Assert-Contains 'staged asset checksum verification failed' "build must reverify staged assets"
 Assert-Contains 'Compress-Archive' "build must generate an installable module archive"
-Assert-Contains 'module archive is missing' "build must validate archive root layout"
+Assert-Contains 'module archive layout is invalid' "build must validate archive root layout"
 Assert-Contains 'out/android-arm64' "build output must stay outside the source template"
 
 Write-Host "NetHop Android build contracts passed"

@@ -16,7 +16,7 @@
 
 本文档根据两轮需求确认、`refer/` 内参考工程、`refer/sing-box-testing` 上游源码、`NetGuard/sub-parser` 和 `PathGuard-Next` 的工程结构形成。它定义 NetHop 首版的产品边界、系统架构、运行流程、数据模型、安全约束、性能口径和实施顺序，是后续编码、评审和验收的共同基线。
 
-本文档只冻结已经有需求依据的能力。热点与 USB 共享、KernelSU WebUI、独立 Android App 等后续能力保留明确边界，但不提前实现。
+本文档只冻结已经有需求依据的能力。2026-08-17 实施状态补充：热点与 USB 已进入受控 TPROXY 复合计划但仍为 experimental；KernelSU WebUI 与可选 Companion APK 已实现；eBPF 仅有无副作用 PoC admission，不属于活动数据面。最新边界见 D17、D23 和 D24。
 
 ## 2. 已确认需求
 
@@ -47,7 +47,7 @@
 | DNS | 真实 IP DNS 分流，启用协议 sniff，不使用 FakeIP |
 | 应用策略 | 同时支持黑名单和白名单，应用展示分为系统应用与用户应用 |
 | Android 用户 | 支持所有已启动用户及工作资料；共享 UID 作为不可拆分整体 |
-| 热点/USB 共享 | 不属于首版，进入产品第二阶段 |
+| 热点/USB 共享 | 已实现受控 TPROXY 复合计划；offload admission 与真机证据完成前保持 experimental |
 
 ### 2.3 订阅、节点与配置
 
@@ -108,7 +108,7 @@ Alpha 可以只覆盖一个 `reference_verified` 组合。Magisk 或 KernelSU �
 
 1. sing-box 稳定版没有可替代 Proxylink 的通用订阅 Provider。NetHop 必须拥有自己的 Rust 订阅转换库。
 2. `auto_redirect` 不能简单描述为“Android 没有 nftables，所以不可用”。上游当前实现和版本行为更复杂；但官方文档也明确指出 Android 上存在功能限制，因此它只能作为 TUN 内部优化，不能代替首版完整 TPROXY 方案。
-3. sing-box 的 SIGHUP 是“先校验，再关闭旧实例并重新创建”，不是原地热更新。只有 selector、Clash mode 等运行时 API 操作可直接承诺低于 1 秒。
+3. sing-box SIGHUP 不是零中断的进程内字段替换。NetHop 已将普通订阅内容更新改为稳定路径 reload，并在健康后提交 generation；结构性策略变化仍走完整激活，性能承诺必须由真机中断证据给出。
 4. Clash `/traffic` 只提供进程内实时速率，`/connections` 只提供当前连接快照。历史总量和按节点精确统计不能依赖低频连接快照推算。
 5. 截至 2026-08-01，上游正式版为 `v1.13.15`，预发布版为 `v1.14.0-beta.4`。`refer/sing-box-testing` 是包含 1.14 设计的开发线源码，不能将其中的新 gRPC API 当作 1.13.15 已发布契约。
 6. 上游 V2Ray Stats 在路由 tracker 中按直接匹配的 outbound 计数，顶层路由为 `selector` 时不会自动归因到最终节点。精确节点历史依赖 18.1 节定义的下游终端 outbound 归因补丁，不能仅靠启用 build tag 获得。
@@ -125,7 +125,7 @@ Alpha 可以只覆盖一个 `reference_verified` 组合。Magisk 或 KernelSU �
 | 调整 | 为不同格式放宽转换时限 | 仍保持用户确认的 300 ms 总门槛，但按 URI/JSON/YAML 分项报告，不能用简单 URI 掩盖 YAML 成本 |
 | 不采纳 | AnyTLS 在 1.13.15 中可能不可用 | 官方标明自 1.12.0 支持，`v1.13.15` 源码存在正式 outbound；保留首版支持并增加版本 fixture |
 | 不采纳 | TUN GSO、首版 BBR/sysctl 调优 | 官方已声明 TUN GSO 对透明代理无收益且不再工作；全局 sysctl 会影响整机，首版不修改 |
-| 不采纳 | 首版 native nft/eBPF/XDP | Android/vendor 碎片化和发布成本不符合首版轻量目标；只做能力记录，不作为依赖或自动优化 |
+| 不采纳 | 首版 native nft/eBPF/XDP | Android/vendor 碎片化和发布成本不符合首版轻量目标；当前只实现 capability-gated PoC admission，不作为依赖、候选 generation 或自动优化 |
 | 不采纳 | inbound 与各 outbound 字节严格守恒 | 代理封装、拒绝路径和统计层次不同，不能用错误等式验收；改用已知 payload fixture 分别校验计数语义 |
 
 ## 4. 设计原则

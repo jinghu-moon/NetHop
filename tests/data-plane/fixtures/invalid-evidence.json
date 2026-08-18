@@ -1,0 +1,7 @@
+{
+  "schema": "nethop-data-plane-benchmark-v1",
+  "build_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "device": {"api_level":35,"kernel_release":"5.4.0-fixture","build_fingerprint_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "workload": {"id":"loopback-controlled-v1","duration_seconds":30},
+  "modes": [{"mode":"tproxy","runs":[]}]
+}

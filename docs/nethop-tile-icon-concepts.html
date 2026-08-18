@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NetHop Quick Settings Tile Icon Concepts</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f4f6f5;
+      --surface: #ffffff;
+      --text: #18201d;
+      --muted: #65716c;
+      --line: #d9e0dc;
+      --accent: #00856a;
+      --accent-soft: #d9f1e9;
+      --tile-off: #dfe5e2;
+      --tile-off-icon: #53615b;
+      --tile-on: #00856a;
+      --tile-on-icon: #ffffff;
+      --shadow: 0 12px 32px rgba(28, 45, 38, .08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--page);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 64px; }
+    header { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 28px; }
+    h1 { margin: 0; font-size: clamp(24px, 4vw, 38px); letter-spacing: 0; }
+    h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+    p { margin: 6px 0 0; color: var(--muted); }
+    .recommendation {
+      max-width: 360px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--accent);
+      background: var(--accent-soft);
+      color: #164e41;
+    }
+    .recommendation strong { display: block; color: #0d624e; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .concept {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .concept.recommended { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0, 133, 106, .12), var(--shadow); }
+    .concept-head { display: flex; justify-content: space-between; gap: 12px; padding: 18px 18px 0; }
+    .badge { align-self: start; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); color: #0d624e; font-size: 12px; white-space: nowrap; }
+    .preview { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 18px; }
+    .tile-stage { display: grid; place-items: center; gap: 7px; padding: 18px 10px 14px; border-radius: 8px; }
+    .tile-stage.light { background: #f7faf8; }
+    .tile-stage.dark { background: #222925; }
+    .tile { display: grid; place-items: center; width: 104px; height: 104px; border-radius: 28px; }
+    .tile.light-off { background: var(--tile-off); color: var(--tile-off-icon); }
+    .tile.light-on { background: var(--tile-on); color: var(--tile-on-icon); }
+    .tile.dark-off { background: #3a4540; color: #bcc8c2; }
+    .tile.dark-on { background: #75d1b8; color: #103e32; }
+    .tile svg { width: 48px; height: 48px; display: block; }
+    .tile-label { color: var(--muted); font-size: 12px; }
+    .dark .tile-label { color: #aebbb5; }
+    .sizes { display: flex; align-items: end; gap: 16px; padding: 0 18px 18px; min-height: 70px; }
+    .size { display: grid; gap: 4px; justify-items: center; color: var(--muted); font-size: 11px; }
+    .size svg { display: block; color: var(--tile-on); }
+    .details { padding: 0 18px 20px; }
+    .details ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); }
+    .details li + li { margin-top: 4px; }
+    .guidance { margin-top: 24px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .guidance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
+    .guidance-item { padding-top: 10px; border-top: 2px solid var(--line); }
+    .guidance-item strong { display: block; margin-bottom: 4px; }
+    .guidance-item span { color: var(--muted); }
+    code { padding: 1px 4px; border-radius: 4px; background: #eef2ef; color: #33554a; }
+    @media (max-width: 720px) {
+      main { width: min(100% - 24px, 560px); padding-top: 24px; }
+      header { display: block; }
+      .recommendation { margin-top: 16px; max-width: none; }
+      .grid, .guidance-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>NetHop 磁贴图标方案</h1>
+        <p>Quick Settings 小尺寸单色图标预览。所有方案使用 24 × 24 逻辑视口，可直接转换为 Android VectorDrawable。</p>
+      </div>
+      <div class="recommendation">
+        <strong>推荐：方案 B · 连通状态</strong>
+        完整路径表示代理启用，明确断点表示代理关闭；不需要记忆上下轨含义。
+      </div>
+    </header>
+
+    <section class="grid" aria-label="图标方案">
+      <article class="concept">
+        <div class="concept-head">
+          <div><h2>方案 A · N 路径</h2><p>品牌字母方案</p></div>
+        </div>
+        <div class="preview">
+          <div class="tile-stage light"><div class="tile light-off"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 18V6h3l8 8V6h3v12h-3L8 10v8H5Z"/></svg></div><span class="tile-label">关闭</span></div>
+          <div class="tile-stage dark"><div class="tile dark-on"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 18V6h3l8 8V6h3v12h-3L8 10v8H5Z"/></svg></div><span class="tile-label">开启</span></div>
+        </div>
+        <div class="sizes"><div class="size"><svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M5 18V6h3l8 8V6h3v12h-3L8 10v8H5Z"/></svg><span>24</span></div><div class="size"><svg width="32" height="32" viewBox="0 0 24 24"><path fill="currentColor" d="M5 18V6h3l8 8V6h3v12h-3L8 10v8H5Z"/></svg><span>32</span></div><div class="size"><svg width="48" height="48" viewBox="0 0 24 24"><path fill="currentColor" d="M5 18V6h3l8 8V6h3v12h-3L8 10v8H5Z"/></svg><span>48</span></div></div>
+        <div class="details"><ul><li>“N” 轮廓来自两次网络 hop，含义直接。</li><li>大面积实心结构适合 SystemUI 的单色 tint。</li><li>不依赖文字、地球或下载箭头，跨语言稳定。</li></ul></div>
+      </article>
+
+      <article class="concept recommended">
+        <div class="concept-head"><div><h2>方案 B · 连通状态</h2><p>路径直接表达启停</p></div><span class="badge">推荐</span></div>
+        <div class="preview">
+          <div class="tile-stage light"><div class="tile light-off"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M3 6H7L12 12M3 18H7L12 12M15 12H18.5"/><circle cx="3" cy="6" r="2.5" fill="currentColor"/><circle cx="3" cy="18" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="21" cy="12" r="1.6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><span class="tile-label">关闭 · 路径断开</span></div>
+          <div class="tile-stage dark"><div class="tile dark-on"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M3 6H7L12 12M3 18H7L12 12M12 12H18.5"/><circle cx="3" cy="6" r="2.5" fill="currentColor"/><circle cx="3" cy="18" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="21" cy="12" r="2.5" fill="currentColor"/></svg></div><span class="tile-label">开启 · 路径连通</span></div>
+        </div>
+        <div class="sizes"><div class="size"><svg width="24" height="24" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M3 6H7L12 12M3 18H7L12 12M12 12H18.5"/><circle cx="3" cy="6" r="2.5" fill="currentColor"/><circle cx="3" cy="18" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="21" cy="12" r="2.5" fill="currentColor"/></svg><span>24</span></div><div class="size"><svg width="32" height="32" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M3 6H7L12 12M3 18H7L12 12M12 12H18.5"/><circle cx="3" cy="6" r="2.5" fill="currentColor"/><circle cx="3" cy="18" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="21" cy="12" r="2.5" fill="currentColor"/></svg><span>32</span></div><div class="size"><svg width="48" height="48" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M3 6H7L12 12M3 18H7L12 12M12 12H18.5"/><circle cx="3" cy="6" r="2.5" fill="currentColor"/><circle cx="3" cy="18" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="21" cy="12" r="2.5" fill="currentColor"/></svg><span>48</span></div></div>
+        <div class="details"><ul><li>两条候选路径汇聚到中间节点，体现订阅节点的合并和选优。</li><li>开启态一路连到实心出口；关闭态保留候选节点，但在出口前明确断开并显示空心节点。</li><li>用户只需判断路径是否连通，不需要记忆“上轨/下轨”的状态约定。</li></ul></div>
+      </article>
+
+      <article class="concept">
+        <div class="concept-head"><div><h2>方案 C · 隧道桥</h2><p>强调代理通道</p></div></div>
+        <div class="preview">
+          <div class="tile-stage light"><div class="tile light-off"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.17l2 2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.34l1.3-1.3 1.4 1.42-3.7 3.7-3.7-3.7 1.4-1.42 1.3 1.3V5h-2v7.17l2 2-1.4 1.42-3.7-3.7-3.7 3.7-1.4-1.42 2-2V5H6v13h4v2H6a2 2 0 0 1-2-2V5Z"/></svg></div><span class="tile-label">关闭</span></div>
+          <div class="tile-stage dark"><div class="tile dark-on"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.17l2 2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.34l1.3-1.3 1.4 1.42-3.7 3.7-3.7-3.7 1.4-1.42 1.3 1.3V5h-2v7.17l2 2-1.4 1.42-3.7-3.7-3.7 3.7-1.4-1.42 2-2V5H6v13h4v2H6a2 2 0 0 1-2-2V5Z"/></svg></div><span class="tile-label">开启</span></div>
+        </div>
+        <div class="sizes"><div class="size"><svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.17l2 2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.34l1.3-1.3 1.4 1.42-3.7 3.7-3.7-3.7 1.4-1.42 1.3 1.3V5h-2v7.17l2 2-1.4 1.42-3.7-3.7-3.7 3.7-1.4-1.42 2-2V5H6v13h4v2H6a2 2 0 0 1-2-2V5Z"/></svg><span>24</span></div><div class="size"><svg width="32" height="32" viewBox="0 0 24 24"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.17l2 2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.34l1.3-1.3 1.4 1.42-3.7 3.7-3.7-3.7 1.4-1.42 1.3 1.3V5h-2v7.17l2 2-1.4 1.42-3.7-3.7-3.7 3.7-1.4-1.42 2-2V5H6v13h4v2H6a2 2 0 0 1-2-2V5Z"/></svg><span>32</span></div><div class="size"><svg width="48" height="48" viewBox="0 0 24 24"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.17l2 2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.34l1.3-1.3 1.4 1.42-3.7 3.7-3.7-3.7 1.4-1.42 1.3 1.3V5h-2v7.17l2 2-1.4 1.42-3.7-3.7-3.7 3.7-1.4-1.42 2-2V5H6v13h4v2H6a2 2 0 0 1-2-2V5Z"/></svg><span>48</span></div></div>
+        <div class="details"><ul><li>两条竖向边界像代理隧道或桥接通道。</li><li>垂直方向适合通知栏的紧凑形状。</li><li>箭头容易被理解为上传/下载，网络特征弱于方案 A。</li></ul></div>
+      </article>
+
+      <article class="concept">
+        <div class="concept-head"><div><h2>方案 D · 路由盾牌</h2><p>强调保护和代理</p></div></div>
+        <div class="preview">
+          <div class="tile-stage light"><div class="tile light-off"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2" d="M12 2.8 19 5v5.5c0 4.6-2.8 8.4-7 10.7-4.2-2.3-7-6.1-7-10.7V5l7-2.2Z"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h2l2 2 4-4"/></svg></div><span class="tile-label">关闭</span></div>
+          <div class="tile-stage dark"><div class="tile dark-on"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2" d="M12 2.8 19 5v5.5c0 4.6-2.8 8.4-7 10.7-4.2-2.3-7-6.1-7-10.7V5l7-2.2Z"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h2l2 2 4-4"/></svg></div><span class="tile-label">开启</span></div>
+        </div>
+        <div class="sizes"><div class="size"><svg width="24" height="24" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2" d="M12 2.8 19 5v5.5c0 4.6-2.8 8.4-7 10.7-4.2-2.3-7-6.1-7-10.7V5l7-2.2Z"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h2l2 2 4-4"/></svg><span>24</span></div><div class="size"><svg width="32" height="32" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2" d="M12 2.8 19 5v5.5c0 4.6-2.8 8.4-7 10.7-4.2-2.3-7-6.1-7-10.7V5l7-2.2Z"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h2l2 2 4-4"/></svg><span>32</span></div><div class="size"><svg width="48" height="48" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2" d="M12 2.8 19 5v5.5c0 4.6-2.8 8.4-7 10.7-4.2-2.3-7-6.1-7-10.7V5l7-2.2Z"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h2l2 2 4-4"/></svg><span>48</span></div></div>
+        <div class="details"><ul><li>盾牌立即传达安全、保护和代理。</li><li>适合产品强调隐私防护时使用。</li><li>“安全”语义会弱化 NetHop 的路径/跳点特色。</li></ul></div>
+      </article>
+    </section>
+
+    <section class="guidance">
+      <h2>落地建议</h2>
+      <div class="guidance-grid">
+        <div class="guidance-item"><strong>Android Tile</strong><span>方案 B 落地为 <code>ic_nethop_tile_on</code> 与 <code>ic_nethop_tile_off</code> 两个单色 VectorDrawable。</span></div>
+        <div class="guidance-item"><strong>状态表达</strong><span>拨杆位置表达路由状态，SystemUI 的 active/inactive tint 继续提供颜色反馈。</span></div>
+        <div class="guidance-item"><strong>品牌色</strong><span>保留现有 NetHop teal <code>#00856A</code> 作为 active tile 背景或 WebUI accent，不塞进图形。</span></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
