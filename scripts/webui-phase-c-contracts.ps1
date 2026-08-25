@@ -38,18 +38,36 @@ Push-Location $webui
 try {
     & node "scripts/check-imports.mjs" "tests/contracts/import-valid.ts.txt"
     Assert-True ($LASTEXITCODE -eq 0) "import guard rejected the valid fixture"
-    & node "scripts/check-imports.mjs" "tests/contracts/import-invalid-tdesign.ts.txt" 2>$null
-    Assert-True ($LASTEXITCODE -ne 0) "import guard accepted global TDesign registration"
-    & node "scripts/check-imports.mjs" "tests/contracts/import-invalid-tabler.ts.txt" 2>$null
-    Assert-True ($LASTEXITCODE -ne 0) "import guard accepted a Tabler namespace import"
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & node "scripts/check-imports.mjs" "tests/contracts/import-invalid-tdesign.ts.txt" 2>$null
+        $invalidDependencyExitCode = $LASTEXITCODE
+        & node "scripts/check-imports.mjs" "tests/contracts/import-invalid-tabler.ts.txt" 2>$null
+        $invalidTablerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    Assert-True ($invalidDependencyExitCode -ne 0) "import guard accepted a forbidden UI dependency"
+    Assert-True ($invalidTablerExitCode -ne 0) "import guard accepted a Tabler namespace import"
     & node "scripts/check-production-security.mjs" "--scan-fixture" "tests/contracts/security-valid.txt"
     Assert-True ($LASTEXITCODE -eq 0) "security guard rejected the valid fixture"
-    & node "scripts/check-production-security.mjs" "--scan-fixture" "tests/contracts/security-invalid.txt" 2>$null
-    Assert-True ($LASTEXITCODE -ne 0) "security guard accepted a remote connect-src"
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & node "scripts/check-production-security.mjs" "--scan-fixture" "tests/contracts/security-invalid.txt" 2>$null
+        $invalidSecurityExitCode = $LASTEXITCODE
+        & node "scripts/check-bundle-budget.mjs" "--probe-gzip" "81921" 2>$null
+        $overBudgetExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    Assert-True ($invalidSecurityExitCode -ne 0) "security guard accepted a remote connect-src"
     & node "scripts/check-bundle-budget.mjs" "--probe-gzip" "81920"
     Assert-True ($LASTEXITCODE -eq 0) "bundle guard rejected the exact limit"
-    & node "scripts/check-bundle-budget.mjs" "--probe-gzip" "81921" 2>$null
-    Assert-True ($LASTEXITCODE -ne 0) "bundle guard accepted an over-limit chunk"
+    Assert-True ($overBudgetExitCode -ne 0) "bundle guard accepted an over-limit chunk"
 }
 finally {
     Pop-Location

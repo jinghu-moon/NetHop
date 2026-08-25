@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { IconArrowsSort, IconCheck } from "@tabler/icons-vue";
-import { Button as TButton, Switch as TSwitch } from "tdesign-mobile-vue";
-import AnchoredDropdown from "@/components/AnchoredDropdown.vue";
-import SegmentedControl from "@/components/SegmentedControl.vue";
+import { ref } from "vue";
+import Dropdown from "@/components/ui/overlay/Dropdown.vue";
+import List from "@/components/ui/layout/List.vue";
+import MenuItemRadio from "@/components/ui/menu/MenuItemRadio.vue";
+import Segmented from "@/components/ui/navigation/Segmented.vue";
+import Switch from "@/components/ui/primitives/Switch.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
 import type { ApplicationSort, ApplicationSortDirection, ApplicationSortField } from "@/model/application-sort";
 
 export interface ApplicationSortFieldOption {
@@ -22,6 +26,7 @@ const emit = defineEmits<{
   "selectedFirstChange": [value: boolean];
 }>();
 const selectedFirstAvailable = computed(() => props.selectedCount > 0);
+const open = ref(false);
 const directionOptions = [
   { value: "asc", label: "升序" },
   { value: "desc", label: "降序" },
@@ -45,58 +50,47 @@ function updateSelectedFirst(value: unknown): void {
 </script>
 
 <template>
-  <AnchoredDropdown class="application-sort-dropdown" menu-label="应用排序" menu-class="application-sort-menu" menu-width="200px" :offset="6">
-    <template #trigger="{ open, toggle }">
-      <TButton
+  <Dropdown v-model:open="open" class="application-sort-dropdown" panel-class="application-sort-menu" panel-width="200px" placement="bottom-end" :close-on-select="false">
+    <template #trigger="{ open: isOpen }">
+      <IconButton
         class="application-sort-trigger"
-        size="small"
-        shape="square"
+        size="s"
         variant="outline"
-        theme="default"
+        aria-label="排序方式"
         title="排序方式"
         aria-haspopup="menu"
-        :aria-expanded="open"
-        :data-open="open"
-        @click="toggle"
+        :aria-expanded="isOpen"
+        :data-open="isOpen"
       >
         <IconArrowsSort :size="19" />
-      </TButton>
+      </IconButton>
     </template>
     <template #default="{ close }">
-      <section class="anchored-dropdown__section">
-        <div class="anchored-dropdown__section-title">排序方式</div>
-        <div class="anchored-dropdown__options" role="group" aria-label="排序字段">
-          <button
-            v-for="option in fields"
-            :key="option.field"
-            class="anchored-dropdown__option"
-            type="button"
-            role="menuitemradio"
-            :aria-checked="option.field === modelValue.field"
-            :data-selected="option.field === modelValue.field"
-            @click="selectField(option.field, close)"
-          >
-            <span>{{ option.label }}</span>
-            <IconCheck class="anchored-dropdown__option-icon" :size="18" aria-hidden="true" :data-visible="option.field === modelValue.field" />
-          </button>
-        </div>
+      <section class="application-sort-section">
+        <div class="application-sort-section__title">排序方式</div>
+        <List spacing="none" aria-label="排序字段">
+          <MenuItemRadio v-for="option in fields" :key="option.field" :selected="option.field === modelValue.field" @click="selectField(option.field, close)">
+            <template #suffix><IconCheck v-if="option.field === modelValue.field" :size="18" aria-hidden="true" /></template>
+            {{ option.label }}
+          </MenuItemRadio>
+        </List>
       </section>
-      <section class="anchored-dropdown__section anchored-dropdown__section--divided">
-        <div class="anchored-dropdown__section-title">排序选项</div>
-        <div class="anchored-dropdown__row">
-          <span class="anchored-dropdown__row-label">方向</span>
+      <section class="application-sort-section application-sort-section--divided">
+        <div class="application-sort-section__title">排序选项</div>
+        <div class="application-sort-row">
+          <span>方向</span>
           <div role="group" aria-label="排序方向">
-            <SegmentedControl class="application-sort-direction" :model-value="modelValue.direction" :options="directionOptions" @change="updateDirection" />
+            <Segmented class="application-sort-direction" :model-value="modelValue.direction" :options="directionOptions" @change="updateDirection" />
           </div>
         </div>
-        <div class="anchored-dropdown__row application-sort-priority">
-          <span class="anchored-dropdown__row-label">已选优先</span>
-          <TSwitch size="small" :value="selectedFirst" :disabled="!selectedFirstAvailable" aria-label="已选优先" @change="updateSelectedFirst" />
+        <div class="application-sort-row application-sort-priority">
+          <span>已选优先</span>
+          <Switch size="s" :model-value="selectedFirst" :disabled="!selectedFirstAvailable" aria-label="已选优先" @change="updateSelectedFirst" />
         </div>
-        <p v-if="!selectedFirstAvailable" class="anchored-dropdown__hint">当前未选择应用，该选项暂不生效</p>
+        <p v-if="!selectedFirstAvailable" class="application-sort-hint">当前未选择应用，该选项暂不生效</p>
       </section>
     </template>
-  </AnchoredDropdown>
+  </Dropdown>
 </template>
 
 <style scoped>
@@ -112,4 +106,12 @@ function updateSelectedFirst(value: unknown): void {
 .application-sort-direction {
   width: 130px;
 }
+.application-sort-section { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px; }
+.application-sort-section--divided { border-top: 1px solid var(--border-divider); }
+.application-sort-section__title { padding: 3px 4px 6px; color: var(--text-secondary); font-size: 11px; }
+.application-sort-section :deep(.nh-menu-item-radio--selected) { color: var(--action-primary); background: color-mix(in srgb, var(--action-primary) 9%, transparent); }
+.application-sort-section :deep(.nh-menu-item-radio__suffix) { color: var(--action-primary); }
+.application-sort-row { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 4px; font-size: 12px; }
+.application-sort-hint { margin: 0 4px 3px; color: var(--text-secondary); font-size: 11px; line-height: 18px; }
+:global(.application-sort-menu) { width: 200px; }
 </style>

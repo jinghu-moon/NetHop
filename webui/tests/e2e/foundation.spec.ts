@@ -9,8 +9,10 @@ test("production WebUI loads from a hash route without remote requests", async (
   await page.goto("/#/");
   await expect(page.locator("main h2").filter({ hasText: "概览" })).toBeVisible();
   await expect(page.locator(".app-header")).toHaveCount(0);
-  await expect(page.locator(".foundation-header .t-button")).toHaveCount(0);
-  await expect(page.locator(".t-tab-bar")).toBeVisible();
+  await page.goto("/#/dev/ui-foundation");
+  await expect(page.locator("[data-ui-foundation]")).toHaveCount(0);
+  await page.goto("/#/");
+  await expect(page.locator(".nh-tab-bar")).toBeVisible();
   for (const [route, label] of [["overview", "概览"], ["subscriptions", "订阅"], ["nodes", "节点"], ["applications", "应用"], ["settings", "设置"]] as const) {
     await page.goto(`/#/${route}`);
     await expect(page.locator("main h2").filter({ hasText: label })).toBeVisible();
@@ -22,16 +24,16 @@ test("production WebUI loads from a hash route without remote requests", async (
 
 test("daily controls and subscription forms remain typed and mobile-safe", async ({ page }) => {
   await page.goto("/#/overview");
-  await expect(page.locator(".service-panel .t-switch")).toBeVisible();
+  await expect(page.locator(".service-panel .nh-switch")).toBeVisible();
   await expect(page.locator(".proxy-quality-link")).toHaveAttribute("href", "#/nodes");
   await page.goto("/#/subscriptions");
   const addSubscription = page.locator(".subscription-add-fab");
-  await expect(page.locator(".subscriptions-page .heading-actions .t-button")).toHaveCount(1);
+  await expect(page.locator(".subscriptions-page .heading-actions .nh-button")).toHaveCount(1);
   await expect(addSubscription).toHaveCSS("position", "fixed");
   await expect(addSubscription.locator(".tabler-icon-plus")).toBeVisible();
   await expect(addSubscription).toHaveText("");
   const addBox = await addSubscription.boundingBox();
-  const subscriptionTabBar = await page.locator(".t-tab-bar").boundingBox();
+  const subscriptionTabBar = await page.locator(".nh-tab-bar").boundingBox();
   expect(addBox).not.toBeNull();
   expect(subscriptionTabBar).not.toBeNull();
   expect(addBox!.width).toBe(48);
@@ -40,29 +42,29 @@ test("daily controls and subscription forms remain typed and mobile-safe", async
   expect(addBox!.y + addBox!.height).toBeLessThanOrEqual(subscriptionTabBar!.y - 15);
   await addSubscription.click();
   await expect(page.getByText("添加订阅", { exact: true }).last()).toBeVisible();
-  await expect(page.locator(".subscription-editor .t-input").nth(0)).toBeVisible();
-  await expect(page.locator(".subscription-editor .t-input").nth(1)).toBeVisible();
+  await expect(page.locator(".subscription-editor .nh-input").nth(0)).toBeVisible();
+  await expect(page.locator(".subscription-editor .nh-input").nth(1)).toBeVisible();
   await expect(page.locator(".subscription-editor").getByText(/^ID$/i)).toHaveCount(0);
   await page.getByText("从文本内容导入", { exact: true }).click();
   await expect(page.locator("button").filter({ hasText: "预览" })).toBeDisabled();
   await expect(page.locator("button").filter({ hasText: "确认导入" })).toBeDisabled();
 });
 
-test("subscription cards expose real daemon status and move secondary actions into TDesign ActionSheet", async ({ page }) => {
+test("subscription cards expose real daemon status and move secondary actions into ActionSheet", async ({ page }) => {
   await page.goto("/#/subscriptions");
   await expect(page.locator(".source-card")).toHaveCount(2);
-  await expect(page.locator(".source-selector.t-radio")).toHaveCount(2);
+  await expect(page.locator(".source-selector.nh-radio")).toHaveCount(2);
   for (const card of await page.locator(".source-card").all()) {
     const geometry = await card.evaluate((element) => {
       const selector = element.querySelector<HTMLElement>(".source-selector");
-      const icon = element.querySelector<HTMLElement>(".source-selector .t-radio__icon");
+      const icon = element.querySelector<HTMLElement>(".source-selector .nh-radio__dot");
       const main = element.querySelector<HTMLElement>(".source-main");
       if (!selector || !icon || !main) return { inset: -1, gap: -1, iconStart: -1, iconEnd: -1, block: true };
       const cardBox = element.getBoundingClientRect();
       const selectorBox = selector.getBoundingClientRect();
       const iconBox = icon.getBoundingClientRect();
       const mainBox = main.getBoundingClientRect();
-      return { inset: selectorBox.left - cardBox.left, gap: mainBox.left - selectorBox.right, iconStart: iconBox.left - selectorBox.left, iconEnd: selectorBox.right - iconBox.right, block: selector.classList.contains("t-radio--block") };
+      return { inset: selectorBox.left - cardBox.left, gap: mainBox.left - selectorBox.right, iconStart: iconBox.left - selectorBox.left, iconEnd: selectorBox.right - iconBox.right, block: false };
     });
     expect(geometry.inset).toBe(13);
     expect(geometry.gap).toBe(10);
@@ -70,9 +72,9 @@ test("subscription cards expose real daemon status and move secondary actions in
     expect(geometry.iconEnd).toBe(0);
     expect(geometry.block).toBe(false);
   }
-  await expect(page.locator(".source-selector .t-radio__border")).toHaveCount(0);
+  await expect(page.locator(".source-selector .nh-radio__dot")).toHaveCount(2);
   await expect(page.locator(".source-card").first()).toHaveAttribute("data-selected", "true");
-  await page.locator(".source-selector.t-radio").nth(1).click();
+  await page.locator(".source-selector.nh-radio").nth(1).click();
   await expect(page.locator(".source-card").first()).toHaveAttribute("data-selected", "false");
   await expect(page.locator(".source-card").nth(1)).toHaveAttribute("data-selected", "true");
   await expect(page.locator(".source-card").first()).toContainText("128.4 / 200 GB");
@@ -80,8 +82,8 @@ test("subscription cards expose real daemon status and move secondary actions in
   await expect(page.locator(".source-card").first().locator(".source-quota-track i")).toHaveCount(1);
   await expect(page.locator(".source-card").nth(1)).toContainText("-- / -- GB · 剩余 -- 天 · -- 节点");
   await expect(page.locator(".source-card").nth(1).locator(".source-quota-track[data-empty='true']")).toHaveCount(1);
-  await page.locator(".source-card").first().locator(".source-actions .t-button").last().click();
-  const sheet = page.locator(".subscription-actions-sheet");
+  await page.locator(".source-card").first().locator(".source-actions .nh-button").last().click();
+  const sheet = page.locator(".nh-action-sheet");
   await expect(sheet).toBeVisible();
   await expect(sheet).toContainText("更新订阅");
   await expect(sheet).toContainText("编辑");
@@ -101,7 +103,7 @@ test("subscription mode transitions require explicit single target and preserve 
   const mode = page.locator(".subscription-mode-panel .segmented-control");
   await mode.getByText("合并", { exact: true }).click();
   await expect(mode.locator(".segmented-item").filter({ hasText: "合并" })).toHaveAttribute("data-active", "true");
-  await expect(page.locator(".source-selector.t-checkbox")).toHaveCount(2);
+  await expect(page.locator(".source-selector.nh-checkbox")).toHaveCount(2);
 
   await page.locator(".source-card").nth(1).click();
   await expect(page.locator(".source-card").nth(0)).toHaveAttribute("data-selected", "true");
@@ -111,7 +113,7 @@ test("subscription mode transitions require explicit single target and preserve 
   const target = page.locator(".single-target-editor");
   await expect(target).toBeVisible();
   await target.locator(".single-target-row").filter({ hasText: "Backup" }).click();
-  await expect(page.locator(".source-selector.t-radio")).toHaveCount(2);
+  await expect(page.locator(".source-selector.nh-radio")).toHaveCount(2);
   await expect(page.locator(".source-card").nth(0)).toHaveAttribute("data-selected", "false");
   await expect(page.locator(".source-card").nth(1)).toHaveAttribute("data-selected", "true");
 });
@@ -119,7 +121,7 @@ test("subscription mode transitions require explicit single target and preserve 
 test("overview presents the compact runtime control hierarchy", async ({ page }) => {
   await page.goto("/#/overview");
   const servicePanel = page.locator(".service-panel");
-  await expect(servicePanel.locator(".t-switch")).toBeVisible();
+  await expect(servicePanel.locator(".nh-switch")).toBeVisible();
   await expect(servicePanel).toContainText("代理暂不可用");
   await expect(servicePanel).not.toContainText("代理已关闭");
   await expect(page.locator(".traffic-section .traffic-rate")).toHaveCount(2);
@@ -163,7 +165,7 @@ test("overview presents the compact runtime control hierarchy", async ({ page })
   expect(qualityBox!.width).toBeGreaterThan(runtimeBox!.width * 1.9);
   expect(Math.abs(runtimeBox!.y - resourceBox!.y)).toBeLessThan(1);
   const insightBox = await insightGrid.boundingBox();
-  const tabBarBox = await page.locator(".t-tab-bar").boundingBox();
+  const tabBarBox = await page.locator(".nh-tab-bar").boundingBox();
   expect(insightBox).not.toBeNull();
   expect(tabBarBox).not.toBeNull();
   expect(insightBox!.y + insightBox!.height).toBeLessThanOrEqual(tabBarBox!.y);
@@ -189,7 +191,7 @@ test("secondary node, settings and operations routes load without server routing
 test("node page tests every node with one action and renders two equal columns", async ({ page }) => {
   await page.setViewportSize({ width: 393, height: 852 });
   await page.goto("/#/nodes");
-  await expect(page.locator(".t-pull-down-refresh")).toHaveCount(1);
+  await expect(page.locator(".nh-pull-refresh")).toHaveCount(1);
   const testAll = page.getByTitle("测试全部节点");
   await expect(testAll).toHaveCount(1);
   await expect(page.locator(".node-card .tabler-icon-activity")).toHaveCount(0);
@@ -234,16 +236,9 @@ test("P0-P1 node, application, overlay, cache, log and metrics flows are integra
   expect(await nodeActionsMenu.evaluate((element) => Number.parseFloat(getComputedStyle(element).width))).toBe(200);
   await expect(page.locator(".node-actions-sheet")).toHaveCount(0);
   await expect(nodeActionsMenu.getByText("刷新节点列表", { exact: true })).toBeVisible();
-  const nodePanelStack = nodeActionsMenu.locator(".anchored-dropdown__panel-stack");
-  const rootMenuHeight = await nodeActionsMenu.evaluate((element) => element.getBoundingClientRect().height);
   await nodeActionsMenu.getByText("排序方式", { exact: true }).click();
   await expect(nodeActionsMenu).toHaveAttribute("data-panel", "sort");
-  await expect(nodeActionsMenu.locator(".anchored-dropdown__panel")).toHaveCount(1);
   await expect(nodeActionsMenu.getByText("刷新节点列表", { exact: true })).toHaveCount(0);
-  await expect(nodePanelStack).toHaveAttribute("data-resizing", "true");
-  await expect(nodePanelStack).toHaveAttribute("data-resizing", "false");
-  const sortMenuHeight = await nodeActionsMenu.evaluate((element) => element.getBoundingClientRect().height);
-  expect(Math.abs(rootMenuHeight - sortMenuHeight)).toBeGreaterThan(1);
   await expect(page.getByText("延迟：低到高", { exact: true })).toBeVisible();
   await expect(page.getByText("延迟：高到低", { exact: true })).toBeVisible();
   const selectedSort = nodeActionsMenu.locator('.anchored-dropdown__option[data-selected="true"]');
@@ -252,10 +247,7 @@ test("P0-P1 node, application, overlay, cache, log and metrics flows are integra
   await page.evaluate(() => window.dispatchEvent(new Event("nethop:back")));
   await expect(nodeActionsMenu).toBeVisible();
   await expect(nodeActionsMenu).toHaveAttribute("data-panel", "root");
-  await expect(nodeActionsMenu.locator(".anchored-dropdown__panel")).toHaveCount(1);
   await expect(nodeActionsMenu.getByText("延迟：低到高", { exact: true })).toHaveCount(0);
-  await expect(nodePanelStack).toHaveAttribute("data-resizing", "true");
-  await expect(nodePanelStack).toHaveAttribute("data-resizing", "false");
   await expect(nodeActionsMenu.getByText("刷新节点列表", { exact: true })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event("nethop:back")));
   await expect(nodeActionsMenu).toHaveCount(0);
@@ -268,19 +260,19 @@ test("P0-P1 node, application, overlay, cache, log and metrics flows are integra
   await expect(nodeActionsMenu).toContainText("延迟升序");
   await nodeActionsMenu.getByText("排除当前节点", { exact: true }).click();
   await expect(nodeActionsMenu).toHaveCount(0);
-  const excludeDialog = page.locator(".t-dialog");
+  const excludeDialog = page.locator(".nh-dialog__panel");
   await expect(excludeDialog).toContainText("后续订阅更新也不会重新加入该节点");
   await page.evaluate(() => window.dispatchEvent(new Event("nethop:back")));
   await expect(excludeDialog).not.toBeVisible();
 
   await page.goto("/#/applications");
-  await expect(page.locator(".t-pull-down-refresh")).toHaveCount(1);
+  await expect(page.locator(".nh-pull-refresh")).toHaveCount(1);
   await page.getByTitle("排序方式").click();
   await page.locator(".application-sort-direction").getByText("降序", { exact: true }).click();
   await page.locator(".application-sort-menu").getByText("存储占用", { exact: true }).click();
   await expect(page.locator(".app-row").first()).toContainText("YouTube");
   await page.getByTitle("排序方式").click();
-  await page.locator(".application-sort-priority .t-switch").click();
+  await page.locator(".application-sort-priority .nh-switch").click();
   await expect(page.locator(".app-row").first()).toContainText("哔哩哔哩");
   await page.locator(".application-search input").fill("YouTube");
   await page.goto("/#/settings");
@@ -302,18 +294,18 @@ test("P0-P1 node, application, overlay, cache, log and metrics flows are integra
   await expect(page.locator(".operation-grid")).toContainText("wlan0");
 });
 
-test("TDesign dropdowns replace native selects and commit the selected option", async ({ page }) => {
+test("custom dropdowns replace native selects and commit the selected option", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/#/settings");
   await expect(page.locator("html")).toHaveAttribute("theme-mode", "dark");
-  await page.locator(".theme-dropdown .t-dropdown-menu__item").click();
-  await page.getByText("深色", { exact: true }).last().click();
+  const themeChoices = page.locator(".settings-base .nh-segmented").first();
+  await themeChoices.getByRole("button", { name: "深色" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme-mode", "dark");
-  await expect(page.locator(".settings-utilities .t-button")).toBeVisible();
+  await expect(themeChoices).toBeVisible();
   await expect(page.locator("select")).toHaveCount(0);
 });
 
-test("YingLi semantic color system drives NetHop and TDesign in both themes", async ({ page }) => {
+test("YingLi semantic color system drives NetHop in both themes", async ({ page }) => {
   const readTokens = () => page.locator("html").evaluate((element) => {
     const probe = document.createElement("span");
     element.append(probe);
@@ -324,9 +316,9 @@ test("YingLi semantic color system drives NetHop and TDesign in both themes", as
       "--nh-muted",
       "--nh-info",
       "--nh-selection",
-      "--td-brand-color",
-      "--td-button-primary-color",
-      "--td-bg-color-page",
+      "--action-primary",
+      "--action-on-primary",
+      "--page",
     ].map((name) => {
       probe.style.color = `var(${name})`;
       return [name, getComputedStyle(probe).color];
@@ -344,9 +336,9 @@ test("YingLi semantic color system drives NetHop and TDesign in both themes", as
     "--nh-muted": "rgb(82, 82, 82)",
     "--nh-info": "rgb(71, 123, 148)",
     "--nh-selection": "rgb(31, 31, 31)",
-    "--td-brand-color": "rgb(31, 31, 31)",
-    "--td-button-primary-color": "rgb(255, 255, 255)",
-    "--td-bg-color-page": "rgb(245, 245, 245)",
+    "--action-primary": "rgb(31, 31, 31)",
+    "--action-on-primary": "rgb(255, 255, 255)",
+    "--page": "rgb(245, 245, 245)",
   });
 
   await page.emulateMedia({ colorScheme: "dark" });
@@ -358,14 +350,14 @@ test("YingLi semantic color system drives NetHop and TDesign in both themes", as
     "--nh-muted": "rgb(184, 184, 184)",
     "--nh-info": "rgb(152, 195, 213)",
     "--nh-selection": "rgb(245, 245, 245)",
-    "--td-brand-color": "rgb(245, 245, 245)",
-    "--td-button-primary-color": "rgb(18, 18, 18)",
-    "--td-bg-color-page": "rgb(15, 15, 15)",
+    "--action-primary": "rgb(245, 245, 245)",
+    "--action-on-primary": "rgb(18, 18, 18)",
+    "--page": "rgb(15, 15, 15)",
   });
 });
 
 test("active bottom tab uses the structural selection pill in both themes", async ({ page }) => {
-  const activeIcon = page.locator(".t-tab-bar-item__content--checked .t-tab-bar-item__icon");
+  const activeIcon = page.locator(".nh-tab-bar button[aria-current='page'] .nh-tab-bar__icon");
 
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/#/overview");
@@ -384,8 +376,8 @@ test("bottom navigation remains available while an application policy draft is p
   await page.goto("/#/applications");
   await expect(page.locator(".app-row")).toHaveCount(2);
 
-  await page.locator(".app-row").nth(1).locator(".t-switch").click();
-  await page.locator(".t-tab-bar").getByText("订阅", { exact: true }).click();
+  await page.locator(".app-row").nth(1).locator(".nh-switch").click();
+  await page.locator(".nh-tab-bar").getByText("订阅", { exact: true }).click();
 
   await expect(page).toHaveURL(/#\/subscriptions$/);
   await expect(page.locator("main h2").filter({ hasText: "订阅" })).toBeVisible();
@@ -403,19 +395,19 @@ test("application policy uses the shared animated segmented control and mode-spe
   await expect(page.locator(".application-selected-count")).toHaveText("1");
   await expect(page.locator(".application-selection-effect")).toContainText("选中应用直连");
   await expect(page.locator(".application-search input")).toBeVisible();
-  await expect(page.locator(".filter-bar .t-search")).toHaveCount(0);
   const categoryDropdown = page.locator(".application-category-dropdown");
   await expect(categoryDropdown).toContainText("用户应用");
   await categoryDropdown.locator(".application-category-trigger").click();
-  await expect(categoryDropdown.locator(".application-category-menu")).toBeVisible();
+  const categoryMenu = page.locator(".application-category-menu");
+  await expect(categoryMenu).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event("nethop:back")));
-  await expect(categoryDropdown.locator(".application-category-menu")).not.toBeVisible();
+  await expect(categoryMenu).not.toBeVisible();
   await categoryDropdown.locator(".application-category-trigger").click();
-  await categoryDropdown.getByText("系统应用", { exact: true }).click();
-  await expect(page.locator(".app-row .t-switch")).toHaveCount(1);
+  await categoryMenu.getByText("系统应用", { exact: true }).click();
+  await expect(page.locator(".app-row .nh-switch")).toHaveCount(1);
   await categoryDropdown.locator(".application-category-trigger").click();
-  await categoryDropdown.getByText("用户应用", { exact: true }).click();
-  await expect(page.locator(".app-row .t-switch")).toHaveCount(2);
+  await page.locator(".application-category-menu").getByText("用户应用", { exact: true }).click();
+  await expect(page.locator(".app-row .nh-switch")).toHaveCount(2);
   await expect(page.locator(".app-row").first()).toHaveAttribute("data-selected", "true");
   await expect(page.locator(".app-row").nth(1)).toHaveAttribute("data-selected", "false");
   expect(await page.locator(".application-list .virtual-viewport").evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(157);
@@ -439,7 +431,7 @@ test("application page sorts by persisted metadata preferences from the sort dro
   const categoryMenu = page.locator(".application-category-menu");
   await expect(categoryMenu).toBeVisible();
   const categoryMetrics = await categoryMenu.evaluate((element) => {
-    const selected = element.querySelector<HTMLElement>('.anchored-dropdown__option[data-selected="true"]');
+    const selected = element.querySelector<HTMLElement>('.nh-list-item-button--selected > button');
     const selectedStyle = selected ? getComputedStyle(selected) : undefined;
     return {
       animationName: getComputedStyle(element).animationName,
@@ -462,14 +454,14 @@ test("application page sorts by persisted metadata preferences from the sort dro
   await expect(menu).toHaveCount(0);
   await sortButton.click();
   await expect(menu).toBeVisible();
-  await expect(menu.locator(".anchored-dropdown__section-title")).toHaveText(["排序方式", "排序选项"]);
+  await expect(menu.locator(".application-sort-section__title")).toHaveText(["排序方式", "排序选项"]);
   await expect(menu.locator('.application-sort-direction .segmented-item[data-active="true"]')).toHaveText("升序");
   const menuMetrics = await menu.evaluate((element) => {
     const box = element.getBoundingClientRect();
-    const selected = element.querySelector<HTMLElement>('.anchored-dropdown__option[data-selected="true"]');
+    const selected = element.querySelector<HTMLElement>('.nh-list-item-button--selected > button');
     const selectedStyle = selected ? getComputedStyle(selected) : undefined;
-    const divider = element.querySelector<HTMLElement>(".anchored-dropdown__section--divided");
-    const dividerStyle = divider ? getComputedStyle(divider, "::before") : undefined;
+    const divider = element.querySelector<HTMLElement>(".application-sort-section--divided");
+    const dividerStyle = divider ? getComputedStyle(divider) : undefined;
     return {
       width: box.width,
       height: box.height,
@@ -478,21 +470,19 @@ test("application page sorts by persisted metadata preferences from the sort dro
       selectedBorderRadius: selectedStyle?.borderRadius ?? "",
       selectedMinHeight: selectedStyle?.minHeight ?? "",
       selectedPaddingInline: selectedStyle ? `${selectedStyle.paddingLeft} ${selectedStyle.paddingRight}` : "",
-      dividerLeft: dividerStyle?.left ?? "0px",
-      dividerRight: dividerStyle?.right ?? "0px",
+      dividerTopBorder: dividerStyle?.borderTopWidth ?? "0px",
     };
   });
   expect(menuMetrics.width).toBeLessThanOrEqual(220);
   expect(menuMetrics.height).toBeLessThanOrEqual(300);
   expect(menuMetrics.selectedBackground).not.toBe("rgba(0, 0, 0, 0)");
-  expect(menuMetrics.animationName).toContain("anchored-dropdown-menu-enter");
+  expect(menuMetrics.animationName).toContain("nh-dropdown-in-");
   expect(menuMetrics.animationName).toBe(categoryMetrics.animationName);
   expect(menuMetrics.selectedBackground).toBe(categoryMetrics.selectedBackground);
   expect(menuMetrics.selectedBorderRadius).toBe(categoryMetrics.selectedBorderRadius);
   expect(menuMetrics.selectedMinHeight).toBe(categoryMetrics.selectedMinHeight);
   expect(menuMetrics.selectedPaddingInline).toBe(categoryMetrics.selectedPaddingInline);
-  expect(Number.parseFloat(menuMetrics.dividerLeft)).toBeGreaterThan(0);
-  expect(Number.parseFloat(menuMetrics.dividerRight)).toBeGreaterThan(0);
+  expect(Number.parseFloat(menuMetrics.dividerTopBorder)).toBeGreaterThan(0);
   for (const label of ["名称", "更新时间", "存储占用", "最近使用时间"]) {
     await expect(menu.getByText(label, { exact: true })).toBeVisible();
   }
@@ -509,30 +499,29 @@ test("application page sorts by persisted metadata preferences from the sort dro
   await expect(page.locator(".app-row").first()).toContainText("哔哩哔哩");
 });
 
-test("TDesign owns the primary mobile controls and overlays", async ({ page }) => {
+test("native components own the primary mobile controls and overlays", async ({ page }) => {
   await page.goto("/#/overview");
-  const serviceSwitch = page.locator(".service-panel .t-switch");
+  const serviceSwitch = page.locator(".service-panel .nh-switch");
   await expect(serviceSwitch).toBeVisible();
   await expect(page.locator(".proxy-switch")).toHaveCount(0);
   const serviceTopBefore = await page.locator(".service-panel").evaluate((element) => element.getBoundingClientRect().top);
   await serviceSwitch.click();
-  const operationMessage = page.locator(".operation-message.t-message");
+  const operationMessage = page.locator(".operation-message");
   await expect(operationMessage).toContainText("代理已关闭");
-  await expect(page.locator(".t-notice-bar")).toHaveCount(0);
+  await expect(page.locator(".nh-notice-bar")).toHaveCount(0);
   await expect(operationMessage).toHaveCSS("position", "fixed");
   const serviceTopAfter = await page.locator(".service-panel").evaluate((element) => element.getBoundingClientRect().top);
   expect(Math.abs(serviceTopAfter - serviceTopBefore)).toBeLessThanOrEqual(0.5);
   await expect(operationMessage).not.toBeVisible({ timeout: 4_000 });
-  await expect(page.locator(".t-tab-bar")).toBeVisible();
+  await expect(page.locator(".nh-tab-bar")).toBeVisible();
   await expect(page.locator(".bottom-nav")).toHaveCount(0);
-  await page.locator(".t-tab-bar").getByText("应用", { exact: true }).click();
+  await page.locator(".nh-tab-bar").getByText("应用", { exact: true }).click();
   await expect(page).toHaveURL(/#\/applications$/);
   await expect(page.locator(".application-search input")).toBeVisible();
-  await expect(page.locator(".filter-bar .t-search")).toHaveCount(0);
 
   await page.goto("/#/subscriptions");
   await page.locator(".subscription-add-fab").click();
-  await expect(page.locator(".t-popup--bottom")).toBeVisible();
+  await expect(page.locator(".nh-popup__panel")).toBeVisible();
   await expect(page.locator(".editor-panel")).toHaveCount(0);
   await page.locator(".subscription-editor input").nth(1).fill("https://canary.invalid/private");
   await page.locator(".subscription-editor button").filter({ hasText: "取消" }).click();

@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { IconCheck, IconChevronDown } from "@tabler/icons-vue";
-import AnchoredDropdown from "@/components/AnchoredDropdown.vue";
+import Dropdown from "@/components/ui/overlay/Dropdown.vue";
+import List from "@/components/ui/layout/List.vue";
+import Button from "@/components/ui/primitives/Button.vue";
+import MenuItemRadio from "@/components/ui/menu/MenuItemRadio.vue";
+import { ref } from "vue";
 
 export interface ApplicationCategoryOption {
   readonly value: string;
@@ -11,6 +15,7 @@ export interface ApplicationCategoryOption {
 const props = defineProps<{ modelValue: string; options: readonly ApplicationCategoryOption[] }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 const currentLabel = computed(() => props.options.find((option) => option.value === props.modelValue)?.label ?? "请选择");
+const open = ref(false);
 
 function select(value: string, close: () => void): void {
   emit("update:modelValue", value);
@@ -19,22 +24,22 @@ function select(value: string, close: () => void): void {
 </script>
 
 <template>
-  <AnchoredDropdown class="application-category-dropdown" menu-label="应用分类" menu-class="application-category-menu" menu-width="148px" :offset="5">
-    <template #trigger="{ open, toggle }">
-      <button class="application-category-trigger" type="button" aria-haspopup="menu" :aria-expanded="open" :data-open="open" @click="toggle">
+  <Dropdown v-model:open="open" class="application-category-dropdown" panel-class="application-category-menu" panel-width="148px" placement="bottom-start" :close-on-select="false">
+    <template #trigger="{ open: isOpen }">
+      <Button class="application-category-trigger" variant="outline" aria-haspopup="menu" :aria-expanded="isOpen" :data-open="isOpen">
         <span>{{ currentLabel }}</span>
         <IconChevronDown :size="17" />
-      </button>
+      </Button>
     </template>
     <template #default="{ close }">
-      <div class="anchored-dropdown__options">
-        <button v-for="option in options" :key="option.value" class="anchored-dropdown__option" type="button" role="menuitemradio" :aria-checked="option.value === modelValue" :data-selected="option.value === modelValue" @click="select(option.value, close)">
-          <span>{{ option.label }}</span>
-          <IconCheck v-if="option.value === modelValue" class="anchored-dropdown__option-icon" :size="16" />
-        </button>
-      </div>
+      <List class="application-category__options" spacing="none" aria-label="应用分类">
+        <MenuItemRadio v-for="option in options" :key="option.value" :selected="option.value === modelValue" @click="select(option.value, close)">
+          <template #suffix><IconCheck v-if="option.value === modelValue" :size="16" aria-hidden="true" /></template>
+          {{ option.label }}
+        </MenuItemRadio>
+      </List>
     </template>
-  </AnchoredDropdown>
+  </Dropdown>
 </template>
 
 <style scoped>
@@ -46,14 +51,11 @@ function select(value: string, close: () => void): void {
 .application-category-trigger {
   display: flex;
   width: 100%;
-  min-height: 40px;
   align-items: center;
   justify-content: space-between;
+  min-height: 40px;
   padding: 0 10px 0 12px;
-  border: 1px solid var(--nh-border);
   border-radius: 6px;
-  color: var(--nh-text);
-  background: var(--nh-surface);
   gap: 8px;
 }
 
@@ -70,12 +72,12 @@ function select(value: string, close: () => void): void {
   transition: transform .2s cubic-bezier(.4, 0, .2, 1), color .2s ease;
 }
 
-.application-category-trigger[data-open="true"] {
-  border-color: var(--focus-ring);
-}
-
 .application-category-trigger[data-open="true"] svg {
   color: var(--nh-info);
   transform: rotate(180deg);
 }
+.application-category__options { min-width: 148px; }
+.application-category__options :deep(.nh-menu-item-radio--selected) { color: var(--action-primary); background: color-mix(in srgb, var(--action-primary) 9%, transparent); }
+.application-category__options :deep(.nh-menu-item-radio__suffix) { color: var(--action-primary); }
+:global(.application-category-menu) { width: 148px; }
 </style>

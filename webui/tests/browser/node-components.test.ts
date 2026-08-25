@@ -7,6 +7,7 @@ import TerritoryFlag from "@/components/nodes/TerritoryFlag.vue";
 import type { NodeDto } from "@/model/dto";
 import type { ActiveNodeView } from "@/model/node-view";
 import "@/styles/base.css";
+import "@/styles/pages/nodes.css";
 
 const node: NodeDto = {
   id: "nh1s-0123456789abcdef",

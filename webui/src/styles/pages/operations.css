@@ -1,0 +1,14 @@
+/* Domain styles for operations. */
+.log-controls { display: grid; margin: 12px 0; gap: 8px; }
+.log-actions { display: flex; align-items: center; gap: 2px; }
+.raw-log-row { overflow: hidden; margin: 0 0 6px; padding: 10px; border: 1px solid var(--nh-border); border-radius: 6px; background: var(--nh-surface); color: var(--nh-muted); font: 11px/1.45 var(--nh-font-code); white-space: pre-wrap; overflow-wrap: anywhere; }
+.operation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 14px 0; gap: 1px; background: var(--nh-border); }
+.operation-grid > div { display: flex; min-height: 72px; padding: 12px; background: var(--nh-bg); flex-direction: column; gap: 7px; }
+.operation-grid span { color: var(--nh-muted); font-size: 11px; }
+.command-band { display: flex; padding: 16px 0; flex-wrap: wrap; gap: 8px; }
+.topology-summary { display: flex; padding: 14px 0; border-top: 1px solid var(--nh-border); flex-direction: column; gap: 6px; }
+.topology-summary h3 { margin: 0 0 6px; }
+.topology-summary span { color: var(--nh-muted); font-size: 12px; }
+.log-row { display: grid; min-height: 66px; padding: 8px 6px; border-bottom: 1px solid var(--nh-border); grid-template-columns: 1fr auto; gap: 3px 8px; }
+.log-row span { overflow: hidden; color: var(--nh-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; grid-column: 1 / -1; }
+.log-row small { color: var(--nh-muted); font-size: 10px; }

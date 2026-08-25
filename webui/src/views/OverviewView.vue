@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { IconActivityHeartbeat, IconArrowDown, IconArrowUp, IconBolt, IconChevronRight, IconClock, IconCpu, IconPower } from "@tabler/icons-vue";
-import { Button as TButton, Switch as TSwitch } from "tdesign-mobile-vue";
 import { computed, onActivated, onDeactivated, ref } from "vue";
 import { RouterLink } from "vue-router";
 import OperationBanner from "@/components/OperationBanner.vue";
-import SegmentedControl from "@/components/SegmentedControl.vue";
+import Segmented from "@/components/ui/navigation/Segmented.vue";
 import TrafficSparkline from "@/components/TrafficSparkline.vue";
 import { runJson } from "@/bridge/command";
 import { useHost } from "@/bridge/context";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
+import Switch from "@/components/ui/primitives/Switch.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
 import { validatedQuery } from "@/model/client";
 import { parseConfig, parseNodeList, parseRuntimeMetrics, parseStatus, parseTraffic, type RuntimeMetricsDto } from "@/model/dto";
 import { activeNodeView } from "@/model/node-view";
@@ -275,18 +276,18 @@ onDeactivated(() => {
           <span class="service-symbol" :data-running="running" :data-state="service.phase"><IconPower :size="18" /></span>
           <div><strong>{{ service.title }}</strong><span>{{ service.description }}</span></div>
         </div>
-        <TSwitch :value="service.switchValue" :loading="pending || service.switchLoading" :disabled="pending || service.switchDisabled" @change="toggle" />
+        <Switch :model-value="service.switchValue" :loading="pending || service.switchLoading" :disabled="pending || service.switchDisabled" :aria-label="service.title" @change="toggle" />
       </div>
     </section>
 
     <section class="overview-mode">
       <div class="overview-section-heading"><strong>代理模式</strong><span>{{ modeDescription }}</span></div>
-      <SegmentedControl :model-value="outboundMode" :options="modeOptions" :disabled="!modeReady || modePending" @change="changeMode" />
+      <Segmented :model-value="outboundMode" :options="modeOptions" :disabled="!modeReady || modePending" @change="changeMode" />
     </section>
 
     <section class="overview-mode capture-mode">
       <div class="overview-section-heading"><strong>接管方式</strong><span>{{ captureDescription }}</span></div>
-      <SegmentedControl :model-value="captureMode" :options="captureOptions" :disabled="!modeReady || capturePending" @change="changeCaptureMode" />
+      <Segmented :model-value="captureMode" :options="captureOptions" :disabled="!modeReady || capturePending" @change="changeCaptureMode" />
     </section>
 
     <section class="traffic-section">
@@ -325,7 +326,7 @@ onDeactivated(() => {
             <span>{{ metrics?.publicIp ?? "未探测出口" }}</span>
           </div>
         </RouterLink>
-        <TButton class="quality-test-button" size="small" shape="square" variant="text" theme="default" :loading="qualityTesting" title="测试全部节点" @click="testProxyQuality"><IconBolt :size="17" /></TButton>
+        <IconButton class="quality-test-button" size="s" variant="text" aria-label="测试全部节点" :loading="qualityTesting" title="测试全部节点" @click="testProxyQuality"><IconBolt :size="17" /></IconButton>
       </section>
 
       <section class="overview-insight-card runtime-card">

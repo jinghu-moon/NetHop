@@ -47,7 +47,7 @@ test("secret input is cleared after the explicit edit lifecycle", async ({ page 
 test("first interaction and lazy route transitions stay inside the desktop release budget", async ({ page }) => {
   const started = performance.now();
   await page.goto("/#/overview");
-  await expect(page.locator(".service-panel .t-switch")).toBeVisible();
+  await expect(page.locator(".service-panel .nh-switch")).toBeVisible();
   expect(performance.now() - started).toBeLessThan(500);
 
   const samples: number[] = [];
@@ -79,8 +79,8 @@ test("operation feedback floats without shifting runtime controls", async ({ pag
   await page.goto("/#/overview");
   await settle(page);
   const serviceTop = await page.locator(".service-panel").evaluate((element) => element.getBoundingClientRect().top);
-  await page.locator(".service-panel .t-switch").click();
-  await expect(page.locator(".operation-message.t-message")).toContainText("代理已关闭");
+  await page.locator(".service-panel .nh-switch").click();
+  await expect(page.locator(".operation-message")).toContainText("代理已关闭");
   expect(await page.locator(".service-panel").evaluate((element) => element.getBoundingClientRect().top)).toBe(serviceTop);
   await expect(page).toHaveScreenshot("overview-operation-success-393x873.png", { fullPage: true });
 });

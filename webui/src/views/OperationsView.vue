@@ -2,11 +2,9 @@
 import { computed, onActivated, onDeactivated, ref } from "vue";
 import { useIntervalFn } from "@vueuse/core";
 import { IconArchive, IconArrowDown, IconArrowUp, IconBolt, IconBug, IconRefresh, IconTrash, IconX } from "@tabler/icons-vue";
-import { Button as TButton, Tabs as TTabs, TabPanel as TTabPanel, Textarea as TTextarea } from "tdesign-mobile-vue";
-import ConfirmDialog from "@/components/ConfirmDialog.vue";
-import PageState from "@/components/PageState.vue";
+import PageState from "@/components/ui/feedback/PageState.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
-import SegmentedControl from "@/components/SegmentedControl.vue";
+import Segmented from "@/components/ui/navigation/Segmented.vue";
 import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
 import { useHost } from "@/bridge/context";
 import { runJson } from "@/bridge/command";
@@ -15,6 +13,11 @@ import { validatedQuery } from "@/model/client";
 import { parseLogs, parseOperational, parseRuntimeMetrics, type LogChannelDto, type LogEntryDto, type RuntimeMetricsDto } from "@/model/dto";
 import { createOperationStore } from "@/runtime/operation";
 import { uiStores } from "@/runtime/store";
+import Textarea from "@/components/ui/primitives/Textarea.vue";
+import Button from "@/components/ui/primitives/Button.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
+import Tabs from "@/components/ui/navigation/Tabs.vue";
+import Dialog from "@/components/ui/overlay/Dialog.vue";
 
 interface ConnectionRow { readonly id: string; readonly network: string; readonly source: string; readonly destination: string }
 interface VirtualListHandle { scrollToStart(): void; scrollToEnd(): void }
@@ -39,6 +42,7 @@ const metricsPolling = useIntervalFn(() => { if (tab.value === "system") void lo
 
 const channelOptions = [{ value: "service", label: "服务" }, { value: "subscription", label: "订阅" }, { value: "core", label: "内核" }];
 const viewOptions = [{ value: "structured", label: "结构化" }, { value: "raw", label: "原始" }];
+const operationTabs = [{ value: "connections", label: "连接" }, { value: "logs", label: "日志" }, { value: "system", label: "系统" }, { value: "backup", label: "备份" }] as const;
 
 function objects(value: Readonly<Record<string, unknown>>, keys: readonly string[]): readonly Readonly<Record<string, unknown>>[] {
   for (const key of keys) {
@@ -150,30 +154,36 @@ onDeactivated(metricsPolling.pause);
 
 <template>
   <section class="page operations-page">
-    <div class="page-heading"><div><span class="eyebrow">OPERATIONS</span><h2>运维</h2><p>连接、日志与运行资源</p></div><TButton shape="square" variant="outline" theme="default" @click="refresh"><IconRefresh :size="18" /></TButton></div>
-    <PageState v-if="loading" kind="loading" title="正在读取运行状态" />
+    <div class="page-heading"><div><span class="eyebrow">OPERATIONS</span><h2>运维</h2><p>连接、日志与运行资源</p></div><IconButton variant="outline" aria-label="刷新" @click="refresh"><IconRefresh :size="18" /></IconButton></div>
+    <PageState v-if="loading" :model="{ type: 'loading', title: '正在读取运行状态' }" />
     <template v-else>
       <OperationBanner v-for="operation in Object.values(operations.byId)" :key="operation.id" :phase="operation.phase" :message="operation.message ?? ''" />
-      <TTabs v-model="tab">
-        <TTabPanel value="connections" label="连接">
-          <div class="section-heading"><h3>活动连接</h3><TButton size="small" theme="danger" variant="outline" @click="confirmAction = 'connections'">关闭全部</TButton></div>
-          <PageState v-if="connections.length === 0" kind="empty" title="没有活动连接" />
-          <VirtualListViewport v-else :items="connections" :get-item-key="(_index, item) => item.id" :estimate-size="62"><template #default="{ item }"><div class="connection-row"><div><strong>{{ item.destination }}</strong><small>{{ item.network }} · {{ item.source }}</small></div><TButton shape="square" variant="text" theme="danger" @click="closeConnection(item.id)"><IconX :size="17" /></TButton></div></template></VirtualListViewport>
-        </TTabPanel>
-        <TTabPanel value="logs" label="日志">
-          <div class="log-controls"><SegmentedControl :model-value="logChannel" :options="channelOptions" @change="changeLogChannel" /><SegmentedControl :model-value="logView" :options="viewOptions" @change="changeLogView" /></div>
-          <div class="section-heading"><h3>{{ logView === 'structured' ? '结构化日志' : '原始日志' }}</h3><div class="log-actions"><TButton shape="square" variant="text" title="滚动到顶部" @click="logViewport?.scrollToStart()"><IconArrowUp :size="17" /></TButton><TButton shape="square" variant="text" title="滚动到底部" @click="logViewport?.scrollToEnd()"><IconArrowDown :size="17" /></TButton><TButton shape="square" variant="text" theme="danger" title="清除全部日志" @click="confirmAction = 'logs'"><IconTrash :size="17" /></TButton></div></div>
-          <PageState v-if="logs.length === 0" kind="empty" title="当前频道没有日志" />
+      <Tabs v-model="tab" :items="operationTabs" />
+        <section v-if="tab === 'connections'" class="operation-tab-panel">
+          <div class="section-heading"><h3>活动连接</h3><Button size="s" variant="danger" @click="confirmAction = 'connections'">关闭全部</Button></div>
+          <PageState v-if="connections.length === 0" :model="{ type: 'empty', title: '没有活动连接' }" />
+          <VirtualListViewport v-else :items="connections" :get-item-key="(_index, item) => item.id" :estimate-size="62"><template #default="{ item }"><div class="connection-row"><div><strong>{{ item.destination }}</strong><small>{{ item.network }} · {{ item.source }}</small></div><IconButton variant="text" aria-label="关闭连接" @click="closeConnection(item.id)"><IconX :size="17" /></IconButton></div></template></VirtualListViewport>
+        </section>
+        <section v-else-if="tab === 'logs'" class="operation-tab-panel">
+          <div class="log-controls"><Segmented :model-value="logChannel" :options="channelOptions" @change="changeLogChannel" /><Segmented :model-value="logView" :options="viewOptions" @change="changeLogView" /></div>
+          <div class="section-heading"><h3>{{ logView === 'structured' ? '结构化日志' : '原始日志' }}</h3><div class="log-actions"><IconButton variant="text" aria-label="滚动到顶部" title="滚动到顶部" @click="logViewport?.scrollToStart()"><IconArrowUp :size="17" /></IconButton><IconButton variant="text" aria-label="滚动到底部" title="滚动到底部" @click="logViewport?.scrollToEnd()"><IconArrowDown :size="17" /></IconButton><IconButton variant="text" aria-label="清除全部日志" title="清除全部日志" @click="confirmAction = 'logs'"><IconTrash :size="17" /></IconButton></div></div>
+          <PageState v-if="logs.length === 0" :model="{ type: 'empty', title: '当前频道没有日志' }" />
           <VirtualListViewport v-else ref="logViewport" :items="logs" :get-item-key="(_index, item) => item.id" :estimate-size="logView === 'raw' ? 96 : 68"><template #default="{ item }"><pre v-if="logView === 'raw'" class="raw-log-row">{{ item.raw }}</pre><div v-else class="log-row"><strong>{{ item.kind }}</strong><span>{{ item.message }}</span><small>{{ item.time }}</small></div></template></VirtualListViewport>
-        </TTabPanel>
-        <TTabPanel value="system" label="系统">
+        </section>
+        <section v-else-if="tab === 'system'" class="operation-tab-panel">
           <div class="operation-grid"><div v-for="item in systemRows" :key="item.label"><span>{{ item.label }}</span><strong>{{ item.value }}</strong></div></div>
-          <div class="command-band"><TButton variant="outline" @click="updateRuleset"><IconBolt :size="17" />更新规则集</TButton><TButton variant="outline" @click="createDiagnostic"><IconBug :size="17" />生成诊断包</TButton></div>
+          <div class="command-band"><Button variant="outline" @click="updateRuleset"><IconBolt :size="17" />更新规则集</Button><Button variant="outline" @click="createDiagnostic"><IconBug :size="17" />生成诊断包</Button></div>
           <div class="topology-summary"><h3>网络拓扑</h3><span>接管模式：{{ topology?.capture_mode ?? '--' }}</span><span>IPv4：{{ topology?.ipv4 ?? '--' }}</span><span>IPv6：{{ topology?.ipv6 ?? '--' }}</span></div>
-        </TTabPanel>
-        <TTabPanel value="backup" label="备份"><div class="command-band"><TButton variant="outline" @click="exportBackup"><IconArchive :size="17" />导出备份</TButton></div><TTextarea v-model="restoreText" placeholder="粘贴 NetHop 配置备份" :maxlength="1048576" /><TButton theme="primary" :disabled="!restoreText" @click="restoreBackup">验证并恢复</TButton></TTabPanel>
-      </TTabs>
+        </section>
+        <section v-else class="operation-tab-panel"><div class="command-band"><Button variant="outline" @click="exportBackup"><IconArchive :size="17" />导出备份</Button></div><Textarea v-model="restoreText" variant="outline" placeholder="粘贴 NetHop 配置备份" :maxlength="1048576" :min-rows="8" :max-rows="20" /><Button variant="primary" :disabled="!restoreText" @click="restoreBackup">验证并恢复</Button></section>
     </template>
-    <ConfirmDialog :visible="Boolean(confirmAction)" :title="confirmAction === 'logs' ? '清除全部日志' : '关闭全部连接'" :description="confirmAction === 'logs' ? '服务、订阅和内核日志都会清除，且无法恢复。' : '所有当前代理连接都将中断，是否继续？'" @update:visible="(value) => { if (!value) confirmAction = undefined; }" @confirm="runConfirmed" />
+    <Dialog :model-value="Boolean(confirmAction)" :aria-label="confirmAction === 'logs' ? '清除全部日志' : '关闭全部连接'" @update:model-value="(value) => { if (!value) confirmAction = undefined; }">
+      <template #title>{{ confirmAction === 'logs' ? '清除全部日志' : '关闭全部连接' }}</template>
+      <p>{{ confirmAction === 'logs' ? '服务、订阅和内核日志都会清除，且无法恢复。' : '所有当前代理连接都将中断，是否继续？' }}</p>
+      <template #actions>
+        <Button variant="outline" @click="confirmAction = undefined">取消</Button>
+        <Button variant="danger" @click="runConfirmed">确认</Button>
+      </template>
+    </Dialog>
   </section>
 </template>

@@ -7,6 +7,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "dev": "vite",
+    "dev:ui-foundation": "node scripts/dev-ui-foundation.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
     "test": "npm run test:unit && npm run test:browser && npm run test:e2e",
     "test:unit": "vitest run --config vitest.unit.config.ts",
@@ -24,22 +26,21 @@
   },
   "dependencies": {
     "@tabler/icons-vue": "3.46.0",
-    "@tanstack/vue-virtual": "3.13.35",
-    "@vueuse/core": "10.7.0",
+    "@tanstack/vue-virtual": "3.13.36",
+    "@vueuse/core": "14.4.0",
     "kernelsu": "3.0.2",
-    "tdesign-mobile-vue": "1.16.1",
     "vue": "3.5.41",
-    "vue-router": "4.6.4"
+    "vue-router": "5.2.0"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
     "@types/node": "26.2.0",
     "@vitejs/plugin-vue": "6.0.8",
-    "@vitest/browser-playwright": "4.1.10",
+    "@vitest/browser-playwright": "4.1.11",
     "typescript": "5.9.3",
     "vite": "8.2.1",
-    "vitest": "4.1.10",
+    "vitest": "4.1.11",
     "vitest-browser-vue": "2.1.0",
-    "vue-tsc": "3.3.9"
+    "vue-tsc": "3.3.10"
   }
 }

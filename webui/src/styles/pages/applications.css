@@ -1,0 +1,34 @@
+/* Domain styles for applications. */
+.filter-bar { display: flex; align-items: center; margin-bottom: 14px; gap: 8px; }
+.filter-bar > :first-child { min-width: 0; flex: 1; }
+.option-dropdown { min-width: 0; }
+.filter-bar > .option-dropdown { width: 126px; flex: 0 0 126px; }
+.applications-heading { align-items: center; margin-bottom: 12px; }
+.applications-heading h2 { margin-top: 0; font-size: 24px; }
+.application-mode-card { margin-bottom: 12px; padding: 10px; border: 1px solid var(--nh-border); border-radius: 6px; background: var(--nh-surface); }
+.application-mode { margin: 0; }
+.application-global-spacer { min-height: 8px; }
+.application-selection-panel { min-width: 0; }
+.application-selection-summary { display: flex; min-height: 36px; align-items: center; justify-content: space-between; margin-bottom: 6px; padding: 0 4px; gap: 8px; }
+.application-selection-summary > div:first-child { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.application-selection-summary strong { color: var(--nh-muted); font-size: 11px; font-weight: 500; }
+.application-selection-summary small { color: var(--nh-warning); font-size: 9px; }
+.application-selection-effect { color: var(--nh-muted); font-size: 10px; white-space: nowrap; }
+.application-selected-count { display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; padding: 0 6px; border-radius: 10px; color: var(--nh-selection); background: color-mix(in srgb, var(--nh-selection) 10%, var(--nh-surface)); font-size: 10px; font-weight: 700; }
+.application-batch-actions { display: flex; flex: 0 0 auto; gap: 0; }
+.application-batch-actions .nh-button { min-width: 40px; padding: 0 6px; }
+.application-list { overflow: hidden; }
+.application-list .virtual-viewport { max-height: 620px; }
+.application-list .virtual-row { padding-bottom: 8px; }
+.app-row { display: flex; min-height: 70px; align-items: center; padding: 12px; border: 1px solid var(--nh-border); border-radius: 6px; background: var(--nh-surface); gap: 10px; transition: border-color .18s ease, background-color .18s ease; }
+.app-row[data-selected="true"] { border-color: var(--nh-selection); background: color-mix(in srgb, var(--nh-selection) 5%, var(--nh-surface)); }
+.app-icon { position: relative; display: inline-flex; width: 42px; height: 42px; overflow: hidden; align-items: center; justify-content: center; flex: 0 0 42px; border: 1px solid var(--nh-border); border-radius: 6px; color: var(--nh-info); background: color-mix(in srgb, var(--nh-info) 10%, var(--nh-bg)); font-size: 15px; font-weight: 700; }
+.app-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.app-title { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.app-title strong { min-width: 0; }
+.app-title .nh-tag { flex: 0 0 auto; font-size: 9px; }
+.app-main em { color: var(--nh-warning); font-size: 9px; font-style: normal; }
+.app-row > .nh-switch { flex: 0 0 auto; }
+.application-panel-forward-enter-active, .application-panel-forward-leave-active, .application-panel-backward-enter-active, .application-panel-backward-leave-active { transition: opacity .18s ease, transform .18s cubic-bezier(.4, 0, .2, 1); }
+.application-panel-forward-enter-from, .application-panel-backward-leave-to { opacity: 0; transform: translateX(14px); }
+.application-panel-forward-leave-to, .application-panel-backward-enter-from { opacity: 0; transform: translateX(-14px); }

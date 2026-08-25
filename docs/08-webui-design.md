@@ -279,8 +279,8 @@ import * as TablerIcons from '@tabler/icons-vue';
 - 已提供颜色、背景、文本、边框、阴影、字体、间距和圆角 CSS variables；
 - 圆角基线为 3px、6px、9px、12px，NetHop 默认 6px 与其体系一致；
 - TabBar、Popup 和 BackTop 已处理 `safe-area-inset-bottom`；
-- 未发现远程字体、`@font-face` 或运行时远程样式资源；
-- 默认字体偏向 iOS/Windows，且 Cell 存在 `PingFangSC-Regular` 硬编码，NetHop 必须增加 Android 系统字体覆盖；
+- 未发现远程字体或运行时远程样式资源；NetHop 使用随 WebUI 本地分发的 WOFF2 字体，不依赖 CDN；
+- `HarmonyOS_SansSC_Regular.woff2` 是界面主字体，`TCloudNumber-Regular.woff2` 仅用于速度、流量、延迟、资源等数字，`FiraCode-Regular.woff2` 仅用于代码编辑器和原始日志；三者均通过 `font-display: swap` 注册，并保留 Android 系统字体回退；
 - 部分 Tabs、Popup、Toast 等组件使用约 300-350ms 的过渡；NetHop 只约束自有普通过渡时长，不把 reduced-motion 或 WCAG 作为发布门槛。
 
 这些差异通过 NetHop token、窄 CSS override 和截图契约处理，不 fork TDesign Common，也不直接修改 `node_modules`。Phase W0 仍需把最终 npm 锁定版本与本地参考 commit 对齐，防止审计源码与实际产物漂移。`refer/` 只作源码审计，不参与发布构建。
@@ -478,7 +478,8 @@ WebUI 是操作工具，不采用营销页面、沉浸式 Hero、渐变背景、
 - 禁止卡片嵌套卡片；
 - 圆角默认 6px，弹窗最多 9px；
 - 阴影只用于浮层，不用于普通页面区块；
-- 字体使用 Android 系统字体，不打包 Web Font。
+- 界面使用本地 HarmonyOS Sans SC WOFF2，数字指标使用本地 TCloudNumber WOFF2，代码内容使用本地 Fira Code WOFF2；加载失败时分别回退到 Android 系统字体或系统等宽字体；
+- 字体文件必须随 WebUI 离线分发，禁止远程字体；完整 HarmonyOS 字体会显著增加 webroot 体积，预算门禁必须以实际字体产物为准。
 
 ### 8.2 主题 token
 
@@ -486,8 +487,10 @@ NetHop 复用 TDesign 已有 light/dark、背景、文本、边框、状态色�
 
 ```css
 :root {
-  --td-font-family: system-ui, -apple-system, BlinkMacSystemFont, "Roboto",
-    "Noto Sans CJK SC", sans-serif;
+  --td-font-family: "NetHop HarmonyOS Sans SC", Roboto, "Noto Sans SC",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --nh-font-ui: var(--td-font-family);
+  --nh-font-number: "NetHop TCloud Number", var(--nh-font-ui);
   --td-font-family-medium: var(--td-font-family);
   --nh-accent: var(--td-brand-color);
   --nh-success: var(--td-success-color);

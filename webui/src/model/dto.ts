@@ -88,7 +88,7 @@ export interface TrafficDto {
   readonly observedAtMs: number;
   readonly state: TrafficStateDto;
 }
-export interface ConfigSchemaFieldDto { readonly id: string; readonly path: string; readonly valueType: string; readonly title: string; readonly group: string; readonly order: number; readonly advanced: boolean; readonly experimental: boolean; readonly sensitive: boolean; readonly readOnly: boolean; readonly applyImpact: string; readonly riskLevel: string; readonly capabilityKey?: string; readonly options: readonly string[] }
+export interface ConfigSchemaFieldDto { readonly id: string; readonly path: string; readonly valueType: string; readonly title: string; readonly group: string; readonly order: number; readonly advanced: boolean; readonly experimental: boolean; readonly sensitive: boolean; readonly readOnly: boolean; readonly applyImpact: string; readonly riskLevel: string; readonly capabilityKey?: string; readonly options: readonly string[]; readonly minimum?: number; readonly maximum?: number; readonly maxItems?: number }
 export interface ConfigSchemaDto { readonly schemaVersion: number; readonly fields: readonly ConfigSchemaFieldDto[] }
 
 export type EventFrameDto =
@@ -259,8 +259,15 @@ export function parseConfigSchema(value: unknown): ConfigSchemaDto {
     const field = record(value, path, ["field_id", "path", "value_type", "default", "title_key", "description_key", "group", "order", "advanced", "experimental", "deprecated", "sensitive", "read_only", "write_only", "apply_impact", "risk_level", "capability_key", "stage", "enum_values", "min", "max", "max_items"]);
     ["default", "description_key", "deprecated", "write_only", "stage", "min", "max", "max_items"].forEach((key) => { if (field[key] !== undefined) safeExtension(field[key], `${path}.${key}`); });
     const options = field.enum_values === undefined ? [] : array(field.enum_values, `${path}.enum_values`, 128).map((item, itemIndex) => string(item, `${path}.enum_values[${itemIndex}]`, 128));
+    const minimum = field.min === undefined || field.min === null ? undefined : integer(field.min, `${path}.min`, 0, 4_294_967_295);
+    const maximum = field.max === undefined || field.max === null ? undefined : integer(field.max, `${path}.max`, 0, 4_294_967_295);
+    const maxItems = field.max_items === undefined || field.max_items === null ? undefined : integer(field.max_items, `${path}.max_items`, 0, 10_000);
+    if (minimum !== undefined && maximum !== undefined && minimum > maximum) throw new ValidationError(`${path}.range`, "invalid range");
     return {
       id: string(field.field_id, `${path}.field_id`, 128), path: string(field.path, `${path}.path`, 128), valueType: string(field.value_type, `${path}.value_type`, 64), title: string(field.title_key, `${path}.title_key`, 128), group: string(field.group, `${path}.group`, 64), order: integer(field.order, `${path}.order`, 0, 10_000), advanced: boolean(field.advanced, `${path}.advanced`), experimental: boolean(field.experimental, `${path}.experimental`), sensitive: boolean(field.sensitive, `${path}.sensitive`), readOnly: boolean(field.read_only, `${path}.read_only`), applyImpact: string(field.apply_impact, `${path}.apply_impact`, 64), riskLevel: string(field.risk_level, `${path}.risk_level`, 64), ...(typeof field.capability_key === "string" ? { capabilityKey: string(field.capability_key, `${path}.capability_key`, 128) } : {}), options,
+      ...(minimum === undefined ? {} : { minimum }),
+      ...(maximum === undefined ? {} : { maximum }),
+      ...(maxItems === undefined ? {} : { maxItems }),
     };
   });
   return { schemaVersion: integer(object.schema_version, "$.result.schema_version", 1, 255), fields };

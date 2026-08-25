@@ -32,28 +32,32 @@ for (const [scope, dependencies] of Object.entries({
   }
 }
 for (const [path, metadata] of Object.entries(lock.packages)) {
-  if (path.startsWith("node_modules/") && !metadata.link && !metadata.license) {
-    throw new Error(`dependency license is missing from lockfile: ${path}`);
+  if (!path.startsWith("node_modules/") || metadata.link || metadata.license) continue;
+  try {
+    const installed = JSON.parse(await readFile(resolve(path, "package.json"), "utf8"));
+    if (installed.license) continue;
+  } catch {
+    // Fall through to the actionable error below when the installed package is unavailable.
   }
+  throw new Error(`dependency license is missing from lockfile and installed metadata: ${path}`);
 }
 
 const exact = {
-  "@vueuse/core": "10.7.0",
-  "@tanstack/vue-virtual": "3.13.35",
+  "@vueuse/core": "14.4.0",
+  "@tanstack/vue-virtual": "3.13.36",
   "@tabler/icons-vue": "3.46.0",
-  "tdesign-mobile-vue": "1.16.1",
 };
 for (const [name, version] of Object.entries(exact)) {
   if (packageJson.dependencies[name] !== version) throw new Error(`${name} direct version drifted`);
   if (lock.packages[`node_modules/${name}`]?.version !== version) throw new Error(`${name} lock version drifted`);
 }
-if (lock.packages["node_modules/@tanstack/virtual-core"]?.version !== "3.17.7") {
+if (lock.packages["node_modules/@tanstack/virtual-core"]?.version !== "3.17.8") {
   throw new Error("TanStack virtual-core version drifted");
 }
 const vueUseCopies = Object.entries(lock.packages)
   .filter(([path, value]) => path.endsWith("node_modules/@vueuse/core") && value.version)
   .map(([path, value]) => `${path}@${value.version}`);
-if (vueUseCopies.length !== 1 || !vueUseCopies[0].endsWith("@10.7.0")) {
+if (vueUseCopies.length !== 1 || !vueUseCopies[0].endsWith("@14.4.0")) {
   throw new Error(`duplicate or incompatible VueUse runtimes: ${vueUseCopies.join(", ")}`);
 }
 if (packageJson.overrides?.["@vueuse/core"]) throw new Error("VueUse override is forbidden");

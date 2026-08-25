@@ -1,4 +1,4 @@
-import { Button as TButton } from "tdesign-mobile-vue";
+import { ref } from "vue";
 import { IconRefresh } from "@tabler/icons-vue";
 
-export { IconRefresh, TButton };
+export { IconRefresh, ref };

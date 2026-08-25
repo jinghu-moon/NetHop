@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, onActivated, ref } from "vue";
 import { IconBolt } from "@tabler/icons-vue";
-import { Button as TButton, Input as TInput, Popup as TPopup, PullDownRefresh as TPullDownRefresh, Textarea as TTextarea } from "tdesign-mobile-vue";
 import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
 import ActiveNodeSummary from "@/components/nodes/ActiveNodeSummary.vue";
 import NodeActionsDropdown from "@/components/nodes/NodeActionsDropdown.vue";
 import NodeCard from "@/components/nodes/NodeCard.vue";
-import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
-import PageState from "@/components/PageState.vue";
+import PageState from "@/components/ui/feedback/PageState.vue";
 import { useHost } from "@/bridge/context";
 import { runJson } from "@/bridge/command";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
@@ -19,6 +17,14 @@ import { createActionLock, createOperationStore } from "@/runtime/operation";
 import { activeNodeId, activeNodeView, parseNodeSort, sortNodes, type NodeSort } from "@/model/node-view";
 import { buildNodeOverridePayload, parseNodeOutbound, parseNodeOverride, serializeNodeOutbound } from "@/model/node-editor";
 import { useUiPreference } from "@/runtime/storage";
+import Input from "@/components/ui/primitives/Input.vue";
+import Textarea from "@/components/ui/primitives/Textarea.vue";
+import Field from "@/components/ui/form/Field.vue";
+import Button from "@/components/ui/primitives/Button.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
+import Popup from "@/components/ui/overlay/Popup.vue";
+import Dialog from "@/components/ui/overlay/Dialog.vue";
+import PullRefresh from "@/components/ui/feedback/PullRefresh.vue";
 
 type NodeListItem = { readonly kind: "heading"; readonly id: string; readonly label: string; readonly count: number } | { readonly kind: "row"; readonly id: string; readonly nodes: readonly NodeDto[] };
 
@@ -196,7 +202,7 @@ onActivated(() => { void load(); });
     <div class="page-heading">
       <div><span class="eyebrow">OUTBOUNDS</span><h2>节点</h2><p>{{ allNodes.length }} 个可用节点</p></div>
       <div class="heading-actions">
-        <TButton size="small" shape="square" theme="primary" title="测试全部节点" :loading="testingAll" :disabled="testingAll || allNodes.length === 0" @click="testAllNodes"><IconBolt :size="18" /></TButton>
+        <IconButton size="s" variant="primary" aria-label="测试全部节点" title="测试全部节点" :loading="testingAll" :disabled="testingAll || allNodes.length === 0" @click="testAllNodes"><IconBolt :size="18" /></IconButton>
         <NodeActionsDropdown
           :sort="nodeSort"
           :has-delay-results="hasDelayResults"
@@ -211,10 +217,10 @@ onActivated(() => { void load(); });
       </div>
     </div>
     <OperationBanner v-if="testOperation" :phase="testOperation.phase" :message="testOperation.message ?? ''" @dismiss="operations.clear('node-test-all')" />
-    <PageState v-if="loading" kind="loading" title="正在加载节点" />
-    <PageState v-else-if="error" kind="error" title="节点加载失败" :detail="error" action-label="重试" @action="load" />
-    <PageState v-else-if="allNodes.length === 0" kind="empty" title="没有可用节点" />
-    <TPullDownRefresh v-else v-model="refreshing" :disabled="loading" @refresh="pullRefresh">
+    <PageState v-if="loading" :model="{ type: 'loading', title: '正在加载节点' }" />
+    <PageState v-else-if="error" :model="{ type: 'error', title: '节点加载失败', detail: error }" action-label="重试" @action="load" />
+    <PageState v-else-if="allNodes.length === 0" :model="{ type: 'empty', title: '没有可用节点' }" />
+    <PullRefresh v-else v-model="refreshing" :disabled="loading" @refresh="pullRefresh">
     <ActiveNodeSummary :value="activeSummary" />
     <div v-if="fastSelection?.state === 'switched' && backgroundRemaining > 0" class="node-background-benchmark">
       已完成快速选优，剩余 {{ backgroundRemaining }} 个节点测速中
@@ -231,23 +237,30 @@ onActivated(() => { void load(); });
         </div>
       </template>
     </VirtualListViewport>
-    </TPullDownRefresh>
-    <TPopup v-model="editorOpen" placement="bottom" :duration="160" destroy-on-close @visible-change="(visible) => { if (!visible) closeNodeEditor(); }">
+    </PullRefresh>
+    <Popup v-model="editorOpen" @visible-change="(visible) => { if (!visible) closeNodeEditor(); }">
       <div class="subscription-editor node-editor">
         <div class="editor-heading"><h3>编辑节点</h3><span>保存后由 daemon 校验并事务化发布</span></div>
-        <PageState v-if="editorLoading" kind="loading" title="正在读取节点" />
+        <PageState v-if="editorLoading" :model="{ type: 'loading', title: '正在读取节点' }" />
         <template v-else>
-          <TInput v-model="editorName" label="显示名称" :maxlength="128" />
-          <TTextarea v-model="editorOutbound" label="终端 outbound JSON" :maxlength="65536" :autosize="{ minRows: 12, maxRows: 24 }" />
+          <Field label="显示名称" required><Input v-model="editorName" variant="outline" :maxlength="128" /></Field>
+          <Field label="终端 outbound JSON" required><Textarea v-model="editorOutbound" variant="outline" :maxlength="65536" :min-rows="12" :max-rows="24" /></Field>
           <span v-if="editorError" class="form-error">{{ editorError }}</span>
           <div class="editor-actions">
-            <TButton v-if="editorOverridden" variant="outline" theme="danger" :disabled="editorSaving" @click="restoreNodeEditor">恢复订阅原值</TButton>
-            <TButton variant="outline" :disabled="editorSaving" @click="closeNodeEditor">取消</TButton>
-            <TButton theme="primary" :loading="editorSaving" @click="saveNodeEditor">保存</TButton>
+            <Button v-if="editorOverridden" variant="danger" :disabled="editorSaving" @click="restoreNodeEditor">恢复订阅原值</Button>
+            <Button variant="outline" :disabled="editorSaving" @click="closeNodeEditor">取消</Button>
+            <Button variant="primary" :loading="editorSaving" @click="saveNodeEditor">保存</Button>
           </div>
         </template>
       </div>
-    </TPopup>
-    <ConfirmDialog :visible="Boolean(pendingExclude)" title="排除节点" :description="`排除“${pendingExclude?.name ?? ''}”后，后续订阅更新也不会重新加入该节点。`" confirm-label="排除" @update:visible="(value) => { if (!value) pendingExclude = undefined; }" @confirm="excludeNode" />
+    </Popup>
+    <Dialog :model-value="Boolean(pendingExclude)" aria-label="排除节点" @update:model-value="(value) => { if (!value) pendingExclude = undefined; }">
+      <template #title>排除节点</template>
+      <p>排除“{{ pendingExclude?.name ?? '' }}”后，后续订阅更新也不会重新加入该节点。</p>
+      <template #actions>
+        <Button variant="outline" @click="pendingExclude = undefined">取消</Button>
+        <Button variant="danger" @click="excludeNode">排除</Button>
+      </template>
+    </Dialog>
   </section>
 </template>

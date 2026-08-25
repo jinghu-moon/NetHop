@@ -1,0 +1,26 @@
+:root,
+:root[theme-mode] {
+  color: var(--text-primary);
+  background: var(--page);
+  --nh-font-ui: "NetHop HarmonyOS Sans SC", Roboto, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --nh-font-number: "NetHop TCloud Number", var(--nh-font-ui);
+  --nh-font-code: "NetHop Fira Code", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-family: var(--nh-font-ui);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --nh-bg: var(--page);
+  --nh-surface: var(--surface);
+  --nh-text: var(--text-primary);
+  --nh-muted: var(--text-secondary);
+  --nh-border: var(--border-default);
+  --nh-accent: var(--info);
+  --nh-info: var(--info);
+  --nh-selection: var(--selection-structural);
+  --nh-selection-text: var(--selection-on-structural);
+  --nh-success: var(--success);
+  --nh-warning: var(--warning);
+  --nh-danger: var(--error);
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #app { min-width: 320px; min-height: 100%; margin: 0; background: var(--nh-bg); color: var(--nh-text); }
+button, input, textarea, select { font: inherit; }

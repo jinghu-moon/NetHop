@@ -1,19 +1,18 @@
 <script setup lang="ts">
 import { IconSearch, IconX } from "@tabler/icons-vue";
+import Input from "@/components/ui/primitives/Input.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
 
 defineProps<{ modelValue: string; placeholder?: string }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
-
-function update(event: Event): void {
-  emit("update:modelValue", (event.target as HTMLInputElement).value);
-}
 </script>
 
 <template>
   <div class="application-search">
-    <IconSearch :size="18" />
-    <input :value="modelValue" type="text" autocomplete="off" :placeholder="placeholder" spellcheck="false" @input="update" />
-    <button v-if="modelValue" type="button" @click="emit('update:modelValue', '')"><IconX :size="15" /></button>
+    <Input class="application-search__input" variant="outline" :model-value="modelValue" type="search" autocomplete="off" :placeholder="placeholder" spellcheck="false" @update:model-value="emit('update:modelValue', $event)">
+      <template #prefix><IconSearch :size="18" /></template>
+    </Input>
+    <IconButton v-if="modelValue" class="application-search__clear" size="s" variant="text" aria-label="清除搜索" @click="emit('update:modelValue', '')"><IconX :size="15" /></IconButton>
   </div>
 </template>
 
@@ -32,39 +31,8 @@ function update(event: Event): void {
   transition: border-color .16s ease, background-color .16s ease;
 }
 
-.application-search:focus-within {
-  border-color: var(--focus-ring);
-}
-
-.application-search > svg {
-  flex: 0 0 auto;
-}
-
-.application-search input {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  color: var(--nh-text);
-  background: transparent;
-  font-size: 12px;
-  line-height: 1.3;
-}
-
-.application-search input::placeholder {
-  color: color-mix(in srgb, var(--nh-muted) 78%, transparent);
-}
-
-.application-search button {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  color: var(--nh-muted);
-  background: transparent;
-}
+.application-search__input { min-width: 0; flex: 1 1 auto; }
+.application-search__input :deep(.nh-input) { width: 100%; min-height: 40px; border-color: transparent; background: transparent; }
+.application-search__input :deep(.nh-input:focus-within) { border-color: transparent; box-shadow: none; }
+.application-search__clear { flex: 0 0 auto; }
 </style>

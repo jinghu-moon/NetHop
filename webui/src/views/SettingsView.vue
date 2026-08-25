@@ -1,26 +1,33 @@
 <script setup lang="ts">
 import { computed, onActivated, ref } from "vue";
-import { useRouter } from "vue-router";
-import { IconDeviceFloppy, IconRefresh, IconShieldCheck, IconTool } from "@tabler/icons-vue";
-import { Button as TButton, Collapse as TCollapse, CollapsePanel as TCollapsePanel, Textarea as TTextarea } from "tdesign-mobile-vue";
-import SchemaField, { type SchemaFieldDefinition } from "@/components/SchemaField.vue";
-import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import { useRoute, useRouter } from "vue-router";
+import { IconActivity, IconAdjustments, IconClock, IconDeviceMobile, IconFileText, IconPalette, IconRoute, IconWorld } from "@tabler/icons-vue";
+import SettingsFieldControl, { type SettingsFieldControlDefinition } from "@/components/settings/SettingsFieldControl.vue";
+import SettingsGroup from "@/components/settings/SettingsGroup.vue";
+import SettingsPageHeader from "@/components/settings/SettingsPageHeader.vue";
+import SettingsRow from "@/components/settings/SettingsRow.vue";
+import SettingsSecondaryShell from "@/components/settings/SettingsSecondaryShell.vue";
+import SettingsStatusBanner from "@/components/settings/SettingsStatusBanner.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
-import OptionDropdown from "@/components/OptionDropdown.vue";
-import PageState from "@/components/PageState.vue";
-import SegmentedControl from "@/components/SegmentedControl.vue";
+import PageState from "@/components/ui/feedback/PageState.vue";
 import StatusLine from "@/components/StatusLine.vue";
+import Dialog from "@/components/ui/overlay/Dialog.vue";
+import Button from "@/components/ui/primitives/Button.vue";
+import Textarea from "@/components/ui/primitives/Textarea.vue";
+import Segmented from "@/components/ui/navigation/Segmented.vue";
 import { useHost } from "@/bridge/context";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
 import { runJson } from "@/bridge/command";
 import { validatedQuery } from "@/model/client";
 import { parseConfigDocument, serializeConfigDocument } from "@/model/config-json";
 import { parseCapability, parseConfig, parseConfigSchema, type ConfigSchemaFieldDto } from "@/model/dto";
+import { SETTINGS_SECTIONS, settingsFieldLabel, settingsSection, settingsSectionFields, type SettingsSectionKey } from "@/model/settings-presentation";
 import { uiStores } from "@/runtime/store";
 import { createOperationStore } from "@/runtime/operation";
 import { useTheme } from "@/shell/theme";
 
 const host = useHost();
+const route = useRoute();
 const router = useRouter();
 const { mode: themeMode, setMode: setThemeMode } = useTheme();
 const themeOptions = [
@@ -40,31 +47,63 @@ const rawConfig = ref("");
 const rawError = ref("");
 const operations = createOperationStore();
 const editorModeOptions = [
-  { value: "form", label: "表单" },
-  { value: "json", label: "JSON" },
+  { value: "form", label: "常用设置" },
+  { value: "json", label: "专家 JSON" },
 ] as const;
+const sectionIcons = {
+  updates: IconClock,
+  network: IconWorld,
+  interfaces: IconDeviceMobile,
+  routing: IconRoute,
+  logging: IconFileText,
+  advanced: IconAdjustments,
+} as const;
 
-const groups = computed(() => {
-  const result = new Map<string, ConfigSchemaFieldDto[]>();
-  fields.value.filter((field) => !field.path.includes("[]") && !field.sensitive).forEach((field) => { const list = result.get(field.group) ?? []; list.push(field); result.set(field.group, list); });
-  return [...result.entries()].map(([name, values]) => ({ name, fields: values.sort((a, b) => a.order - b.order) }));
+const sectionKey = computed<SettingsSectionKey | undefined>(() => {
+  const value = route.meta.settingsSection;
+  return typeof value === "string" && SETTINGS_SECTIONS.some((section) => section.key === value) ? value as SettingsSectionKey : undefined;
 });
+const isSettingsHome = computed(() => route.path === "/settings");
+const currentSection = computed(() => sectionKey.value ? settingsSection(sectionKey.value) : undefined);
+const visibleFields = computed(() => sectionKey.value ? settingsSectionFields(fields.value, sectionKey.value) : []);
+const availableSections = computed(() => SETTINGS_SECTIONS.filter((section) => settingsSectionFields(fields.value, section.key).length > 0));
+const draftState = computed(() => uiStores.config.dirty.value ? "有未应用修改" : "已同步");
+const activeDigest = computed(() => {
+  const digest = uiStores.config.active.value?.activeConfigDigest;
+  return digest ? digest.slice(0, 10) + "…" : "未知";
+});
+
+function changeThemeMode(context: { value: string | number }): void {
+  if (context.value === "system" || context.value === "light" || context.value === "dark") setThemeMode(context.value);
+}
 
 function getValue(path: string): unknown {
   return path.split(".").reduce<unknown>((current, key) => current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined, uiStores.config.draft.value);
 }
+
 function updateValue(path: string, value: unknown): void {
   const document = structuredClone(uiStores.config.draft.value ?? {});
-  const keys = path.split("."); let current = document as Record<string, unknown>;
-  keys.slice(0, -1).forEach((key) => { const next = current[key]; if (!next || typeof next !== "object" || Array.isArray(next)) current[key] = {}; current = current[key] as Record<string, unknown>; });
-  const last = keys.at(-1); if (last) current[last] = value;
-  uiStores.config.edit(document); validation.value = undefined;
+  const keys = path.split(".");
+  let current = document as Record<string, unknown>;
+  keys.slice(0, -1).forEach((key) => {
+    const next = current[key];
+    if (!next || typeof next !== "object" || Array.isArray(next)) current[key] = {};
+    current = current[key] as Record<string, unknown>;
+  });
+  const last = keys.at(-1);
+  if (last) current[last] = value;
+  uiStores.config.edit(document);
+  validation.value = undefined;
+  conflict.value = false;
 }
+
 function editRawConfig(value: string | number): void {
   rawConfig.value = String(value);
   rawError.value = "";
   validation.value = undefined;
+  conflict.value = false;
 }
+
 function syncRawDraft(): boolean {
   try {
     uiStores.config.edit(parseConfigDocument(rawConfig.value));
@@ -75,71 +114,202 @@ function syncRawDraft(): boolean {
     return false;
   }
 }
-function changeEditorMode(value: string | number): void {
+
+function changeEditorMode(context: { value: string | number }): void {
+  const value = context.value;
   if (value === editorMode.value) return;
   if (value === "json") {
-    const draft = uiStores.config.draft.value;
-    rawConfig.value = draft ? serializeConfigDocument(draft) : "{}";
+    rawConfig.value = uiStores.config.draft.value ? serializeConfigDocument(uiStores.config.draft.value) : "{}";
     rawError.value = "";
     editorMode.value = "json";
     return;
   }
   if (value === "form" && syncRawDraft()) editorMode.value = "form";
 }
-function definition(field: ConfigSchemaFieldDto): SchemaFieldDefinition {
+
+function definition(field: ConfigSchemaFieldDto): SettingsFieldControlDefinition {
   const raw = getValue(field.path);
-  const valueType: SchemaFieldDefinition["valueType"] = field.valueType.includes("array") ? "array" : field.options.length > 0 ? "enum" : field.valueType === "bool" || field.valueType === "boolean" ? "bool" : field.valueType.includes("int") ? "int" : "string";
+  const valueType: SettingsFieldControlDefinition["valueType"] = field.options.length > 0
+    ? "enum"
+    : field.valueType === "bool" || field.valueType === "boolean"
+      ? "bool"
+      : field.valueType.includes("int") || field.valueType === "integer"
+        ? "int"
+        : "string";
   const status = field.capabilityKey ? capability.value.get(field.capabilityKey) : undefined;
-  const disabledReason = field.readOnly ? "只读字段" : status && status.status !== "supported" ? `${status.status}: ${status.reason}` : undefined;
-  return { id: field.id, label: field.id, valueType, value: (raw as boolean | number | string | readonly string[] | undefined) ?? (valueType === "bool" ? false : valueType === "int" ? 0 : valueType === "array" ? [] : ""), options: field.options, ...(disabledReason ? { disabledReason } : {}) };
+  const disabledReason = field.readOnly
+    ? "只读字段"
+    : status && status.status !== "supported"
+      ? status.status + ": " + status.reason
+      : undefined;
+  return {
+    id: field.id,
+    label: settingsFieldLabel(field) ?? "未命名设置",
+    valueType,
+    value: (raw as boolean | number | string | readonly string[] | undefined) ?? (valueType === "bool" ? false : valueType === "int" ? field.minimum ?? 0 : ""),
+    options: field.options,
+    ...(field.minimum === undefined ? {} : { minimum: field.minimum }),
+    ...(field.maximum === undefined ? {} : { maximum: field.maximum }),
+    ...(disabledReason ? { disabledReason } : {}),
+  };
 }
+
+function impactLabel(value: unknown): string {
+  if (value === "runtime_only") return "立即生效";
+  if (value === "generation_activation") return "应用后重新激活代理核心";
+  if (value === "network_plan") return "应用后更新网络接管计划";
+  return "应用后由 daemon 决定生效方式";
+}
+
 async function load(): Promise<void> {
-  loading.value = true; error.value = "";
+  loading.value = true;
+  error.value = "";
   try {
-    const [config, schema, report] = await Promise.all([validatedQuery(host, { id: "config.get" }, parseConfig), validatedQuery(host, { id: "config.schema" }, parseConfigSchema), validatedQuery(host, { id: "capability.get" }, parseCapability)]);
-    uiStores.config.load(config); fields.value = schema.fields; capability.value = new Map(report.items.map((item) => [item.key, { status: item.status, reason: item.reasonCode }])); rawConfig.value = serializeConfigDocument(config.document); rawError.value = ""; conflict.value = false;
-  } catch { error.value = "配置或设备能力加载失败"; }
-  finally { loading.value = false; }
+    const [config, schema, report] = await Promise.all([
+      validatedQuery(host, { id: "config.get" }, parseConfig),
+      validatedQuery(host, { id: "config.schema" }, parseConfigSchema),
+      validatedQuery(host, { id: "capability.get" }, parseCapability),
+    ]);
+    uiStores.config.load(config);
+    fields.value = schema.fields;
+    capability.value = new Map(report.items.map((item) => [item.key, { status: item.status, reason: item.reasonCode }]));
+    rawConfig.value = serializeConfigDocument(config.document);
+    rawError.value = "";
+    conflict.value = false;
+  } catch {
+    error.value = "配置或设备能力加载失败";
+  } finally {
+    loading.value = false;
+  }
 }
+
 async function validateConfig(): Promise<void> {
   if (editorMode.value === "json" && !syncRawDraft()) return;
-  const draft = uiStores.config.draft.value; if (!draft) return;
-  operations.begin("config-validate", "config"); operations.update("config-validate", "running");
-  try { const raw = await uploadPrivatePayload(host, "config", "config-validate", JSON.stringify({ expected_config_digest: uiStores.config.baseDigest.value, document: draft })); const envelope = raw as { result?: unknown }; if (!envelope.result || typeof envelope.result !== "object") throw new Error("invalid validation"); validation.value = envelope.result as Readonly<Record<string, unknown>>; operations.update("config-validate", "success", { message: "配置验证通过" }); }
-  catch { validation.value = undefined; conflict.value = true; operations.update("config-validate", "conflict", { message: "验证失败或配置已被外部修改" }); }
+  const draft = uiStores.config.draft.value;
+  if (!draft) return;
+  operations.begin("config-validate", "config");
+  operations.update("config-validate", "running");
+  try {
+    const raw = await uploadPrivatePayload(host, "config", "config-validate", JSON.stringify({ expected_config_digest: uiStores.config.baseDigest.value, document: draft }));
+    const envelope = raw as { result?: unknown };
+    if (!envelope.result || typeof envelope.result !== "object") throw new Error("invalid validation");
+    validation.value = envelope.result as Readonly<Record<string, unknown>>;
+    conflict.value = false;
+    operations.update("config-validate", "success", { message: "配置验证通过" });
+  } catch {
+    validation.value = undefined;
+    conflict.value = true;
+    operations.update("config-validate", "conflict", { message: "验证失败或配置已被外部修改" });
+  }
 }
+
 async function applyConfig(): Promise<void> {
-  const draft = uiStores.config.draft.value; if (!draft || !validation.value) return;
-  confirmApply.value = false; operations.begin("config-apply", "config"); operations.update("config-apply", "running");
-  try { await uploadPrivatePayload(host, "config", "config-apply", JSON.stringify({ expected_config_digest: uiStores.config.baseDigest.value, document: draft })); operations.update("config-apply", "success", { message: "配置已应用" }); await load(); }
-  catch { operations.update("config-apply", "failure", { message: "应用失败，旧运行配置保持不变" }); }
+  const draft = uiStores.config.draft.value;
+  if (!draft || !validation.value) return;
+  confirmApply.value = false;
+  operations.begin("config-apply", "config");
+  operations.update("config-apply", "running");
+  try {
+    await uploadPrivatePayload(host, "config", "config-apply", JSON.stringify({ expected_config_digest: uiStores.config.baseDigest.value, document: draft }));
+    operations.update("config-apply", "success", { message: "配置已应用" });
+    await load();
+  } catch {
+    operations.update("config-apply", "failure", { message: "应用失败，旧运行配置保持不变" });
+  }
 }
+
 async function reload(): Promise<void> {
   if (uiStores.config.dirty.value && !window.confirm("重新加载会丢弃当前草稿，是否继续？")) return;
-  operations.begin("config-reload", "config"); operations.update("config-reload", "running");
-  try { await runJson(host, { id: "config.reload" }); await load(); operations.update("config-reload", "success", { message: "配置文件已重新加载" }); }
-  catch { operations.update("config-reload", "failure", { message: "外部配置无效，当前运行配置未改变" }); }
+  operations.begin("config-reload", "config");
+  operations.update("config-reload", "running");
+  try {
+    await runJson(host, { id: "config.reload" });
+    await load();
+    operations.update("config-reload", "success", { message: "配置文件已重新加载" });
+  } catch {
+    operations.update("config-reload", "failure", { message: "外部配置无效，当前运行配置未改变" });
+  }
 }
+
 onActivated(() => { if (!uiStores.config.dirty.value) void load(); });
 </script>
 
 <template>
   <section class="page settings-page">
-    <div class="page-heading"><div><h2>设置</h2></div><div class="heading-actions"><TButton shape="square" variant="outline" theme="default" @click="reload"><IconRefresh :size="18" /></TButton><TButton theme="primary" :disabled="!uiStores.config.dirty.value" @click="validateConfig"><IconShieldCheck :size="17" />验证</TButton></div></div>
-    <section class="settings-utilities">
-      <div class="settings-utility"><div><strong>界面主题</strong><small>跟随系统或固定明暗外观</small></div><OptionDropdown class="theme-dropdown" compact :model-value="themeMode" :options="themeOptions" @update:model-value="(value) => setThemeMode(value as 'system' | 'light' | 'dark')" /></div>
-      <TButton size="small" variant="outline" @click="router.push('/operations')"><IconTool :size="17" />运维</TButton>
-    </section>
-    <PageState v-if="loading" kind="loading" title="正在加载配置" />
-    <PageState v-else-if="error" kind="error" title="设置不可用" :detail="error" action-label="重试" @action="load" />
+    <PageState v-if="loading" :model="{ type: 'loading', title: '正在加载配置' }" />
+    <PageState v-else-if="error" :model="{ type: 'error', title: '设置不可用', detail: error }" action-label="重试" @action="load" />
     <template v-else>
-      <OperationBanner v-for="operation in Object.values(operations.byId)" :key="operation.id" :phase="operation.phase" :message="operation.message ?? ''" />
-      <div v-if="conflict" class="conflict-panel"><strong>检测到配置冲突</strong><span>重新加载获取最新配置，或保留当前草稿后重新验证。</span><TButton size="small" variant="outline" @click="reload">重新加载</TButton></div>
-      <div v-if="validation" class="impact-panel"><strong>验证通过</strong><span>影响级别：{{ validation.apply_impact ?? '由 daemon 决定' }}</span><span>预计中断：{{ validation.estimated_disruption ?? '未知' }}</span><TButton theme="primary" @click="confirmApply = true"><IconDeviceFloppy :size="17" />应用配置</TButton></div>
-      <div class="config-editor-toolbar"><div><strong>配置编辑</strong><small>JSON 仍经过 schema、安全审计和事务激活</small></div><SegmentedControl :model-value="editorMode" :options="editorModeOptions" @update:model-value="changeEditorMode" /></div>
-      <TCollapse v-if="editorMode === 'form'" :default-value="groups.filter((group) => group.name !== 'advanced').map((group) => group.name)"><TCollapsePanel v-for="group in groups" :key="group.name" :value="group.name" :header="group.name"><div class="schema-grid"><div v-for="field in group.fields" :key="field.id" class="schema-field-wrap"><SchemaField :field="definition(field)" @change="(value) => updateValue(field.path, value)" /><StatusLine v-if="field.experimental" status="degraded" label="实验功能" /><small>{{ field.applyImpact }} · {{ field.riskLevel }}</small></div></div></TCollapsePanel></TCollapse>
-      <div v-else class="raw-config-editor"><TTextarea :value="rawConfig" :autosize="{ minRows: 18, maxRows: 32 }" placeholder="输入完整配置 JSON" @change="editRawConfig" /><span v-if="rawError" class="form-error">{{ rawError }}</span></div>
+      <div class="settings-stage">
+        <div class="settings-base" :class="{ 'settings-base--pushed': !isSettingsHome }">
+          <SettingsPageHeader title="设置" description="只显示当前设备真实支持的配置" :loading="loading" :can-validate="Boolean(uiStores.config.dirty.value)" @reload="reload" @validate="validateConfig" />
+          <SettingsStatusBanner :title="draftState" :detail="'活动摘要 ' + activeDigest" :state="uiStores.config.dirty.value ? 'degraded' : 'ready'" />
+          <SettingsGroup title="界面">
+            <SettingsRow title="主题">
+              <template #icon><IconPalette :size="15" /></template>
+              <template #trailing><Segmented :model-value="themeMode" :options="themeOptions" aria-label="主题" @change="changeThemeMode" /></template>
+            </SettingsRow>
+            <SettingsRow title="运维" description="日志、备份、诊断和版本检查" arrow clickable @activate="router.push('/operations')">
+              <template #icon><IconActivity :size="15" /></template>
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup title="配置" description="来自 daemon schema 的真实设置">
+            <SettingsRow v-for="section in availableSections" :key="section.key" :title="section.title" :description="section.description" arrow clickable @activate="router.push(`/settings/${section.key}`)">
+              <template #icon><component :is="sectionIcons[section.key]" :size="15" /></template>
+            </SettingsRow>
+          </SettingsGroup>
+        </div>
+
+        <SettingsSecondaryShell :visible="!isSettingsHome" :title="currentSection?.title ?? '设置'" :description="currentSection?.description ?? '只显示当前设备真实支持的配置'" :loading="loading" :can-validate="Boolean(uiStores.config.dirty.value)" @back="router.push('/settings')" @reload="reload" @validate="validateConfig">
+          <SettingsStatusBanner :title="draftState" :detail="'活动摘要 ' + activeDigest" :state="uiStores.config.dirty.value ? 'degraded' : 'ready'" />
+          <OperationBanner v-for="operation in Object.values(operations.byId)" :key="operation.id" :phase="operation.phase" :message="operation.message ?? ''" />
+          <div v-if="conflict" class="settings-notice settings-notice--danger"><div><strong>检测到配置冲突</strong><span>重新加载获取最新配置，或保留当前草稿后重新验证。</span></div><Button size="s" variant="outline" @click="reload">重新加载</Button></div>
+          <div v-if="validation" class="settings-notice settings-notice--success"><div><strong>验证通过</strong><span>影响级别：{{ impactLabel(validation.apply_impact) }}</span><span>预计中断：{{ validation.estimated_disruption ?? "由 daemon 决定" }}</span></div><Button size="s" variant="primary" @click="confirmApply = true">应用配置</Button></div>
+
+          <PageState v-if="visibleFields.length === 0" :model="{ type: 'empty', title: '设备未提供此设置', detail: '当前 daemon schema 没有可编辑字段，因此不会显示虚假的控件。' }" />
+          <template v-else>
+            <div class="config-editor-toolbar"><div><strong>设备配置</strong><small>每个字段都经过 schema、capability 和事务校验</small></div><Segmented class="editor-mode" :model-value="editorMode" :options="editorModeOptions" aria-label="配置编辑模式" @change="changeEditorMode" /></div>
+            <div v-if="editorMode === 'form'" class="schema-grid">
+              <div v-for="field in visibleFields" :key="field.id" class="schema-field-wrap">
+                <SettingsFieldControl :field="definition(field)" @change="(value) => updateValue(field.path, value)" />
+                <StatusLine v-if="field.experimental" status="degraded" label="实验功能，是否可用由设备能力决定" />
+              </div>
+            </div>
+            <div v-else class="raw-config-editor"><Textarea :model-value="rawConfig" variant="outline" :min-rows="14" :max-rows="28" resize="vertical" placeholder="仅供高级用户编辑完整配置 JSON" @update:model-value="editRawConfig" /><span v-if="rawError" class="form-error">{{ rawError }}</span></div>
+          </template>
+        </SettingsSecondaryShell>
+      </div>
     </template>
-    <ConfirmDialog v-model:visible="confirmApply" title="应用配置" :description="`此操作影响级别为 ${String(validation?.apply_impact ?? 'unknown')}，由 daemon 事务化发布。`" confirm-label="应用" @confirm="applyConfig" />
+    <Dialog v-model="confirmApply" aria-label="应用配置">
+      <template #title>应用配置</template>
+      <p>此操作将由 daemon 事务化发布，{{ String(validation?.estimated_disruption ?? '可能影响当前代理连接') }}。</p>
+      <template #actions>
+        <Button variant="outline" @click="confirmApply = false">取消</Button>
+        <Button variant="primary" @click="applyConfig">应用</Button>
+      </template>
+    </Dialog>
   </section>
 </template>
+
+<style scoped>
+.settings-page { max-width: 820px; }
+.settings-stage { position: relative; min-height: calc(100dvh - 112px); overflow: hidden; border-radius: 16px; }
+.settings-base { position: absolute; z-index: 1; inset: 0; overflow: auto; min-height: 0; background: var(--nh-bg); transition: transform .35s cubic-bezier(.4, 0, .2, 1); will-change: transform; }
+.settings-base--pushed { pointer-events: none; transform: translateX(-100%); }
+.editor-mode { min-width: 168px; }
+.config-editor-toolbar { display: flex; align-items: center; justify-content: space-between; margin: 3px 0 12px; gap: 12px; }
+.config-editor-toolbar > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.config-editor-toolbar strong { font-size: 13px; }
+.config-editor-toolbar small { color: var(--nh-muted); font-size: 10px; }
+.schema-grid { display: flex; overflow: hidden; border: 1px solid var(--nh-border); border-radius: 13px; background: var(--nh-surface); flex-direction: column; }
+.schema-field-wrap { position: relative; display: flex; min-width: 0; padding: 0; border-bottom: 0; flex-direction: column; }
+.schema-field-wrap + .schema-field-wrap::before { position: absolute; z-index: 1; top: 0; right: 13px; left: 13px; border-top: 1px solid var(--nh-border); content: ""; }
+.schema-field-wrap > .status-line { margin: -1px 13px 10px; }
+.settings-notice { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; padding: 11px 12px; border: 1px solid var(--nh-border); border-radius: 11px; gap: 12px; }
+.settings-notice > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.settings-notice strong { font-size: 12px; }
+.settings-notice > div span { color: var(--nh-muted); font-size: 10px; line-height: 1.35; }
+.settings-notice--danger { border-color: color-mix(in srgb, var(--nh-danger) 45%, var(--nh-border)); background: color-mix(in srgb, var(--nh-danger) 7%, var(--nh-surface)); }
+.settings-notice--success { border-color: color-mix(in srgb, var(--nh-success) 45%, var(--nh-border)); background: color-mix(in srgb, var(--nh-success) 7%, var(--nh-surface)); }
+@media (max-width: 560px) { .config-editor-toolbar { align-items: stretch; flex-direction: column; } .editor-mode { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .settings-base { transition: none; } }
+</style>

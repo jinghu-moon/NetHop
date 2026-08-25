@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 const root = fileURLToPath(new URL("../src/", import.meta.url));
 const forbidden = [
   [/\bapp\.use\s*\(\s*TDesign\b/, "global TDesign registration"],
-  [/import\s+TDesign\s+from\s+["']tdesign-mobile-vue["']/, "default TDesign import"],
+  [/(?:from\s+["']tdesign-mobile-vue["']|import\s*["']tdesign-mobile-vue["'])/, "TDesign import"],
   [/import\s+\*\s+as\s+\w+\s+from\s+["']@tabler\/icons-vue["']/, "Tabler namespace import"],
   [/from\s+["'](?:pinia|axios|unplugin-vue-components)["']/, "forbidden runtime dependency"],
 ];

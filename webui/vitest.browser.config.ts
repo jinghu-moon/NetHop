@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   plugins: [vue()],
   optimizeDeps: {
-    include: ["vue", "tdesign-mobile-vue", "@tabler/icons-vue"],
+    include: ["vue", "@tabler/icons-vue"],
   },
   test: {
     name: "browser",

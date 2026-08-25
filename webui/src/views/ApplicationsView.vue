@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, ref } from "vue";
 import { useDebounce } from "@vueuse/core";
-import { Button as TButton, PullDownRefresh as TPullDownRefresh, Switch as TSwitch, Tag as TTag } from "tdesign-mobile-vue";
 import ApplicationCategoryDropdown from "@/components/applications/ApplicationCategoryDropdown.vue";
 import ApplicationSearch from "@/components/applications/ApplicationSearch.vue";
 import ApplicationSortDropdown from "@/components/applications/ApplicationSortDropdown.vue";
-import SegmentedControl from "@/components/SegmentedControl.vue";
+import Segmented from "@/components/ui/navigation/Segmented.vue";
 import VirtualListViewport from "@/components/virtual/VirtualListViewport.vue";
-import PageState from "@/components/PageState.vue";
+import PageState from "@/components/ui/feedback/PageState.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
+import Switch from "@/components/ui/primitives/Switch.vue";
+import Button from "@/components/ui/primitives/Button.vue";
+import Tag from "@/components/ui/primitives/Tag.vue";
+import PullRefresh from "@/components/ui/feedback/PullRefresh.vue";
 import { useHost } from "@/bridge/context";
 import { BridgeError } from "@/bridge/command";
 import ApplicationIcon from "@/components/applications/ApplicationIcon.vue";
@@ -250,11 +253,11 @@ onBeforeUnmount(() => {
   <section class="page applications-page">
     <div class="page-heading applications-heading"><h2>应用</h2><ApplicationSortDropdown :model-value="sort" :fields="availableSortFields" :selected-first="selectedFirst" :selected-count="selectedCount" @update:model-value="updateSort" @selected-first-change="updateSelectedFirst" /></div>
     <OperationBanner v-if="operations.byId['app-policy']" :phase="operations.byId['app-policy']!.phase" :message="operations.byId['app-policy']!.message ?? ''" @dismiss="operations.clear('app-policy')" />
-    <PageState v-if="loading" kind="loading" title="正在读取应用列表" />
-    <PageState v-else-if="error" kind="error" title="应用列表不可用" :detail="error" action-label="重试" @action="load" />
+    <PageState v-if="loading" :model="{ type: 'loading', title: '正在读取应用列表' }" />
+    <PageState v-else-if="error" :model="{ type: 'error', title: '应用列表不可用', detail: error }" action-label="重试" @action="load" />
     <template v-else>
       <section class="application-mode-card">
-        <div class="application-mode"><SegmentedControl :model-value="mode" :options="modeOptions" @change="changeMode" /></div>
+        <div class="application-mode"><Segmented :model-value="mode" :options="modeOptions" @change="changeMode" /></div>
       </section>
       <Transition :name="transitionName" mode="out-in">
         <div v-if="mode === 'all'" key="all" class="application-global-spacer"></div>
@@ -262,16 +265,16 @@ onBeforeUnmount(() => {
           <div class="filter-bar"><ApplicationSearch v-model="query" placeholder="搜索应用名称或包名" /><ApplicationCategoryDropdown v-model="category" :options="categoryOptions" /></div>
           <div class="application-selection-summary">
             <div><strong>已选应用</strong><span class="application-selected-count">{{ selectedCount }}</span><span class="application-selection-effect">· {{ selectionEffect }}</span><small v-if="missingSelection">至少选择一个应用</small></div>
-            <div class="application-batch-actions"><TButton size="small" variant="text" @click="selectVisible">全选</TButton><TButton size="small" variant="text" @click="clearVisible">清空</TButton></div>
+            <div class="application-batch-actions"><Button size="s" variant="text" @click="selectVisible">全选</Button><Button size="s" variant="text" @click="clearVisible">清空</Button></div>
           </div>
-          <PageState v-if="rows.length === 0" kind="empty" title="没有匹配的应用" />
-          <TPullDownRefresh v-else v-model="refreshing" :disabled="loading || saving" @refresh="pullRefresh">
+          <PageState v-if="rows.length === 0" :model="{ type: 'empty', title: '没有匹配的应用' }" />
+          <PullRefresh v-else v-model="refreshing" :disabled="loading || saving" @refresh="pullRefresh">
           <div class="application-list">
             <VirtualListViewport :items="rows" :get-item-key="(_index, app) => app.packageName" :estimate-size="78" :style="{ height: `min(58dvh, ${rows.length * 78}px)` }">
-              <template #default="{ item: app }"><div class="app-row" :data-selected="app.selected"><ApplicationIcon :host="host" :app="app" /><div class="app-main"><div class="app-title"><strong>{{ app.appLabel || app.packageName }}</strong><TTag v-if="app.isSystem" size="small" variant="light">系统</TTag></div><small>{{ app.packageName }}</small><em v-if="app.sharedCount > 1">共享 UID，同时影响 {{ app.sharedCount }} 个应用</em><em v-if="app.uid === 0">root UID 受保护</em></div><TSwitch size="small" :value="app.selected" :disabled="app.uid === 0" @change="(value) => toggle(app, value)" /></div></template>
+              <template #default="{ item: app }"><div class="app-row" :data-selected="app.selected"><ApplicationIcon :host="host" :app="app" /><div class="app-main"><div class="app-title"><strong>{{ app.appLabel || app.packageName }}</strong><Tag v-if="app.isSystem" size="s" variant="soft">系统</Tag></div><small>{{ app.packageName }}</small><em v-if="app.sharedCount > 1">共享 UID，同时影响 {{ app.sharedCount }} 个应用</em><em v-if="app.uid === 0">root UID 受保护</em></div><Switch size="s" :model-value="app.selected" :disabled="app.uid === 0" :aria-label="`代理 ${app.appLabel || app.packageName}`" @change="(value) => toggle(app, value)" /></div></template>
             </VirtualListViewport>
           </div>
-          </TPullDownRefresh>
+          </PullRefresh>
         </section>
       </Transition>
     </template>

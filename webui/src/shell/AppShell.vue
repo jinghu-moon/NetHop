@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 import { IconActivity, IconApps, IconSettings, IconWorld } from "@tabler/icons-vue";
-import { Button as TButton, NoticeBar as TNoticeBar, TabBar as TTabBar, TabBarItem as TTabBarItem } from "tdesign-mobile-vue";
 import { createAppHost, provideHost } from "@/bridge/context";
 import { compatibilityMessage, compatibilityState } from "./compatibility";
 import { uiStores } from "@/runtime/store";
@@ -15,6 +14,9 @@ import { validatedQuery } from "@/model/client";
 import { useTheme } from "./theme";
 import { useBackDispatcher } from "./useBackDispatcher";
 import { useKeyboardViewport } from "./useKeyboardViewport";
+import Button from "@/components/ui/primitives/Button.vue";
+import NoticeBar from "@/components/ui/feedback/NoticeBar.vue";
+import TabBar from "@/components/ui/navigation/TabBar.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -44,14 +46,14 @@ if (appHost.capability.kind !== "browser") {
 }
 
 const nav = [
-  { to: "/overview", label: "概览", icon: IconActivity },
-  { to: "/subscriptions", label: "订阅", icon: IconWorld },
-  { to: "/applications", label: "应用", icon: IconApps },
-  { to: "/settings", label: "设置", icon: IconSettings },
+  { value: "/overview", label: "概览", icon: IconActivity },
+  { value: "/subscriptions", label: "订阅", icon: IconWorld },
+  { value: "/applications", label: "应用", icon: IconApps },
+  { value: "/settings", label: "设置", icon: IconSettings },
 ] as const;
-const activeNav = computed(() => nav.find((item) => route.path.startsWith(item.to))?.to ?? route.path);
-const navigate = (value: string | number | Array<string | number>): void => {
-  if (typeof value === "string" && nav.some((item) => item.to === value)) void router.push(value);
+const activeNav = computed(() => nav.find((item) => route.path.startsWith(item.value))?.value ?? route.path);
+const navigate = (value: string): void => {
+  if (nav.some((item) => item.value === value)) void router.push(value);
 };
 
 onMounted(async () => {
@@ -66,12 +68,10 @@ const reloadUi = (): void => window.location.reload();
 
 <template>
   <div class="app-shell" :data-phase="phase" :data-keyboard="keyboard.visible.value" :style="{ '--nh-visual-height': `${keyboard.viewportHeight.value}px` }">
-    <TNoticeBar v-if="compatibility !== 'ready'" visible theme="warning" :content="compatibilityMessage(compatibility)" :marquee="false"><template #operation><TButton size="small" theme="primary" variant="text" @click="reloadUi">重新加载</TButton></template></TNoticeBar>
-    <TNoticeBar v-else-if="phase === 'stale'" visible theme="warning" content="运行状态已过期，危险操作已暂时禁用" :marquee="false"><template #operation><TButton size="small" theme="primary" variant="text" @click="reloadUi">重新加载</TButton></template></TNoticeBar>
+    <NoticeBar v-if="compatibility !== 'ready'" :content="compatibilityMessage(compatibility)"><template #action><Button size="s" variant="primary" @click="reloadUi">重新加载</Button></template></NoticeBar>
+    <NoticeBar v-else-if="phase === 'stale'" content="运行状态已过期，危险操作已暂时禁用"><template #action><Button size="s" variant="primary" @click="reloadUi">重新加载</Button></template></NoticeBar>
     <main class="app-content"><RouterView v-slot="{ Component }"><KeepAlive :max="6"><component :is="Component" /></KeepAlive></RouterView></main>
 
-    <TTabBar v-show="!keyboard.visible.value" :value="activeNav" fixed placeholder :split="false" @change="navigate">
-      <TTabBarItem v-for="item in nav" :key="item.to" :value="item.to"><template #icon><component :is="item.icon" :size="21" stroke-width="1.8" /></template>{{ item.label }}</TTabBarItem>
-    </TTabBar>
+    <TabBar v-show="!keyboard.visible.value" :model-value="activeNav" :items="nav" @change="navigate" />
   </div>
 </template>

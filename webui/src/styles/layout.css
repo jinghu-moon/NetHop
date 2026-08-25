@@ -1,0 +1,13 @@
+.app-shell { min-height: 100dvh; }
+.app-content { width: min(100%, 820px); margin: 0 auto; }
+.app-shell[data-keyboard="true"] .app-content { min-height: var(--nh-visual-height, 100dvh); }
+.app-shell[data-keyboard="true"] .page { min-height: var(--nh-visual-height, 100dvh); padding-bottom: 16px; }
+.page { min-height: calc(100dvh - 74px); padding: max(20px, calc(env(safe-area-inset-top) + 12px)) 16px 28px; }
+.page-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 16px; }
+.page-heading h2 { margin: 3px 0 4px; font-size: 26px; line-height: 1.2; letter-spacing: 0; }
+.page-heading p { margin: 0; color: var(--nh-muted); font-size: 13px; }
+.eyebrow { color: var(--nh-muted); font-size: 10px; font-weight: 700; letter-spacing: 0; }
+.heading-actions, .row-actions, .editor-actions { display: flex; align-items: center; gap: 6px; }
+.theme-dropdown { width: 84px; }
+@media (min-width: 680px) { .page { padding-right: 28px; padding-left: 28px; } }
+@media (max-width: 370px) { .row-actions { gap: 0; } }

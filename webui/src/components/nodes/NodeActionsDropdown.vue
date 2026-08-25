@@ -11,8 +11,13 @@ import {
   IconTrash,
   IconX,
 } from "@tabler/icons-vue";
-import { Button as TButton } from "tdesign-mobile-vue";
-import AnchoredDropdown from "@/components/AnchoredDropdown.vue";
+import { ref } from "vue";
+import Dropdown from "@/components/ui/overlay/Dropdown.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
+import MenuItem from "@/components/ui/menu/MenuItem.vue";
+import MenuList from "@/components/ui/menu/MenuList.vue";
+import MenuSection from "@/components/ui/menu/MenuSection.vue";
+import MenuItemRadio from "@/components/ui/menu/MenuItemRadio.vue";
 import type { NodeSort } from "@/model/node-view";
 
 const props = defineProps<{
@@ -20,6 +25,7 @@ const props = defineProps<{
   hasDelayResults: boolean;
   hasSelectedNode: boolean;
 }>();
+const open = ref(false);
 const emit = defineEmits<{
   refresh: [];
   sortChange: [value: NodeSort];
@@ -60,101 +66,77 @@ function selectSort(value: NodeSort, close: () => void): void {
 </script>
 
 <template>
-  <AnchoredDropdown class="node-actions-dropdown" menu-label="节点操作" menu-class="node-actions-menu" menu-width="200px" :offset="6">
-    <template #trigger="{ open, toggle }">
-      <TButton
+  <Dropdown v-model:open="open" class="node-actions-dropdown" panel-class="node-actions-menu" panel-width="200px" placement="bottom-end" :close-on-select="false">
+    <template #trigger="{ open }">
+      <IconButton
         class="node-actions-trigger"
-        size="small"
-        shape="square"
+        size="s"
         variant="outline"
-        theme="default"
+        aria-label="更多操作"
         title="更多操作"
         aria-haspopup="menu"
         :aria-expanded="open"
         :data-open="open"
-        @click="toggle"
       >
         <IconDotsVertical :size="19" />
-      </TButton>
+      </IconButton>
     </template>
 
     <template #default="{ activePanel, pushPanel, popPanel, close }">
       <template v-if="activePanel === 'root'">
-        <section class="anchored-dropdown__section">
-          <div class="anchored-dropdown__options">
-            <button class="anchored-dropdown__option" type="button" role="menuitem" @click="runAction('refresh', close)">
-              <span class="anchored-dropdown__option-content">
-                <IconRefresh class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-                <span>刷新节点列表</span>
-              </span>
-            </button>
-            <button class="anchored-dropdown__option" type="button" role="menuitem" aria-haspopup="menu" @click="pushPanel('sort')">
-              <span class="anchored-dropdown__option-content">
-                <IconArrowsSort class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-                <span>排序方式</span>
-              </span>
-              <span class="anchored-dropdown__option-trailing">
-                <span>{{ sortLabels[sort] }}</span>
-                <IconChevronRight :size="15" aria-hidden="true" />
-              </span>
-            </button>
-          </div>
-        </section>
-        <section class="anchored-dropdown__section anchored-dropdown__section--divided">
-          <div class="anchored-dropdown__options">
-            <button class="anchored-dropdown__option" type="button" role="menuitem" :disabled="!hasDelayResults" @click="runAction('clearDelays', close)">
-              <span class="anchored-dropdown__option-content">
-                <IconX class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-                <span>清除测速结果</span>
-              </span>
-            </button>
-            <button class="anchored-dropdown__option" type="button" role="menuitem" :disabled="!hasSelectedNode" @click="runAction('export', close)">
-              <span class="anchored-dropdown__option-content">
-                <IconCopy class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-                <span>导出当前节点</span>
-              </span>
-            </button>
-            <button class="anchored-dropdown__option" type="button" role="menuitem" :disabled="!hasSelectedNode" @click="runAction('edit', close)">
-              <span class="anchored-dropdown__option-content">
-                <IconEdit class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-                <span>编辑当前节点</span>
-              </span>
-            </button>
-            <button class="anchored-dropdown__option" type="button" role="menuitem" data-tone="danger" :disabled="!hasSelectedNode" @click="runAction('exclude', close)">
-              <span class="anchored-dropdown__option-content">
-                <IconTrash class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-                <span>排除当前节点</span>
-              </span>
-            </button>
-          </div>
-        </section>
+        <MenuList aria-label="节点操作">
+          <MenuSection>
+            <MenuItem class="anchored-dropdown__option" @click="runAction('refresh', close)">
+              <template #prefix><IconRefresh class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+              刷新节点列表
+            </MenuItem>
+            <MenuItem class="anchored-dropdown__option" aria-haspopup="menu" @click="pushPanel('sort')">
+              <template #prefix><IconArrowsSort class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+              <template #suffix><span class="anchored-dropdown__option-trailing"><span>{{ sortLabels[sort] }}</span><IconChevronRight :size="15" aria-hidden="true" /></span></template>
+              排序方式
+            </MenuItem>
+          </MenuSection>
+          <MenuSection divided>
+            <MenuItem class="anchored-dropdown__option" :disabled="!hasDelayResults" @click="runAction('clearDelays', close)">
+              <template #prefix><IconX class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+              清除测速结果
+            </MenuItem>
+            <MenuItem class="anchored-dropdown__option" :disabled="!hasSelectedNode" @click="runAction('export', close)">
+              <template #prefix><IconCopy class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+              导出当前节点
+            </MenuItem>
+            <MenuItem class="anchored-dropdown__option" :disabled="!hasSelectedNode" @click="runAction('edit', close)">
+              <template #prefix><IconEdit class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+              编辑当前节点
+            </MenuItem>
+            <MenuItem class="anchored-dropdown__option" danger :disabled="!hasSelectedNode" @click="runAction('exclude', close)">
+              <template #prefix><IconTrash class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+              排除当前节点
+            </MenuItem>
+          </MenuSection>
+        </MenuList>
       </template>
 
       <section v-else-if="activePanel === 'sort'" class="anchored-dropdown__section">
         <div class="anchored-dropdown__options" role="group" aria-label="节点排序方式">
-          <button class="anchored-dropdown__option" type="button" role="menuitem" @click="popPanel">
-            <span class="anchored-dropdown__option-content">
-              <IconArrowLeft class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" />
-              <span>排序方式</span>
-            </span>
-          </button>
-          <button
+          <MenuItem class="anchored-dropdown__option" @click="popPanel">
+            <template #prefix><IconArrowLeft class="anchored-dropdown__option-leading-icon" :size="18" aria-hidden="true" /></template>
+            排序方式
+          </MenuItem>
+          <MenuItemRadio
             v-for="option in sortOptions"
             :key="option.value"
             class="anchored-dropdown__option"
-            type="button"
-            role="menuitemradio"
-            :aria-checked="option.value === sort"
-            :data-selected="option.value === sort"
+            :selected="option.value === sort"
             @click="selectSort(option.value, close)"
           >
-            <span>{{ option.label }}</span>
-            <IconCheck class="anchored-dropdown__option-icon" :size="17" aria-hidden="true" :data-visible="option.value === sort" />
-          </button>
+            <template #suffix><IconCheck class="anchored-dropdown__option-icon" :size="17" aria-hidden="true" :data-visible="option.value === sort" /></template>
+            {{ option.label }}
+          </MenuItemRadio>
         </div>
       </section>
     </template>
-  </AnchoredDropdown>
+  </Dropdown>
 </template>
 
 <style scoped>
@@ -166,4 +148,5 @@ function selectSort(value: NodeSort, close: () => void): void {
   border-color: var(--focus-ring);
   color: var(--nh-info);
 }
+:global(.node-actions-menu) { width: 200px; }
 </style>

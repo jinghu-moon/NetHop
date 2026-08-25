@@ -1,0 +1,31 @@
+/* Domain styles for settings. */
+@media (max-width: 370px) { .settings-utility small { display: none; } }
+@media (max-width: 520px) { .config-editor-toolbar { grid-template-columns: 1fr; } }
+.schema-field { display: flex; flex-direction: column; gap: 5px; }
+.schema-stepper { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.schema-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; }
+.schema-stepper > span { min-width: 0; color: var(--nh-text); font-size: 13px; font-weight: 600; }
+.schema-stepper .nh-input-number { flex: 0 0 auto; }
+.settings-group-description { margin: 0 0 10px; color: var(--nh-muted); font-size: 12px; line-height: 1.5; }
+.settings-summary-group { margin-bottom: 14px; }
+.settings-title-row { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.settings-title-row > div { min-width: 0; }
+.settings-utilities { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; padding: 9px 10px; border: 1px solid var(--nh-border); border-radius: 6px; background: var(--nh-surface); gap: 10px; }
+.settings-utility { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 10px; }
+.settings-utility > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.settings-utility strong { font-size: 13px; }
+.settings-utility small { color: var(--nh-muted); font-size: 10px; }
+.config-editor-toolbar { display: grid; margin-bottom: 12px; grid-template-columns: minmax(0, 1fr) minmax(150px, 220px); align-items: center; gap: 12px; }
+.config-editor-toolbar > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.config-editor-toolbar strong { font-size: 13px; }
+.config-editor-toolbar small { color: var(--nh-muted); font-size: 10px; }
+.raw-config-editor { display: flex; flex-direction: column; gap: 8px; }
+.raw-config-editor .nh-textarea { font-family: var(--nh-font-code); font-size: 11px; line-height: 1.5; tab-size: 2; }
+.schema-select { display: flex; align-items: center; justify-content: space-between; min-height: 42px; gap: 12px; }
+.schema-select > span { min-width: 0; flex: 1; }
+.schema-select .option-dropdown { width: 160px; flex: 0 0 160px; }
+.schema-field-wrap { padding: 8px 0 12px; border-bottom: 1px solid var(--nh-border); }
+.schema-field-wrap > small { display: block; margin-top: 5px; color: var(--nh-muted); font-size: 10px; }
+.impact-panel, .conflict-panel { display: flex; align-items: flex-start; margin: 10px 0 14px; padding: 12px; border-left: 3px solid var(--nh-success); background: var(--nh-surface); flex-direction: column; gap: 5px; }
+.conflict-panel { border-left-color: var(--nh-warning); }
+.impact-panel span, .conflict-panel span { color: var(--nh-muted); font-size: 12px; }

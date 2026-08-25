@@ -79,6 +79,16 @@ describe("strict DTO validators", () => {
     expect(() => parseConfigSchema({ schema_version: 3, fields: [{ ...field, enum: field.enum_values }], features: [] })).toThrow("unknown field");
   });
 
+  it("accepts u32 configuration ranges emitted by the daemon", () => {
+    const field = {
+      field_id: "advanced.bypass_mark", path: "advanced.bypass_mark", value_type: "integer", title_key: "config.advanced.bypass_mark.title",
+      description_key: "config.advanced.bypass_mark.description", group: "advanced", order: 91, advanced: true,
+      experimental: false, sensitive: false, read_only: false, apply_impact: "network_plan", risk_level: "disruptive",
+      enum_values: [], min: 1, max: 4_294_967_295,
+    };
+    expect(parseConfigSchema({ schema_version: 3, fields: [field], features: [] }).fields[0]?.maximum).toBe(4_294_967_295);
+  });
+
   it("rejects source URL leakage and credential-shaped node fields", () => {
     expect(parseSubscription({ id: "src_abc", name: "Primary", configured: true, active: true, url_redacted: "[REDACTED]" }).name).toBe("Primary");
     expect(() => parseSubscription({ id: "src_abc", name: "Primary", configured: true, active: true, url_redacted: "https://secret" })).toThrow("redacted");

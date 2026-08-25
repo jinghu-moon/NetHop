@@ -9,25 +9,26 @@ import {
   IconRefresh,
   IconTrash,
 } from "@tabler/icons-vue";
-import {
-  ActionSheet as TActionSheet,
-  Button as TButton,
-  Checkbox as TCheckbox,
-  Input as TInput,
-  Popup as TPopup,
-  Radio as TRadio,
-  Tag as TTag,
-  Textarea as TTextarea,
-} from "tdesign-mobile-vue";
 import { computed, h, nextTick, onActivated, ref, watch } from "vue";
 import { runJson } from "@/bridge/command";
 import { useHost } from "@/bridge/context";
 import { uploadPrivatePayload } from "@/bridge/private-payload";
-import ConfirmDialog from "@/components/ConfirmDialog.vue";
-import OptionDropdown from "@/components/OptionDropdown.vue";
+import OptionDropdown from "@/components/ui/composite/OptionDropdown.vue";
 import OperationBanner from "@/components/OperationBanner.vue";
-import PageState from "@/components/PageState.vue";
-import SegmentedControl from "@/components/SegmentedControl.vue";
+import PageState from "@/components/ui/feedback/PageState.vue";
+import Segmented from "@/components/ui/navigation/Segmented.vue";
+import Input from "@/components/ui/primitives/Input.vue";
+import Textarea from "@/components/ui/primitives/Textarea.vue";
+import Field from "@/components/ui/form/Field.vue";
+import Checkbox from "@/components/ui/primitives/Checkbox.vue";
+import Radio from "@/components/ui/primitives/Radio.vue";
+import Button from "@/components/ui/primitives/Button.vue";
+import IconButton from "@/components/ui/primitives/IconButton.vue";
+import Tag from "@/components/ui/primitives/Tag.vue";
+import Popup from "@/components/ui/overlay/Popup.vue";
+import ActionSheet from "@/components/ui/overlay/ActionSheet.vue";
+import Dialog from "@/components/ui/overlay/Dialog.vue";
+import Disclosure from "@/components/ui/layout/Disclosure.vue";
 import { validatedQuery } from "@/model/client";
 import { parseConfig, parseSubscriptionSnapshot, type SourceUpdateHistoryDto, type SubscriptionDto, type SubscriptionModeDto } from "@/model/dto";
 import { presentSubscription, type SubscriptionPresentation } from "@/model/subscription-presentation";
@@ -70,6 +71,7 @@ const updateAllPending = ref(false);
 const selectingSourceId = ref<string>();
 const modePending = ref(false);
 const singleTargetOpen = ref(false);
+const advancedSettingsOpen = ref(false);
 const clockSeconds = ref(Math.floor(Date.now() / 1_000));
 const feedbackId = ref<string>();
 const operations = createOperationStore();
@@ -389,7 +391,7 @@ onActivated(() => { void load().catch(() => undefined); });
     <div class="page-heading subscriptions-heading">
       <div><h2>订阅</h2></div>
       <div class="heading-actions">
-        <TButton size="small" shape="square" variant="outline" theme="default" :loading="updateAllPending" :disabled="updateAllPending || items.length === 0" title="更新全部" @click="update()"><IconRefresh :size="18" /></TButton>
+        <IconButton size="s" variant="outline" aria-label="更新全部" :loading="updateAllPending" :disabled="updateAllPending || items.length === 0" title="更新全部" @click="update()"><IconRefresh :size="18" /></IconButton>
       </div>
     </div>
 
@@ -397,29 +399,29 @@ onActivated(() => { void load().catch(() => undefined); });
 
     <section class="subscription-mode-panel">
       <div><strong>订阅模式</strong><span>{{ mode === "single" ? "只使用一个订阅源" : "合并已启用订阅源的节点" }}</span></div>
-      <SegmentedControl :model-value="mode" :options="modeOptions" :disabled="modePending" @change="changeMode" />
+      <Segmented :model-value="mode" :options="modeOptions" :disabled="modePending" @change="changeMode" />
     </section>
 
-    <PageState v-if="loading && items.length === 0" kind="loading" title="正在加载订阅源" />
-    <PageState v-else-if="loadError && items.length === 0" kind="error" title="订阅源加载失败" detail="控制服务暂时不可用" action-label="重试" @action="load" />
-    <PageState v-else-if="items.length === 0" kind="empty" title="还没有订阅源" detail="点击右下角按钮添加订阅链接" />
+    <PageState v-if="loading && items.length === 0" :model="{ type: 'loading', title: '正在加载订阅源' }" />
+    <PageState v-else-if="loadError && items.length === 0" :model="{ type: 'error', title: '订阅源加载失败', detail: '控制服务暂时不可用' }" action-label="重试" @action="load" />
+    <PageState v-else-if="items.length === 0" :model="{ type: 'empty', title: '还没有订阅源', detail: '点击右下角按钮添加订阅链接' }" />
     <div v-else class="source-list">
       <article v-for="item in items" :key="item.id" class="source-card" :data-state="presentation(item).tone" :data-selected="item.active" @click="mode === 'single' ? selectSource(item) : setSourceEnabled(item, !item.active)">
-        <TRadio v-if="mode === 'single'" class="source-selector" :checked="item.active" :value="item.id" icon="dot" :block="false" borderless :disabled="Boolean(selectingSourceId)" @click.stop="selectSource(item)" />
-        <TCheckbox v-else class="source-selector" :checked="item.active" :disabled="Boolean(selectingSourceId) || (!item.configured && !item.active)" @change="(checked) => setSourceEnabled(item, checked === true)" @click.stop />
+        <Radio v-if="mode === 'single'" class="source-selector" :model-value="item.active" :value="item.id" :aria-label="`选择 ${item.name}`" :disabled="Boolean(selectingSourceId)" @click.stop="selectSource(item)" />
+        <Checkbox v-else class="source-selector" :model-value="item.active" :disabled="Boolean(selectingSourceId) || (!item.configured && !item.active)" :aria-label="`启用 ${item.name}`" @update:model-value="(checked) => setSourceEnabled(item, checked)" @click.stop />
         <div class="source-main">
           <div class="source-title-row">
             <strong>{{ item.name }}</strong>
             <div class="source-actions" @click.stop>
-              <TButton size="small" shape="square" variant="text" theme="default" :loading="isUpdating(item.id)" :disabled="isUpdating(item.id)" title="更新订阅" @click="update(item)"><IconRefresh :size="18" /></TButton>
-              <TButton size="small" shape="square" variant="text" theme="default" title="更多操作" @click="openActions(item)"><IconDotsVertical :size="19" /></TButton>
+              <IconButton size="s" variant="text" aria-label="更新订阅" :loading="isUpdating(item.id)" :disabled="isUpdating(item.id)" title="更新订阅" @click="update(item)"><IconRefresh :size="18" /></IconButton>
+              <IconButton size="s" variant="text" aria-label="更多操作" title="更多操作" @click="openActions(item)"><IconDotsVertical :size="19" /></IconButton>
             </div>
           </div>
           <div class="source-quota-track" :data-empty="presentation(item).quotaPercent === undefined"><i :style="{ width: `${presentation(item).quotaPercent ?? 0}%` }" /></div>
           <span>{{ presentation(item).summary }}</span>
           <div class="source-detail">
             <small>{{ presentation(item).detail }}</small>
-            <TTag v-if="presentation(item).warning" size="small" variant="light" theme="warning">{{ presentation(item).warning }}</TTag>
+            <Tag v-if="presentation(item).warning" size="s" variant="soft" tone="warning">{{ presentation(item).warning }}</Tag>
           </div>
         </div>
       </article>
@@ -436,51 +438,58 @@ onActivated(() => { void load().catch(() => undefined); });
       </div>
     </section>
 
-    <TButton class="subscription-add-fab" size="large" shape="circle" theme="primary" title="添加订阅" @click="openEditor()"><IconPlus :size="26" stroke-width="2" /></TButton>
+    <IconButton class="subscription-add-fab" size="l" shape="circle" variant="primary" aria-label="添加订阅" title="添加订阅" @click="openEditor()"><IconPlus :size="26" stroke-width="2" /></IconButton>
 
-    <TActionSheet v-model="actionSheetOpen" class="subscription-actions-sheet" theme="list" align="left" show-cancel cancel-text="取消" :description="activeItem?.name ?? ''" :items="actionItems" @selected="selectAction" @close="finishActionSheet" @cancel="activeItem = undefined" />
+    <ActionSheet v-model="actionSheetOpen" :title="activeItem?.name ?? ''" :items="actionItems" @selected="(_item, index) => selectAction(undefined, index)" @close="finishActionSheet" @cancel="activeItem = undefined" />
 
-    <TPopup v-model="editorOpen" placement="bottom" :duration="160" destroy-on-close @visible-change="(visible) => { if (!visible) closeEditor(); }">
+    <Popup v-model="editorOpen" @visible-change="(visible) => { if (!visible) closeEditor(); }">
       <div class="subscription-editor">
         <div class="editor-heading"><h3>{{ editing ? "编辑订阅" : "添加订阅" }}</h3><span>{{ editing ? "留空链接表示不修改" : "名称和 HTTPS 链接" }}</span></div>
-        <TInput v-model="name" label="名称" placeholder="例如：主订阅" :maxlength="256" />
-        <TInput v-if="!editing" v-model="url" label="订阅链接" placeholder="仅限 HTTPS 链接" type="url" />
-        <TInput v-else v-model="url" label="替换链接（可选）" placeholder="留空表示不修改" type="url" />
-        <details class="source-advanced-settings">
-          <summary>高级设置</summary>
+        <Field label="名称" required><Input v-model="name" variant="outline" placeholder="例如：主订阅" :maxlength="256" /></Field>
+        <Field v-if="!editing" label="订阅链接" required><Input v-model="url" variant="outline" placeholder="仅限 HTTPS 链接" type="url" /></Field>
+        <Field v-else label="替换链接（可选）"><Input v-model="url" variant="outline" placeholder="留空表示不修改" type="url" /></Field>
+        <Disclosure v-model="advancedSettingsOpen" class="source-advanced-settings">
+          <template #summary>高级设置</template>
           <div class="source-advanced-fields">
-            <label class="source-option-field"><span>请求配置档</span><OptionDropdown :model-value="sourceSettings.requestProfile" :options="requestProfileOptions" @update:model-value="updateRequestProfile" /></label>
-            <label class="source-option-field"><span>内容格式</span><OptionDropdown :model-value="sourceSettings.formatHint" :options="formatHintOptions" @update:model-value="updateFormatHint" /></label>
-            <div v-if="editing && sourceSettings.mirrorCount > 0" class="source-mirror-state"><span>已配置 {{ sourceSettings.mirrorCount }} 个镜像</span><TCheckbox :checked="sourceSettings.replaceMirrors" @change="(checked) => { sourceSettings.replaceMirrors = checked === true; }">替换镜像</TCheckbox></div>
-            <TTextarea v-if="!editing || sourceSettings.replaceMirrors" v-model="sourceSettings.mirrorsText" label="镜像链接" placeholder="每行一个 HTTPS 链接" :autosize="{ minRows: 2, maxRows: 4 }" />
-            <TTextarea v-model="sourceSettings.includeNamesText" label="名称包含" placeholder="每行一个匹配词" :autosize="{ minRows: 2, maxRows: 4 }" />
-            <TTextarea v-model="sourceSettings.excludeNamesText" label="名称排除" placeholder="每行一个匹配词" :autosize="{ minRows: 2, maxRows: 4 }" />
-            <div class="source-protocol-field"><span>协议过滤</span><div class="source-protocol-grid"><TCheckbox v-for="protocol in subscriptionProtocols" :key="protocol" :checked="sourceSettings.protocols.includes(protocol)" @change="(checked) => updateProtocol(protocol, checked === true)">{{ protocol }}</TCheckbox></div></div>
+            <Field label="请求配置档"><OptionDropdown :model-value="sourceSettings.requestProfile" :options="requestProfileOptions" aria-label="请求配置档" @update:model-value="updateRequestProfile" /></Field>
+            <Field label="内容格式"><OptionDropdown :model-value="sourceSettings.formatHint" :options="formatHintOptions" aria-label="内容格式" @update:model-value="updateFormatHint" /></Field>
+            <div v-if="editing && sourceSettings.mirrorCount > 0" class="source-mirror-state"><span>已配置 {{ sourceSettings.mirrorCount }} 个镜像</span><Checkbox :model-value="sourceSettings.replaceMirrors" aria-label="替换镜像" @update:model-value="(checked) => { sourceSettings.replaceMirrors = checked; }">替换镜像</Checkbox></div>
+            <Field v-if="!editing || sourceSettings.replaceMirrors" label="镜像链接"><Textarea v-model="sourceSettings.mirrorsText" variant="outline" placeholder="每行一个 HTTPS 链接" :min-rows="2" :max-rows="4" /></Field>
+            <Field label="名称包含"><Textarea v-model="sourceSettings.includeNamesText" variant="outline" placeholder="每行一个匹配词" :min-rows="2" :max-rows="4" /></Field>
+            <Field label="名称排除"><Textarea v-model="sourceSettings.excludeNamesText" variant="outline" placeholder="每行一个匹配词" :min-rows="2" :max-rows="4" /></Field>
+            <div class="source-protocol-field"><span>协议过滤</span><div class="source-protocol-grid"><Checkbox v-for="protocol in subscriptionProtocols" :key="protocol" :model-value="sourceSettings.protocols.includes(protocol)" :aria-label="protocol" @update:model-value="(checked) => updateProtocol(protocol, checked)">{{ protocol }}</Checkbox></div></div>
           </div>
-        </details>
+        </Disclosure>
         <small v-if="formError" class="form-error">{{ formError }}</small>
-        <TButton v-if="!editing" class="content-import-entry" block variant="text" theme="default" @click="openContentImport"><IconFileImport :size="18" />从文本内容导入</TButton>
-        <div class="editor-actions"><TButton variant="outline" :disabled="saving" @click="closeEditor">取消</TButton><TButton theme="primary" :loading="saving" :disabled="saving" @click="save">保存</TButton></div>
+        <Button v-if="!editing" class="content-import-entry" variant="text" @click="openContentImport"><IconFileImport :size="18" />从文本内容导入</Button>
+        <div class="editor-actions"><Button variant="outline" :disabled="saving" @click="closeEditor">取消</Button><Button variant="primary" :loading="saving" :disabled="saving" @click="save">保存</Button></div>
       </div>
-    </TPopup>
+    </Popup>
 
-    <TPopup v-model="importOpen" placement="bottom" :duration="160" destroy-on-close @visible-change="(visible) => { if (!visible) closeImport(); }">
+    <Popup v-model="importOpen" @visible-change="(visible) => { if (!visible) closeImport(); }">
       <div class="subscription-editor import-editor">
         <div class="editor-heading"><h3>从内容导入</h3><span>URI、Base64、YAML 或 JSON</span></div>
-        <TTextarea v-model="importText" placeholder="粘贴订阅内容" :maxlength="786432" :autosize="{ minRows: 6, maxRows: 12 }" />
+        <Textarea v-model="importText" variant="outline" placeholder="粘贴订阅内容" :maxlength="786432" :min-rows="6" :max-rows="12" />
         <div v-if="importPreview" class="import-preview"><strong>预览已生成</strong><span>接受 {{ importPreview.accepted ?? "--" }} · 跳过 {{ importPreview.skipped ?? "--" }} · 重复 {{ importPreview.duplicate ?? "--" }}</span></div>
-        <div class="editor-actions"><TButton variant="outline" :disabled="!importText.trim()" @click="previewImport">预览</TButton><TButton theme="primary" :disabled="!importPreview" @click="applyImport">确认导入</TButton></div>
+        <div class="editor-actions"><Button variant="outline" :disabled="!importText.trim()" @click="previewImport">预览</Button><Button variant="primary" :disabled="!importPreview" @click="applyImport">确认导入</Button></div>
       </div>
-    </TPopup>
+    </Popup>
 
-    <TPopup v-model="singleTargetOpen" placement="bottom" :duration="160" destroy-on-close>
+    <Popup v-model="singleTargetOpen">
       <div class="subscription-editor single-target-editor">
         <div class="editor-heading"><h3>选择单订阅</h3><span>合并模式中有多个活动来源，请明确保留一个</span></div>
-        <button v-for="item in items.filter((source) => source.active)" :key="item.id" type="button" class="single-target-row" @click="commitMode('single', item.id)"><strong>{{ item.name }}</strong><span>{{ presentation(item).summary }}</span></button>
-        <TButton variant="outline" :disabled="modePending" @click="singleTargetOpen = false">取消</TButton>
+        <Button v-for="item in items.filter((source) => source.active)" :key="item.id" class="single-target-row" variant="outline" :disabled="modePending" @click="commitMode('single', item.id)"><strong>{{ item.name }}</strong><span class="single-target-summary">{{ presentation(item).summary }}</span></Button>
+        <Button variant="outline" :disabled="modePending" @click="singleTargetOpen = false">取消</Button>
       </div>
-    </TPopup>
+    </Popup>
 
-    <ConfirmDialog :visible="Boolean(pendingDelete)" title="删除订阅源" :description="`确认删除“${pendingDelete?.name ?? ''}”？`" confirm-label="删除" @update:visible="(value) => { if (!value) pendingDelete = undefined; }" @confirm="pendingDelete && remove(pendingDelete)" />
+    <Dialog :model-value="Boolean(pendingDelete)" aria-label="删除订阅源" @update:model-value="(value) => { if (!value) pendingDelete = undefined; }">
+      <template #title>删除订阅源</template>
+      <p>确认删除“{{ pendingDelete?.name ?? '' }}”？</p>
+      <template #actions>
+        <Button variant="outline" @click="pendingDelete = undefined">取消</Button>
+        <Button variant="danger" @click="pendingDelete && remove(pendingDelete)">删除</Button>
+      </template>
+    </Dialog>
   </section>
 </template>
