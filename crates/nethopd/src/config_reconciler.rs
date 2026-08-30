@@ -214,6 +214,27 @@ impl ConfigRuntime {
         self.preview_prepared(prepared)
     }
 
+    /// Validate the managed TOML on disk without exposing or rewriting secrets.
+    pub fn check_disk(&self) -> Result<serde_json::Value, ConfigRuntimeError> {
+        let disk = self.store.load()?;
+        self.admit(&disk)?;
+        let observed_digest = self.observed_digest()?;
+        let schema_version = disk
+            .redacted_document()
+            .get("schema_version")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(serde_json::json!({
+            "valid": true,
+            "disk_config_digest": disk.digest(),
+            "observed_config_digest": observed_digest,
+            "active_config_digest": self.current.digest(),
+            "matches_active": disk.digest() == self.current.digest(),
+            "schema_version": schema_version,
+            "source_count": disk.effective().sources().len(),
+        }))
+    }
+
     pub fn preview_document(
         &self,
         document: &serde_json::Value,

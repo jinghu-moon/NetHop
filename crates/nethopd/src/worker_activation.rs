@@ -54,6 +54,47 @@ pub trait NetworkController {
     ) -> Result<(), ExecutionError>;
 }
 
+/// The narrow seam used by the warm/capture lifecycle. It deliberately owns
+/// only the TPROXY attachment; core process ownership remains in the runtime.
+pub trait CaptureController {
+    type Receipt;
+
+    fn prepare(&mut self, plan: &NetworkPlan) -> Result<(), ExecutionError>;
+    fn enable(&mut self, plan: &NetworkPlan) -> Result<Self::Receipt, ExecutionError>;
+    fn disable(
+        &mut self,
+        plan: &NetworkPlan,
+        receipt: &mut Self::Receipt,
+    ) -> Result<(), ExecutionError>;
+    fn verify(&mut self, plan: &NetworkPlan) -> Result<(), ExecutionError>;
+}
+
+impl<B: NetworkCommandBackend> CaptureController for NetworkExecutor<B> {
+    type Receipt = ApplyReceipt;
+
+    fn prepare(&mut self, plan: &NetworkPlan) -> Result<(), ExecutionError> {
+        let _ = plan;
+        Ok(())
+    }
+
+    fn enable(&mut self, plan: &NetworkPlan) -> Result<Self::Receipt, ExecutionError> {
+        NetworkExecutor::apply(self, plan)
+    }
+
+    fn disable(
+        &mut self,
+        plan: &NetworkPlan,
+        receipt: &mut Self::Receipt,
+    ) -> Result<(), ExecutionError> {
+        NetworkExecutor::rollback(self, plan, receipt)
+    }
+
+    fn verify(&mut self, plan: &NetworkPlan) -> Result<(), ExecutionError> {
+        let _ = plan;
+        Ok(())
+    }
+}
+
 impl<B: NetworkCommandBackend> NetworkController for NetworkExecutor<B> {
     type Receipt = ApplyReceipt;
 
@@ -435,7 +476,10 @@ pub(crate) enum RuntimeReloadHealthError {
 
 #[derive(Debug)]
 pub enum RuntimeAttachment<R> {
-    Tproxy { plan: NetworkPlan, receipt: R },
+    Tproxy {
+        plan: NetworkPlan,
+        receipt: Option<R>,
+    },
     Tun,
 }
 
@@ -512,6 +556,40 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
         &self.policy
     }
 
+    pub const fn capture_enabled(&self) -> bool {
+        match &self.attachment {
+            RuntimeAttachment::Tproxy { receipt, .. } => receipt.is_some(),
+            RuntimeAttachment::Tun => true,
+        }
+    }
+
+    pub fn disable_capture<N>(&mut self, network: &mut N) -> Result<(), ExecutionError>
+    where
+        N: NetworkController<Receipt = R>,
+    {
+        let RuntimeAttachment::Tproxy { plan, receipt } = &mut self.attachment else {
+            return Err(ExecutionError::InvalidBackend);
+        };
+        if let Some(current) = receipt.as_mut() {
+            network.rollback(plan, current)?;
+            *receipt = None;
+        }
+        Ok(())
+    }
+
+    pub fn enable_capture<N>(&mut self, network: &mut N) -> Result<(), ExecutionError>
+    where
+        N: NetworkController<Receipt = R>,
+    {
+        let RuntimeAttachment::Tproxy { plan, receipt } = &mut self.attachment else {
+            return Err(ExecutionError::InvalidBackend);
+        };
+        if receipt.is_none() {
+            *receipt = Some(network.apply(plan)?);
+        }
+        Ok(())
+    }
+
     pub fn process_identity(&self) -> ProcessIdentity {
         self.active.identity()
     }
@@ -570,6 +648,9 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
     {
         match &mut self.attachment {
             RuntimeAttachment::Tproxy { plan, receipt } => {
+                let Some(receipt) = receipt.as_mut() else {
+                    return Ok(());
+                };
                 network
                     .rollback(plan, receipt)
                     .map_err(|_| RuntimeReconcileError::WithdrawFailed)?;
@@ -588,7 +669,9 @@ impl<P: CandidateProcess, R> ActiveRuntime<P, R> {
         V: RuntimeHealthVerifier,
     {
         let network_failed = match &mut self.attachment {
-            RuntimeAttachment::Tproxy { plan, receipt } => network.rollback(plan, receipt).is_err(),
+            RuntimeAttachment::Tproxy { plan, receipt } => receipt
+                .as_mut()
+                .is_some_and(|receipt| network.rollback(plan, receipt).is_err()),
             RuntimeAttachment::Tun => false,
         };
         let core_failed = self.active.stop().is_err();
@@ -731,7 +814,10 @@ where
         }
         let mut attachment = match prepared {
             PreparedAttachment::Tproxy(plan) => match self.network.apply(&plan) {
-                Ok(receipt) => RuntimeAttachment::Tproxy { plan, receipt },
+                Ok(receipt) => RuntimeAttachment::Tproxy {
+                    plan,
+                    receipt: Some(receipt),
+                },
                 Err(error) => {
                     let cleanup_failed = process.stop().is_err()
                         || matches!(error, ExecutionError::ApplyRollbackFailed { .. });
@@ -748,9 +834,9 @@ where
                 .wait_healthy(&mut process, attachment.view(), &capabilities)
         {
             let network_failed = match &mut attachment {
-                RuntimeAttachment::Tproxy { plan, receipt } => {
-                    self.network.rollback(plan, receipt).is_err()
-                }
+                RuntimeAttachment::Tproxy { plan, receipt } => receipt
+                    .as_mut()
+                    .is_some_and(|receipt| self.network.rollback(plan, receipt).is_err()),
                 RuntimeAttachment::Tun => false,
             };
             let core_failed = process.stop().is_err();
@@ -932,7 +1018,10 @@ where
             PreparedAttachment::Tproxy(plan) => {
                 debug_assert_eq!(staged.generation(), plan.generation());
                 match self.network.apply(&plan) {
-                    Ok(receipt) => RuntimeAttachment::Tproxy { plan, receipt },
+                    Ok(receipt) => RuntimeAttachment::Tproxy {
+                        plan,
+                        receipt: Some(receipt),
+                    },
                     Err(error) => {
                         let core_cleanup_failed = self.core.abort_staged(staged);
                         return Err(self.fail_open(
@@ -952,9 +1041,9 @@ where
             &capabilities,
         ) {
             let network_cleanup_failed = match &mut attachment {
-                RuntimeAttachment::Tproxy { plan, receipt } => {
-                    self.network.rollback(plan, receipt).is_err()
-                }
+                RuntimeAttachment::Tproxy { plan, receipt } => receipt
+                    .as_mut()
+                    .is_some_and(|receipt| self.network.rollback(plan, receipt).is_err()),
                 RuntimeAttachment::Tun => false,
             };
             let core_cleanup_failed = self.core.abort_staged(staged);
@@ -972,9 +1061,9 @@ where
             Ok(active) => active,
             Err(staged) => {
                 let network_cleanup_failed = match &mut attachment {
-                    RuntimeAttachment::Tproxy { plan, receipt } => {
-                        self.network.rollback(plan, receipt).is_err()
-                    }
+                    RuntimeAttachment::Tproxy { plan, receipt } => receipt
+                        .as_mut()
+                        .is_some_and(|receipt| self.network.rollback(plan, receipt).is_err()),
                     RuntimeAttachment::Tun => false,
                 };
                 let core_cleanup_failed = self.core.abort_staged(staged);

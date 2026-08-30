@@ -165,6 +165,37 @@ fn protocol_version_is_frozen() {
 }
 
 #[test]
+fn lifecycle_commands_have_strict_generation_and_operation_contracts() {
+    let request = ControlRequest::new(request_id(), ControlMethod::CaptureEnable)
+        .with_params(ControlParams::lifecycle(
+            true,
+            Some(7),
+            Some("capture-op-1".into()),
+        ))
+        .unwrap();
+    assert_eq!(request.params().expected_generation(), Some(7));
+    assert_eq!(request.params().operation_id(), Some("capture-op-1"));
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert_eq!(encoded["method"], "capture.enable");
+    assert_eq!(encoded["params"]["expected_generation"], 7);
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::StatusGet)
+            .with_params(ControlParams::lifecycle(false, Some(7), None))
+            .is_err()
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::CaptureStatus)
+            .with_params(ControlParams::lifecycle(false, Some(0), None))
+            .is_err()
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::CoreStatus)
+            .with_params(ControlParams::lifecycle(false, None, Some("bad id".into())))
+            .is_err()
+    );
+}
+
+#[test]
 fn control_error_details_are_optional_and_bounded_by_the_outer_frame() {
     let legacy = ControlError::new(
         ErrorCode::new(ErrorDomain::Config, "CONFLICT").unwrap(),
@@ -540,6 +571,24 @@ fn manager_config_methods_require_bounded_cas_documents() {
 }
 
 #[test]
+fn config_check_is_a_read_only_empty_params_command() {
+    let request = ControlRequest::new(request_id(), ControlMethod::ConfigCheck);
+    assert_eq!(
+        FrameCodec::decode(&FrameCodec::encode(&WireFrame::Request(request.clone())).unwrap())
+            .unwrap(),
+        WireFrame::Request(request)
+    );
+    assert!(
+        ControlRequest::new(request_id(), ControlMethod::ConfigCheck)
+            .with_params(ControlParams::config_document(
+                "a".repeat(64),
+                json!({"schema_version": 3}),
+            ))
+            .is_err()
+    );
+}
+
+#[test]
 fn source_selection_mutation_is_typed_and_round_trips() {
     let request = ControlRequest::new(request_id(), ControlMethod::SubscriptionSelect)
         .with_params(ControlParams::subscription_select(
@@ -770,4 +819,28 @@ fn protocol_hello_requires_an_explicit_manager_version_range() {
             .with_params(ControlParams::hello("manager-alpha".into(), 1, 1))
             .is_err()
     );
+}
+
+#[test]
+fn subscription_diagnostic_methods_require_a_source_and_round_trip() {
+    let source = "src_0123456789abcdef0123456789abcdef".to_owned();
+    for method in [
+        ControlMethod::SubscriptionInspect,
+        ControlMethod::SubscriptionDiagnose,
+        ControlMethod::SubscriptionHistory,
+    ] {
+        let request = ControlRequest::new(request_id(), method)
+            .with_params(ControlParams::subscription_query(source.clone()))
+            .unwrap();
+        let encoded = FrameCodec::encode(&WireFrame::Request(request.clone())).unwrap();
+        assert_eq!(
+            FrameCodec::decode(&encoded).unwrap(),
+            WireFrame::Request(request)
+        );
+        assert!(
+            ControlRequest::new(request_id(), method)
+                .with_params(ControlParams::default())
+                .is_err()
+        );
+    }
 }

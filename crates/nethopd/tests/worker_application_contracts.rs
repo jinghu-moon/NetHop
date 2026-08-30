@@ -2341,6 +2341,14 @@ fn manager_read_contract_is_versioned_redacted_and_schema_driven() {
     assert_eq!(tun_stack["enum_values"], json!(["system", "gvisor"]));
     assert_eq!(tun_stack["apply_impact"], "generation_activation");
     assert_eq!(tun_stack["capability_key"], "capture.tun");
+    let max_candidates = fields
+        .iter()
+        .find(|field| field["field_id"] == "proxy.urltest.max_candidates")
+        .expect("missing max candidates schema field");
+    assert_eq!(
+        max_candidates["range"],
+        json!({"minimum": 1, "maximum": 64})
+    );
     for field in fields {
         for key in [
             "field_id",

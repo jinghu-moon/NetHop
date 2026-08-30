@@ -68,10 +68,32 @@ pub enum ControlMethod {
     ServiceStart,
     #[serde(rename = "service.stop")]
     ServiceStop,
+    #[serde(rename = "service.restart")]
+    ServiceRestart,
+    #[serde(rename = "capture.enable")]
+    CaptureEnable,
+    #[serde(rename = "capture.disable")]
+    CaptureDisable,
+    #[serde(rename = "capture.status")]
+    CaptureStatus,
+    #[serde(rename = "core.start")]
+    CoreStart,
+    #[serde(rename = "core.stop")]
+    CoreStop,
+    #[serde(rename = "core.status")]
+    CoreStatus,
+    #[serde(rename = "resource.status")]
+    ResourceStatus,
     #[serde(rename = "capability.probe")]
     CapabilityProbe,
     #[serde(rename = "subscription.update")]
     SubscriptionUpdate,
+    #[serde(rename = "subscription.inspect")]
+    SubscriptionInspect,
+    #[serde(rename = "subscription.diagnose")]
+    SubscriptionDiagnose,
+    #[serde(rename = "subscription.history")]
+    SubscriptionHistory,
     #[serde(rename = "subscription.import_preview")]
     SubscriptionImportPreview,
     #[serde(rename = "subscription.import_apply")]
@@ -98,6 +120,8 @@ pub enum ControlMethod {
     RuleSetUpdate,
     #[serde(rename = "config.validate")]
     ConfigValidate,
+    #[serde(rename = "config.check")]
+    ConfigCheck,
     #[serde(rename = "config.apply")]
     ConfigApply,
     #[serde(rename = "config.schema")]
@@ -1196,6 +1220,10 @@ pub struct ControlParams {
     node_override: Option<Box<NodeOverrideDocument>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     payload: Option<Box<WebUiPayloadParams>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
 }
 
 impl ControlParams {
@@ -1220,6 +1248,8 @@ impl ControlParams {
             enabled: None,
             node_override: None,
             payload: None,
+            expected_generation: None,
+            operation_id: None,
         }
     }
 
@@ -1320,6 +1350,13 @@ impl ControlParams {
         }
     }
 
+    pub fn subscription_query(source_id: String) -> Self {
+        Self {
+            source_id: Some(source_id),
+            ..Self::default()
+        }
+    }
+
     pub fn subscription_mode_set(
         expected_config_digest: String,
         mode: SubscriptionMode,
@@ -1402,6 +1439,19 @@ impl ControlParams {
                 chunk: None,
                 operation: None,
             })),
+            ..Self::default()
+        }
+    }
+
+    pub fn lifecycle(
+        wait: bool,
+        expected_generation: Option<u64>,
+        operation_id: Option<String>,
+    ) -> Self {
+        Self {
+            wait,
+            expected_generation,
+            operation_id,
             ..Self::default()
         }
     }
@@ -1490,6 +1540,14 @@ impl ControlParams {
             .as_deref()
             .and_then(|payload| payload.operation)
     }
+
+    pub const fn expected_generation(&self) -> Option<u64> {
+        self.expected_generation
+    }
+
+    pub fn operation_id(&self) -> Option<&str> {
+        self.operation_id.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1541,12 +1599,48 @@ impl ControlRequest {
             self.method,
             ControlMethod::ServiceStart
                 | ControlMethod::ServiceStop
+                | ControlMethod::ServiceRestart
+                | ControlMethod::CaptureEnable
+                | ControlMethod::CaptureDisable
+                | ControlMethod::CaptureStatus
+                | ControlMethod::CoreStart
+                | ControlMethod::CoreStop
+                | ControlMethod::CoreStatus
+                | ControlMethod::ResourceStatus
                 | ControlMethod::SubscriptionUpdate
                 | ControlMethod::RuleSetUpdate
                 | ControlMethod::ConfigReload
         );
         if (self.params.wait && !wait_allowed)
             || (self.params.if_needed && self.method != ControlMethod::SubscriptionUpdate)
+        {
+            return Err(ProtocolError::InvalidEnvelope);
+        }
+        let lifecycle_method = matches!(
+            self.method,
+            ControlMethod::CaptureEnable
+                | ControlMethod::CaptureDisable
+                | ControlMethod::CaptureStatus
+                | ControlMethod::CoreStart
+                | ControlMethod::CoreStop
+                | ControlMethod::CoreStatus
+                | ControlMethod::ResourceStatus
+        );
+        let mutating_lifecycle_method = matches!(
+            self.method,
+            ControlMethod::CaptureEnable
+                | ControlMethod::CaptureDisable
+                | ControlMethod::CoreStart
+                | ControlMethod::CoreStop
+        );
+        if (self.params.expected_generation.is_some() && !lifecycle_method)
+            || (self.params.operation_id.is_some() && !mutating_lifecycle_method)
+            || self.params.expected_generation == Some(0)
+            || self
+                .params
+                .operation_id
+                .as_deref()
+                .is_some_and(|id| !valid_operation_id(id))
         {
             return Err(ProtocolError::InvalidEnvelope);
         }
@@ -1612,6 +1706,9 @@ impl ControlRequest {
         let mode_method = self.method == ControlMethod::SubscriptionModeSet;
         let source_presence_valid = match self.method {
             ControlMethod::SubscriptionUpdate => true,
+            ControlMethod::SubscriptionInspect
+            | ControlMethod::SubscriptionDiagnose
+            | ControlMethod::SubscriptionHistory => self.params.source_id.is_some(),
             ControlMethod::SubscriptionSelect | ControlMethod::SubscriptionSetEnabled => {
                 self.params.source_id.is_some()
             }
@@ -1827,6 +1924,14 @@ impl ControlRequest {
         }
         Ok(())
     }
+}
+
+fn valid_operation_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn valid_payload_handle(value: &str) -> bool {

@@ -22,6 +22,7 @@ pub mod node_benchmark;
 pub mod node_override;
 pub mod operational_control;
 pub mod process;
+pub mod resource_policy;
 pub mod ruleset;
 pub mod ruleset_provider;
 #[cfg(feature = "subscription-update")]
@@ -120,6 +121,7 @@ pub use process::{
     CoreProcessLimits, CoreProcessRunner, ProcessDiagnosticCode, ProcessError, ProcessExitReport,
     ProcessIdentity, RunningCore, StopReport,
 };
+pub use resource_policy::IdlePolicyController;
 pub use ruleset::{
     PreparedRuleSet, PublishedRuleSet, RuleSetError, RuleSetLimits, RuleSetPreparation,
     RuleSetReplaceOutcome, RuleSetStore,
@@ -197,11 +199,11 @@ pub use webui_payload::{
     MAX_PAYLOAD_BYTES, MAX_PAYLOAD_CHUNK_BYTES, PAYLOAD_TTL, WebUiPayloadError, WebUiPayloadStore,
 };
 pub use worker_activation::{
-    ActiveRuntime, AndroidDataPlaneHealthProbe, CapabilitySource, CurrentGenerationActivator,
-    DataPlaneHealthError, DataPlaneHealthProbe, NetworkController, RuntimeAttachment,
-    RuntimeAttachmentView, RuntimeHealthVerifier, RuntimeStopError, TproxyDataPlaneHealthProbe,
-    WorkerActivationDiagnosticCode, WorkerActivationError, WorkerActivator, WorkerRecovery,
-    WorkerRecoveryError,
+    ActiveRuntime, AndroidDataPlaneHealthProbe, CapabilitySource, CaptureController,
+    CurrentGenerationActivator, DataPlaneHealthError, DataPlaneHealthProbe, NetworkController,
+    RuntimeAttachment, RuntimeAttachmentView, RuntimeHealthVerifier, RuntimeStopError,
+    TproxyDataPlaneHealthProbe, WorkerActivationDiagnosticCode, WorkerActivationError,
+    WorkerActivator, WorkerRecovery, WorkerRecoveryError,
 };
 #[cfg(feature = "subscription-update")]
 pub use worker_application::RuntimeReloadError;

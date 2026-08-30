@@ -1015,6 +1015,58 @@ where
             .map_err(|_| RuntimeUpdateError::Discard)
     }
 
+    fn diagnose_source(
+        &mut self,
+        source_id: &str,
+    ) -> Result<serde_json::Value, RuntimeUpdateError> {
+        let source_id = match SourceId::new(source_id) {
+            Ok(source_id) => source_id,
+            Err(_) => {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "stage": "validate",
+                    "diagnostic_code": "source_id_invalid",
+                    "message": "subscription source id is invalid",
+                }));
+            }
+        };
+        let prepared = match self.service.prepare_source(&self.config, &source_id) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "stage": "prepare",
+                    "diagnostic_code": error.code(),
+                    "message": error.to_string(),
+                }));
+            }
+        };
+        let report = match serde_json::to_value(&prepared.report) {
+            Ok(report) => report,
+            Err(_) => {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "stage": "report",
+                    "diagnostic_code": "report_serialize_failed",
+                    "message": "subscription diagnostic report could not be serialized",
+                }));
+            }
+        };
+        if let Err(error) = self.service.discard(prepared) {
+            return Ok(serde_json::json!({
+                "ok": false,
+                "stage": "discard",
+                "diagnostic_code": error.to_string(),
+                "message": "diagnostic candidate cleanup failed",
+            }));
+        }
+        Ok(serde_json::json!({
+            "ok": true,
+            "stage": "completed",
+            "report": report,
+        }))
+    }
+
     fn preview_import(
         &mut self,
         bytes: &[u8],

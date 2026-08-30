@@ -399,6 +399,14 @@ pub trait RuntimeUpdateSource {
     fn discard(&mut self, prepared: Self::Prepared) -> Result<(), RuntimeUpdateError>;
 
     #[cfg(feature = "subscription-update")]
+    fn diagnose_source(
+        &mut self,
+        _source_id: &str,
+    ) -> Result<serde_json::Value, RuntimeUpdateError> {
+        Err(RuntimeUpdateError::Prepare)
+    }
+
+    #[cfg(feature = "subscription-update")]
     fn preview_import(
         &mut self,
         _bytes: &[u8],
@@ -531,6 +539,17 @@ where
         if let Some(inner) = &mut self.inner {
             inner.replace_runtime_policy(capture, tun_stack, options);
         }
+    }
+
+    #[cfg(feature = "subscription-update")]
+    fn diagnose_source(
+        &mut self,
+        source_id: &str,
+    ) -> Result<serde_json::Value, RuntimeUpdateError> {
+        self.inner
+            .as_mut()
+            .ok_or(RuntimeUpdateError::Prepare)?
+            .diagnose_source(source_id)
     }
 
     fn prepare(&mut self) -> Result<Self::Prepared, RuntimeUpdateError> {
@@ -842,6 +861,15 @@ where
     core_version_status: Option<CoreVersionStatus>,
     last_notified_core_version: Option<CoreVersion>,
     private_dns_source: Option<Box<dyn PrivateDnsFactsSource>>,
+    lifecycle_timing: LifecycleTiming,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LifecycleTiming {
+    core_start_ms: u64,
+    capture_apply_ms: u64,
+    capture_rollback_ms: u64,
+    status_publish_ms: u64,
 }
 
 impl<S, N, V, C> WorkerApplication<S, N, V, C, UnavailableRuntimeUpdateSource>
@@ -960,6 +988,7 @@ where
             core_version_status: self.core_version_status,
             last_notified_core_version: self.last_notified_core_version,
             private_dns_source: self.private_dns_source,
+            lifecycle_timing: self.lifecycle_timing,
         }
     }
 }
@@ -1073,6 +1102,7 @@ where
             core_version_status: None,
             last_notified_core_version: None,
             private_dns_source: None,
+            lifecycle_timing: LifecycleTiming::default(),
         }
     }
 
@@ -1753,12 +1783,14 @@ where
         if self.runtime.is_some() {
             return;
         }
+        let started_at = std::time::Instant::now();
         self.restart_at = None;
         match self
             .recovery
             .recover(&mut self.network, &self.policy, self.slot)
         {
             Ok(Some(active)) => {
+                self.lifecycle_timing.core_start_ms = started_at.elapsed().as_millis() as u64;
                 let generation = active.generation();
                 let state = active.state();
                 self.restart_budget.clear();
@@ -1767,18 +1799,35 @@ where
                 self.replay_selector();
             }
             Ok(None) => {
+                self.lifecycle_timing.core_start_ms = started_at.elapsed().as_millis() as u64;
                 self.publish_snapshot(RuntimeState::FailOpenDirect, None);
             }
-            Err(_) => match self.restart_budget.register_failure(now) {
-                RestartDecision::RetryAfter(after) => {
-                    self.restart_at = Some(now.saturating_add(after));
-                    self.publish_snapshot(RuntimeState::Backoff, None);
+            Err(_) => {
+                self.lifecycle_timing.core_start_ms = started_at.elapsed().as_millis() as u64;
+                match self.restart_budget.register_failure(now) {
+                    RestartDecision::RetryAfter(after) => {
+                        self.restart_at = Some(now.saturating_add(after));
+                        self.publish_snapshot(RuntimeState::Backoff, None);
+                    }
+                    RestartDecision::CircuitOpen => {
+                        self.publish_snapshot(RuntimeState::CircuitOpen, None);
+                    }
                 }
-                RestartDecision::CircuitOpen => {
-                    self.publish_snapshot(RuntimeState::CircuitOpen, None);
-                }
-            },
+            }
         }
+    }
+
+    /*
+     * The timing fields are intentionally kept in the daemon. The UI only
+     * renders them and never infers lifecycle cost from animation duration.
+     */
+    fn lifecycle_timing_json(&self) -> serde_json::Value {
+        json!({
+            "core_start_ms": self.lifecycle_timing.core_start_ms,
+            "capture_apply_ms": self.lifecycle_timing.capture_apply_ms,
+            "capture_rollback_ms": self.lifecycle_timing.capture_rollback_ms,
+            "status_publish_ms": self.lifecycle_timing.status_publish_ms,
+        })
     }
 
     fn stop(&mut self) -> Result<(), WorkerServiceError> {
@@ -3107,6 +3156,18 @@ where
     U: RuntimeUpdateSource,
 {
     fn handle(&mut self, request: ControlRequest) -> ControlResponse {
+        if matches!(
+            request.method(),
+            ControlMethod::CaptureEnable
+                | ControlMethod::CaptureDisable
+                | ControlMethod::CaptureStatus
+                | ControlMethod::CoreStart
+                | ControlMethod::CoreStop
+                | ControlMethod::CoreStatus
+                | ControlMethod::ResourceStatus
+        ) {
+            return self.handle_lifecycle_request(request);
+        }
         if request.method() == ControlMethod::NodeTestAll {
             return self
                 .start_node_benchmark(request.request_id().clone(), BenchmarkTrigger::Manual);
@@ -3343,7 +3404,10 @@ where
                 },
                 OperationalControl::status_document,
             );
-            let capture_active = captures_traffic(snapshot.state);
+            let capture_active = self
+                .runtime
+                .as_ref()
+                .map_or(false, WorkerRuntime::capture_enabled);
             let process_health = match snapshot.state {
                 RuntimeState::RunningTproxy | RuntimeState::RunningTun => "healthy",
                 RuntimeState::Degraded => "degraded",
@@ -3352,14 +3416,18 @@ where
                 }
                 _ => "stopped",
             };
-            let dns_guard = match snapshot.state {
-                RuntimeState::RunningTproxy => "verified",
-                RuntimeState::Degraded
-                    if self.policy.mode() == nethop_core::CaptureMode::Tproxy =>
-                {
-                    "degraded"
+            let dns_guard = if !capture_active {
+                "inactive"
+            } else {
+                match snapshot.state {
+                    RuntimeState::RunningTproxy => "verified",
+                    RuntimeState::Degraded
+                        if self.policy.mode() == nethop_core::CaptureMode::Tproxy =>
+                    {
+                        "degraded"
+                    }
+                    _ => "inactive",
                 }
-                _ => "inactive",
             };
             let mut capture = crate::operational_control::capture_document(&self.policy);
             if let Some(object) = capture.as_object_mut() {
@@ -3408,6 +3476,7 @@ where
                     "rule_set": rule_set,
                     "dns_split": dns_split,
                     "capture": capture,
+                    "lifecycle": self.lifecycle_status("status"),
                     "operational": operational,
                 }),
             );
@@ -3685,7 +3754,7 @@ where
                         request_id,
                         generation,
                         json!({
-                            "manager_version": request.params().manager_version(),
+                                "manager_version": request.params().manager_version(),
                             "compatible": compatible,
                             "daemon_protocol_min": PROTOCOL_VERSION,
                             "daemon_protocol_max": PROTOCOL_VERSION,
@@ -3693,7 +3762,8 @@ where
                             "daemon_schema_max": crate::worker_config::CONFIG_SCHEMA_VERSION,
                             "active_schema_version": crate::worker_config::CONFIG_SCHEMA_VERSION,
                             "supported_operations": [
-                                "config.get", "config.export", "config.validate", "config.apply", "config.reload",
+                                "config.get", "config.export", "config.check", "config.validate", "config.apply", "config.reload", "service.restart",
+                                "subscription.inspect", "subscription.diagnose", "subscription.history",
                                 "core.version_check",
                                 "config.schema", "capability.get", "config.mutate", "events.subscribe",
                                 "subscription.import_preview", "subscription.import_apply",
@@ -3713,6 +3783,58 @@ where
                                 , "node_territory_metadata_v1", "typed_active_terminal_v2"
                                 , "node_benchmark_fast_selection_v1"
                             ]
+                        }),
+                    );
+                }
+                ControlMethod::SubscriptionInspect
+                | ControlMethod::SubscriptionDiagnose
+                | ControlMethod::SubscriptionHistory => {
+                    let source_id = request.params().source_id().expect("validated source id");
+                    if request.method() == ControlMethod::SubscriptionDiagnose {
+                        return match self.updater.diagnose_source(source_id) {
+                            Ok(report) => ControlResponse::success(
+                                request_id,
+                                generation,
+                                json!({
+                                    "source_id": source_id,
+                                    "diagnostic": report,
+                                    "active_generation_unchanged": true,
+                                }),
+                            ),
+                            Err(error) => ControlResponse::failure(
+                                request_id,
+                                generation,
+                                unavailable_control_error_with_details(
+                                    ErrorDomain::Subscription,
+                                    "DIAGNOSE-FAILED",
+                                    json!({
+                                        "stage": "runtime",
+                                        "diagnostic_code": format!("{error:?}"),
+                                        "active_generation_unchanged": true,
+                                    }),
+                                ),
+                            ),
+                        };
+                    }
+                    let statuses = self
+                        .source_status
+                        .as_ref()
+                        .and_then(|store| store.statuses([source_id]).ok())
+                        .unwrap_or_default();
+                    let history = self
+                        .source_status
+                        .as_ref()
+                        .and_then(|store| store.history([source_id], 64).ok())
+                        .unwrap_or_default();
+                    let status = statuses.into_iter().next();
+                    return ControlResponse::success(
+                        request_id,
+                        generation,
+                        json!({
+                            "source_id": source_id,
+                            "status": status,
+                            "history": if request.method() == ControlMethod::SubscriptionHistory { json!(history) } else { json!([]) },
+                            "diagnostic": null,
                         }),
                     );
                 }
@@ -3769,6 +3891,16 @@ where
                             "source_history": source_history,
                         }),
                     );
+                }
+                ControlMethod::ConfigCheck => {
+                    return match config.check_disk() {
+                        Ok(result) => ControlResponse::success(request_id, generation, result),
+                        Err(error) => ControlResponse::failure(
+                            request_id,
+                            generation,
+                            config_control_error(Some(config), &error),
+                        ),
+                    };
                 }
                 ControlMethod::ConfigExport => {
                     return ControlResponse::success(
@@ -3886,6 +4018,27 @@ where
                     )
                 };
             }
+        }
+        #[cfg(feature = "subscription-update")]
+        if self.config.is_some() && request.method() == ControlMethod::ServiceRestart {
+            let request_id = request.request_id().clone();
+            self.control.queue_command(ControlCommand::Stop);
+            self.control.queue_command(ControlCommand::Start);
+            let completed =
+                !request.params().wait() || self.handle_commands(self.clock.now()).is_ok();
+            return if completed {
+                ControlResponse::success(
+                    request_id,
+                    self.snapshot().generation.map(GenerationId::get),
+                    json!({"accepted": true, "restart": true, "completed": request.params().wait()}),
+                )
+            } else {
+                ControlResponse::failure(
+                    request_id,
+                    self.snapshot().generation.map(GenerationId::get),
+                    unavailable_control_error(ErrorDomain::Core, "RESTART-FAILED"),
+                )
+            };
         }
         #[cfg(feature = "subscription-update")]
         if self.config.is_some()
@@ -4367,6 +4520,174 @@ where
                 )
             })
             .and_then(Result::ok)
+    }
+}
+
+impl<S, N, V, C, U> WorkerApplication<S, N, V, C, U>
+where
+    N: NetworkController,
+    S: RuntimeRecoverySource<N>,
+    S::Process: CandidateProcess,
+    V: RuntimeHealthVerifier,
+    C: WorkerClock,
+    U: RuntimeUpdateSource,
+{
+    fn handle_lifecycle_request(&mut self, request: ControlRequest) -> ControlResponse {
+        let request_id = request.request_id().clone();
+        let generation = self.snapshot().generation.map(GenerationId::get);
+        match request.method() {
+            ControlMethod::CaptureStatus => {
+                ControlResponse::success(request_id, generation, self.lifecycle_status("capture"))
+            }
+            ControlMethod::CoreStatus => {
+                ControlResponse::success(request_id, generation, self.lifecycle_status("core"))
+            }
+            ControlMethod::ResourceStatus => {
+                ControlResponse::success(request_id, generation, self.lifecycle_status("resource"))
+            }
+            ControlMethod::CaptureEnable => {
+                if self.runtime.is_none() {
+                    let now = self.clock.now();
+                    self.control.queue_command(ControlCommand::Start);
+                    if request.params().wait() {
+                        let _ = self.handle_commands(now);
+                        self.handle_start(now);
+                    } else {
+                        return ControlResponse::success(
+                            request_id,
+                            generation,
+                            json!({"accepted": true, "completed": false, "core_start_required": true}),
+                        );
+                    }
+                }
+                let Some(runtime) = self.runtime.as_mut() else {
+                    return ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Core, "CORE-START-FAILED"),
+                    );
+                };
+                if runtime.state() == RuntimeState::RunningTun {
+                    return ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(
+                            ErrorDomain::Network,
+                            "CAPTURE-HOT-SWITCH-UNSUPPORTED-TUN",
+                        ),
+                    );
+                }
+                let started_at = std::time::Instant::now();
+                match runtime.enable_capture(&mut self.network) {
+                    Ok(()) => {
+                        self.lifecycle_timing.capture_apply_ms =
+                            started_at.elapsed().as_millis() as u64;
+                        ControlResponse::success(
+                            request_id,
+                            generation,
+                            self.lifecycle_status("capture"),
+                        )
+                    }
+                    Err(_) => ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Network, "CAPTURE-ENABLE-FAILED"),
+                    ),
+                }
+            }
+            ControlMethod::CaptureDisable => {
+                let Some(runtime) = self.runtime.as_mut() else {
+                    return ControlResponse::success(
+                        request_id,
+                        generation,
+                        self.lifecycle_status("capture"),
+                    );
+                };
+                if runtime.state() == RuntimeState::RunningTun {
+                    return ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(
+                            ErrorDomain::Network,
+                            "CAPTURE-HOT-SWITCH-UNSUPPORTED-TUN",
+                        ),
+                    );
+                }
+                let started_at = std::time::Instant::now();
+                match runtime.disable_capture(&mut self.network) {
+                    Ok(()) => {
+                        self.lifecycle_timing.capture_rollback_ms =
+                            started_at.elapsed().as_millis() as u64;
+                        ControlResponse::success(
+                            request_id,
+                            generation,
+                            self.lifecycle_status("capture"),
+                        )
+                    }
+                    Err(_) => ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Network, "CAPTURE-DISABLE-FAILED"),
+                    ),
+                }
+            }
+            ControlMethod::CoreStart => {
+                self.control.queue_command(ControlCommand::Start);
+                let now = self.clock.now();
+                let completed = if request.params().wait() {
+                    let _ = self.handle_commands(now);
+                    self.handle_start(now);
+                    self.runtime.is_some()
+                } else {
+                    self.handle_commands(now).is_ok()
+                };
+                if completed {
+                    ControlResponse::success(request_id, generation, self.lifecycle_status("core"))
+                } else {
+                    ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Core, "CORE-START-FAILED"),
+                    )
+                }
+            }
+            ControlMethod::CoreStop => {
+                let completed = self.stop().is_ok();
+                if completed {
+                    ControlResponse::success(
+                        request_id,
+                        self.snapshot().generation.map(GenerationId::get),
+                        self.lifecycle_status("core"),
+                    )
+                } else {
+                    ControlResponse::failure(
+                        request_id,
+                        generation,
+                        unavailable_control_error(ErrorDomain::Core, "CORE-STOP-FAILED"),
+                    )
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn lifecycle_status(&self, subject: &str) -> serde_json::Value {
+        let runtime = self.runtime.as_ref();
+        let core_state = if runtime.is_some() {
+            "ready"
+        } else {
+            "stopped"
+        };
+        let capture_state = match runtime {
+            Some(runtime) if runtime.capture_enabled() => "enabled",
+            Some(_) | None => "disabled",
+        };
+        let resource_state = match (core_state, capture_state) {
+            ("ready", "enabled") => "active",
+            ("ready", "disabled") => "warm",
+            _ => "cold",
+        };
+        json!({"subject": subject, "core_state": core_state, "capture_state": capture_state, "resource_state": resource_state, "generation": self.snapshot().generation.map(GenerationId::get), "completed": true, "timing": self.lifecycle_timing_json()})
     }
 }
 
@@ -4880,7 +5201,7 @@ fn config_schema_document() -> serde_json::Value {
             "normal",
             2,
             1,
-            256,
+            64,
         ),
         enum_schema_field(
             "applications.mode",

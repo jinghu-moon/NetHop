@@ -85,6 +85,8 @@ pub enum WorkerRuntimeError {
     NonMonotonicTime,
     #[error("worker runtime has no active generation")]
     NotRunning,
+    #[error("capture operation failed")]
+    CaptureOperationFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +220,34 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
 
     pub fn process_identity(&self) -> Option<crate::ProcessIdentity> {
         self.active.as_ref().map(ActiveRuntime::process_identity)
+    }
+
+    pub fn capture_enabled(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(ActiveRuntime::capture_enabled)
+    }
+
+    pub fn enable_capture<N>(&mut self, network: &mut N) -> Result<(), WorkerRuntimeError>
+    where
+        N: NetworkController<Receipt = R>,
+    {
+        self.active
+            .as_mut()
+            .ok_or(WorkerRuntimeError::NotRunning)?
+            .enable_capture(network)
+            .map_err(|_| WorkerRuntimeError::CaptureOperationFailed)
+    }
+
+    pub fn disable_capture<N>(&mut self, network: &mut N) -> Result<(), WorkerRuntimeError>
+    where
+        N: NetworkController<Receipt = R>,
+    {
+        self.active
+            .as_mut()
+            .ok_or(WorkerRuntimeError::NotRunning)?
+            .disable_capture(network)
+            .map_err(|_| WorkerRuntimeError::CaptureOperationFailed)
     }
 
     #[cfg(feature = "subscription-update")]

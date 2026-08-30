@@ -19,7 +19,11 @@ pub const fn control_timeout(command: CliCommand, wait: bool) -> Duration {
         Duration::from_secs(6)
     } else if matches!(
         command,
-        CliCommand::NetworkSet
+        CliCommand::CaptureEnable
+            | CliCommand::CaptureDisable
+            | CliCommand::CoreStart
+            | CliCommand::CoreStop
+            | CliCommand::NetworkSet
             | CliCommand::SubscriptionEnable
             | CliCommand::SubscriptionDisable
             | CliCommand::SubscriptionModeSetSingle
@@ -38,9 +42,20 @@ pub enum CliCommand {
     Status,
     Start,
     Stop,
+    ServiceCheck,
+    ServiceRestart,
+    ServiceReload,
+    CaptureEnable,
+    CaptureDisable,
+    CaptureStatus,
+    CoreStart,
+    CoreStop,
+    CoreStatus,
+    ResourceStatus,
     Probe,
     Update,
     ConfigReload,
+    ConfigCheck,
     ProtocolHello,
     ConfigGet,
     ConfigValidate,
@@ -53,19 +68,34 @@ pub enum CliCommand {
     NodeTest,
     NodeTestAll,
     NodeSelection,
+    NodeCurrent,
+    NodeShow,
+    NodeOverrideApply,
     NodeSelectAuto,
     NodeSelectManual,
+    NodeUseAuto,
+    NodeUseManual,
+    NodeDelay,
+    NodeImport,
+    NodeEdit,
     NodeRemove,
     NodeExport,
     NodeOverrideGet,
     NodeOverrideRemove,
     ConnectionsGet,
+    ConnectionShow,
     ConnectionClose,
     ConnectionsCloseAll,
     LogsGet,
     LogsTail,
     LogsClear,
     SubscriptionList,
+    SubscriptionShow,
+    SubscriptionInspect,
+    SubscriptionDiagnose,
+    SubscriptionHistory,
+    SubscriptionUpdateAll,
+    SubscriptionEdit,
     SubscriptionMode,
     SubscriptionModeSetSingle,
     SubscriptionModeSetMerge,
@@ -82,21 +112,35 @@ pub enum CliCommand {
     ApplicationAddUid,
     ApplicationRemoveUid,
     ApplicationList,
+    ApplicationUsers,
+    ApplicationPolicySet,
     ApplicationMode,
     NetworkSet,
+    NetworkStatus,
+    NetworkEvaluate,
+    WifiStatus,
+    HotspotStatus,
+    CaptureCheck,
     DiagnosticsBundle,
+    LogsExport,
+    SupportBundle,
     TopologyGet,
     TrafficGet,
+    TrafficLive,
     MetricsGet,
     BackupExport,
     BackupRestore,
     CoreVersionCheck,
     RuleSetStatus,
+    RuleSetList,
+    RuleSetShow,
     RuleSetUpdate,
     WebUiPayloadCreate,
     WebUiPayloadAppend,
     WebUiPayloadCommit,
     WebUiPayloadRemove,
+    Help,
+    Version,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +159,7 @@ pub struct CliInvocation {
     log_channel: Option<LogChannel>,
     before: Option<String>,
     positional: Vec<String>,
+    android_user_id: Option<u32>,
     candidate_digest: Option<String>,
     input_file: Option<String>,
     text_input: bool,
@@ -152,6 +197,10 @@ impl CliInvocation {
 
     pub fn source_id(&self) -> Option<&str> {
         self.source_id.as_deref()
+    }
+
+    pub const fn android_user_id(&self) -> Option<u32> {
+        self.android_user_id
     }
 
     pub const fn human(&self) -> bool {
@@ -275,9 +324,20 @@ impl CliCommand {
             Self::Status => ControlMethod::StatusGet,
             Self::Start => ControlMethod::ServiceStart,
             Self::Stop => ControlMethod::ServiceStop,
+            Self::ServiceCheck => ControlMethod::StatusGet,
+            Self::ServiceRestart => ControlMethod::ServiceRestart,
+            Self::ServiceReload => ControlMethod::ConfigReload,
+            Self::CaptureEnable => ControlMethod::CaptureEnable,
+            Self::CaptureDisable => ControlMethod::CaptureDisable,
+            Self::CaptureStatus => ControlMethod::CaptureStatus,
+            Self::CoreStart => ControlMethod::CoreStart,
+            Self::CoreStop => ControlMethod::CoreStop,
+            Self::CoreStatus => ControlMethod::CoreStatus,
+            Self::ResourceStatus => ControlMethod::ResourceStatus,
             Self::Probe => ControlMethod::CapabilityProbe,
             Self::Update => ControlMethod::SubscriptionUpdate,
             Self::ConfigReload => ControlMethod::ConfigReload,
+            Self::ConfigCheck => ControlMethod::ConfigCheck,
             Self::ProtocolHello => ControlMethod::ProtocolHello,
             Self::ConfigGet => ControlMethod::ConfigGet,
             Self::ConfigValidate => ControlMethod::ConfigValidate,
@@ -290,25 +350,42 @@ impl CliCommand {
             Self::NodeTest => ControlMethod::NodeTest,
             Self::NodeTestAll => ControlMethod::NodeTestAll,
             Self::NodeSelection => ControlMethod::NodeSelectionGet,
+            Self::NodeCurrent => ControlMethod::NodeSelectionGet,
+            Self::NodeShow => ControlMethod::NodeList,
             Self::NodeSelectAuto => ControlMethod::NodeSelectAuto,
             Self::NodeSelectManual => ControlMethod::NodeSelectManual,
+            Self::NodeUseAuto => ControlMethod::NodeSelectAuto,
+            Self::NodeUseManual => ControlMethod::NodeSelectManual,
+            Self::NodeDelay => ControlMethod::NodeTest,
+            Self::NodeImport => ControlMethod::SubscriptionImportPreview,
+            Self::NodeEdit => ControlMethod::ConfigMutate,
             Self::NodeExport => ControlMethod::NodeExport,
             Self::NodeOverrideGet => ControlMethod::NodeOverrideGet,
+            Self::NodeOverrideApply => ControlMethod::NodeOverrideApply,
             Self::NodeOverrideRemove => ControlMethod::NodeOverrideRemove,
             Self::NodeRemove => ControlMethod::ConfigMutate,
             Self::ConnectionsGet => ControlMethod::ConnectionsGet,
+            Self::ConnectionShow => ControlMethod::ConnectionsGet,
             Self::ConnectionClose => ControlMethod::ConnectionClose,
             Self::ConnectionsCloseAll => ControlMethod::ConnectionsCloseAll,
             Self::LogsGet => ControlMethod::LogsGet,
             Self::LogsTail => ControlMethod::EventsSubscribe,
             Self::LogsClear => ControlMethod::LogsClear,
             Self::SubscriptionList => ControlMethod::ConfigGet,
+            Self::SubscriptionShow => ControlMethod::SubscriptionInspect,
+            Self::SubscriptionInspect => ControlMethod::SubscriptionInspect,
+            Self::SubscriptionDiagnose => ControlMethod::SubscriptionDiagnose,
+            Self::SubscriptionHistory => ControlMethod::SubscriptionHistory,
+            Self::SubscriptionUpdateAll => ControlMethod::SubscriptionUpdate,
+            Self::SubscriptionEdit => ControlMethod::ConfigMutate,
             Self::SubscriptionMode => ControlMethod::SubscriptionModeGet,
             Self::SubscriptionModeSetSingle | Self::SubscriptionModeSetMerge => {
                 ControlMethod::SubscriptionModeSet
             }
             Self::SubscriptionSelect => ControlMethod::SubscriptionSelect,
             Self::ApplicationList => ControlMethod::ConfigGet,
+            Self::ApplicationUsers => ControlMethod::ConfigGet,
+            Self::ApplicationPolicySet => ControlMethod::ConfigMutate,
             Self::SubscriptionImportPreview => ControlMethod::SubscriptionImportPreview,
             Self::SubscriptionImportApply => ControlMethod::SubscriptionImportApply,
             Self::SubscriptionAdd
@@ -320,22 +397,31 @@ impl CliCommand {
             | Self::ApplicationRemoveUid
             | Self::ApplicationMode
             | Self::NetworkSet => ControlMethod::ConfigMutate,
+            Self::NetworkStatus
+            | Self::NetworkEvaluate
+            | Self::WifiStatus
+            | Self::HotspotStatus => ControlMethod::TopologyGet,
+            Self::CaptureCheck => ControlMethod::CapabilityProbe,
             Self::SubscriptionEnable | Self::SubscriptionDisable => {
                 ControlMethod::SubscriptionSetEnabled
             }
             Self::DiagnosticsBundle => ControlMethod::DiagnosticsBundle,
+            Self::LogsExport | Self::SupportBundle => ControlMethod::DiagnosticsBundle,
             Self::TopologyGet => ControlMethod::TopologyGet,
             Self::TrafficGet => ControlMethod::TrafficGet,
+            Self::TrafficLive => ControlMethod::EventsSubscribe,
             Self::MetricsGet => ControlMethod::MetricsGet,
             Self::BackupExport => ControlMethod::ConfigExport,
             Self::BackupRestore => ControlMethod::ConfigApply,
             Self::CoreVersionCheck => ControlMethod::CoreVersionCheck,
             Self::RuleSetStatus => ControlMethod::RuleSetStatus,
+            Self::RuleSetList | Self::RuleSetShow => ControlMethod::RuleSetStatus,
             Self::RuleSetUpdate => ControlMethod::RuleSetUpdate,
             Self::WebUiPayloadCreate => ControlMethod::WebUiPayloadCreate,
             Self::WebUiPayloadAppend => ControlMethod::WebUiPayloadAppend,
             Self::WebUiPayloadCommit => ControlMethod::WebUiPayloadCommit,
             Self::WebUiPayloadRemove => ControlMethod::WebUiPayloadRemove,
+            Self::Help | Self::Version => ControlMethod::StatusGet,
         }
     }
 }
@@ -350,10 +436,34 @@ where
         Some("status") => CliCommand::Status,
         Some("start") => CliCommand::Start,
         Some("stop") => CliCommand::Stop,
+        Some("service") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            Some("check") | Some("status") => CliCommand::ServiceCheck,
+            Some("restart") => CliCommand::ServiceRestart,
+            Some("reload") => CliCommand::ServiceReload,
+            _ => return Err(CliError::Usage),
+        },
+        Some("capture") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            Some("enable") => CliCommand::CaptureEnable,
+            Some("disable") => CliCommand::CaptureDisable,
+            Some("status") => CliCommand::CaptureStatus,
+            Some("check") => CliCommand::CaptureCheck,
+            _ => return Err(CliError::Usage),
+        },
+        Some("core") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            Some("start") => CliCommand::CoreStart,
+            Some("stop") => CliCommand::CoreStop,
+            Some("status") => CliCommand::CoreStatus,
+            Some("version-check") => CliCommand::CoreVersionCheck,
+            _ => return Err(CliError::Usage),
+        },
+        Some("resource") if arguments.next().as_ref().map(AsRef::as_ref) == Some("status") => {
+            CliCommand::ResourceStatus
+        }
         Some("probe") => CliCommand::Probe,
         Some("update") => CliCommand::Update,
         Some("config") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("reload") => CliCommand::ConfigReload,
+            Some("check") => CliCommand::ConfigCheck,
             Some("get") => CliCommand::ConfigGet,
             Some("validate") => CliCommand::ConfigValidate,
             Some("apply") => CliCommand::ConfigApply,
@@ -368,6 +478,8 @@ where
         Some("events") => CliCommand::Events,
         Some("node") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("list") => CliCommand::NodeList,
+            Some("current") => CliCommand::NodeCurrent,
+            Some("show") => CliCommand::NodeShow,
             Some("test") => CliCommand::NodeTest,
             Some("test-all") => CliCommand::NodeTestAll,
             Some("selection") => CliCommand::NodeSelection,
@@ -376,10 +488,19 @@ where
                 Some("manual") => CliCommand::NodeSelectManual,
                 _ => return Err(CliError::Usage),
             },
+            Some("use") => match arguments.next().as_ref().map(AsRef::as_ref) {
+                Some("auto") => CliCommand::NodeUseAuto,
+                Some("manual") => CliCommand::NodeUseManual,
+                _ => return Err(CliError::Usage),
+            },
+            Some("delay") => CliCommand::NodeDelay,
+            Some("import") => CliCommand::NodeImport,
+            Some("edit") => CliCommand::NodeEdit,
             Some("remove") => CliCommand::NodeRemove,
             Some("export") => CliCommand::NodeExport,
             Some("override") => match arguments.next().as_ref().map(AsRef::as_ref) {
                 Some("get") => CliCommand::NodeOverrideGet,
+                Some("apply") => CliCommand::NodeOverrideApply,
                 Some("remove") => CliCommand::NodeOverrideRemove,
                 _ => return Err(CliError::Usage),
             },
@@ -390,23 +511,27 @@ where
             Some("close-all") => CliCommand::ConnectionsCloseAll,
             _ => return Err(CliError::Usage),
         },
-        Some("connection") if arguments.next().as_ref().map(AsRef::as_ref) == Some("close") => {
-            CliCommand::ConnectionClose
-        }
+        Some("connection") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            Some("close") => CliCommand::ConnectionClose,
+            Some("show") => CliCommand::ConnectionShow,
+            _ => return Err(CliError::Usage),
+        },
         Some("diagnose") => CliCommand::DiagnosticsBundle,
         Some("topology") => CliCommand::TopologyGet,
-        Some("traffic") => CliCommand::TrafficGet,
+        Some("traffic") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            None => CliCommand::TrafficGet,
+            Some("live") => CliCommand::TrafficLive,
+            _ => return Err(CliError::Usage),
+        },
         Some("metrics") => CliCommand::MetricsGet,
         Some("backup") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("export") => CliCommand::BackupExport,
             Some("restore") => CliCommand::BackupRestore,
             _ => return Err(CliError::Usage),
         },
-        Some("core") if arguments.next().as_ref().map(AsRef::as_ref) == Some("version-check") => {
-            CliCommand::CoreVersionCheck
-        }
         Some("ruleset") => match arguments.next().as_ref().map(AsRef::as_ref) {
-            Some("status") => CliCommand::RuleSetStatus,
+            Some("status") | Some("list") => CliCommand::RuleSetStatus,
+            Some("show") => CliCommand::RuleSetShow,
             Some("update") => CliCommand::RuleSetUpdate,
             _ => return Err(CliError::Usage),
         },
@@ -429,10 +554,17 @@ where
             Some("get") => CliCommand::LogsGet,
             Some("tail") => CliCommand::LogsTail,
             Some("clear") => CliCommand::LogsClear,
+            Some("export") => CliCommand::LogsExport,
             _ => return Err(CliError::Usage),
         },
         Some("subscription") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("list") => CliCommand::SubscriptionList,
+            Some("show") => CliCommand::SubscriptionShow,
+            Some("inspect") => CliCommand::SubscriptionInspect,
+            Some("diagnose") => CliCommand::SubscriptionDiagnose,
+            Some("history") => CliCommand::SubscriptionHistory,
+            Some("update-all") => CliCommand::SubscriptionUpdateAll,
+            Some("edit") => CliCommand::SubscriptionEdit,
             Some("mode") => match arguments.next().as_ref().map(AsRef::as_ref) {
                 None => CliCommand::SubscriptionMode,
                 Some("set") => match arguments.next().as_ref().map(AsRef::as_ref) {
@@ -458,6 +590,10 @@ where
         },
         Some("application") => match arguments.next().as_ref().map(AsRef::as_ref) {
             Some("list") => CliCommand::ApplicationList,
+            Some("users") => CliCommand::ApplicationUsers,
+            Some("policy") if arguments.next().as_ref().map(AsRef::as_ref) == Some("set") => {
+                CliCommand::ApplicationPolicySet
+            }
             Some("mode") => CliCommand::ApplicationMode,
             Some("add-package") => CliCommand::ApplicationAddPackage,
             Some("remove-package") => CliCommand::ApplicationRemovePackage,
@@ -465,9 +601,23 @@ where
             Some("remove-uid") => CliCommand::ApplicationRemoveUid,
             _ => return Err(CliError::Usage),
         },
-        Some("network") if arguments.next().as_ref().map(AsRef::as_ref) == Some("set") => {
-            CliCommand::NetworkSet
+        Some("network") => match arguments.next().as_ref().map(AsRef::as_ref) {
+            Some("set") => CliCommand::NetworkSet,
+            Some("status") => CliCommand::NetworkStatus,
+            Some("evaluate") => CliCommand::NetworkEvaluate,
+            _ => return Err(CliError::Usage),
+        },
+        Some("wifi") if arguments.next().as_ref().map(AsRef::as_ref) == Some("status") => {
+            CliCommand::WifiStatus
         }
+        Some("hotspot") if arguments.next().as_ref().map(AsRef::as_ref) == Some("status") => {
+            CliCommand::HotspotStatus
+        }
+        Some("support") if arguments.next().as_ref().map(AsRef::as_ref) == Some("bundle") => {
+            CliCommand::SupportBundle
+        }
+        Some("help") | Some("--help") | Some("-h") => CliCommand::Help,
+        Some("version") | Some("--version") | Some("-V") => CliCommand::Version,
         _ => return Err(CliError::Usage),
     };
     if arguments.next().is_some() {
@@ -495,11 +645,14 @@ where
         }
         Some("subscription") if arguments.get(1).map(String::as_str) == Some("mode") => 2,
         Some("node") if arguments.get(1).map(String::as_str) == Some("select") => 3,
+        Some("node") if arguments.get(1).map(String::as_str) == Some("use") => 3,
         Some("node") if arguments.get(1).map(String::as_str) == Some("override") => 3,
+        Some("application") if arguments.get(1).map(String::as_str) == Some("policy") => 3,
         Some("webui") if arguments.get(1).map(String::as_str) == Some("payload") => 3,
         Some(
             "config" | "capability" | "node" | "connection" | "logs" | "subscription"
-            | "application" | "network" | "backup" | "core" | "ruleset",
+            | "application" | "network" | "backup" | "core" | "capture" | "resource" | "ruleset"
+            | "service" | "wifi" | "hotspot" | "support" | "traffic",
         ) => 2,
         Some("connections") if arguments.get(1).map(String::as_str) == Some("close-all") => 2,
         Some(_) => 1,
@@ -531,6 +684,7 @@ where
     let mut log_channel = None;
     let mut before = None;
     let mut positional = Vec::new();
+    let mut android_user_id = None;
     let mut options = arguments[command_length..].iter();
     while let Some(option) = options.next() {
         match option.as_str() {
@@ -540,7 +694,12 @@ where
                 if source_id.is_none()
                     && matches!(
                         command,
-                        CliCommand::Update | CliCommand::SubscriptionModeSetSingle
+                        CliCommand::Update
+                            | CliCommand::SubscriptionModeSetSingle
+                            | CliCommand::SubscriptionInspect
+                            | CliCommand::SubscriptionShow
+                            | CliCommand::SubscriptionDiagnose
+                            | CliCommand::SubscriptionHistory
                     ) =>
             {
                 let value = options.next().cloned().ok_or(CliError::Usage)?;
@@ -569,7 +728,15 @@ where
                 input_file = Some(options.next().cloned().ok_or(CliError::Usage)?);
             }
             "--text" if input_file.is_none() && !text_input => text_input = true,
-            "--format" if import_format.is_none() => {
+            "--format"
+                if import_format.is_none()
+                    && matches!(
+                        command,
+                        CliCommand::SubscriptionImportPreview
+                            | CliCommand::SubscriptionImportApply
+                            | CliCommand::NodeImport
+                    ) =>
+            {
                 let format = options.next().cloned().ok_or(CliError::Usage)?;
                 if !matches!(
                     format.as_str(),
@@ -623,6 +790,24 @@ where
                         .ok_or(CliError::Usage)?,
                 );
             }
+            "--user"
+                if android_user_id.is_none()
+                    && matches!(
+                        command,
+                        CliCommand::ApplicationAddPackage
+                            | CliCommand::ApplicationRemovePackage
+                            | CliCommand::ApplicationAddUid
+                            | CliCommand::ApplicationRemoveUid
+                            | CliCommand::ApplicationList
+                    ) =>
+            {
+                android_user_id = Some(
+                    options
+                        .next()
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .ok_or(CliError::Usage)?,
+                );
+            }
             "--channel" if log_channel.is_none() && command == CliCommand::LogsGet => {
                 log_channel = Some(match options.next().map(String::as_str) {
                     Some("service") => LogChannel::Service,
@@ -639,12 +824,17 @@ where
                     && matches!(
                         command,
                         CliCommand::NodeTest
+                            | CliCommand::NodeShow
+                            | CliCommand::NodeDelay
+                            | CliCommand::NodeUseManual
                             | CliCommand::NodeSelectManual
                             | CliCommand::NodeRemove
                             | CliCommand::NodeExport
                             | CliCommand::NodeOverrideGet
                             | CliCommand::NodeOverrideRemove
+                            | CliCommand::NodeOverrideApply
                             | CliCommand::ConnectionClose
+                            | CliCommand::ConnectionShow
                     )
                     && target.is_none() =>
             {
@@ -662,6 +852,7 @@ where
                     && matches!(
                         command,
                         CliCommand::SubscriptionAdd
+                            | CliCommand::Update
                             | CliCommand::SubscriptionRemove
                             | CliCommand::SubscriptionMove
                             | CliCommand::SubscriptionEnable
@@ -672,12 +863,18 @@ where
                             | CliCommand::ApplicationAddUid
                             | CliCommand::ApplicationRemoveUid
                             | CliCommand::ApplicationMode
+                            | CliCommand::ApplicationPolicySet
                             | CliCommand::NetworkSet
                             | CliCommand::WebUiPayloadCreate
                             | CliCommand::WebUiPayloadAppend
                             | CliCommand::WebUiPayloadCommit
                             | CliCommand::WebUiPayloadRemove
                             | CliCommand::ApplicationList
+                            | CliCommand::SubscriptionShow
+                            | CliCommand::SubscriptionInspect
+                            | CliCommand::SubscriptionDiagnose
+                            | CliCommand::SubscriptionHistory
+                            | CliCommand::RuleSetShow
                     ) =>
             {
                 positional.push(value.to_owned());
@@ -689,6 +886,12 @@ where
         command,
         CliCommand::Start
             | CliCommand::Stop
+            | CliCommand::ServiceRestart
+            | CliCommand::ServiceReload
+            | CliCommand::CaptureEnable
+            | CliCommand::CaptureDisable
+            | CliCommand::CoreStart
+            | CliCommand::CoreStop
             | CliCommand::Update
             | CliCommand::RuleSetUpdate
             | CliCommand::ConfigReload
@@ -722,6 +925,10 @@ where
             | CliCommand::SubscriptionImportPreview
             | CliCommand::SubscriptionImportApply
             | CliCommand::BackupRestore
+            | CliCommand::NodeImport
+            | CliCommand::NodeEdit
+            | CliCommand::SubscriptionEdit
+            | CliCommand::ApplicationPolicySet
     );
     if expected_digest.is_some() != needs_digest {
         return Err(CliError::Usage);
@@ -738,9 +945,22 @@ where
         CliCommand::BackupExport | CliCommand::BackupRestore
     );
     let has_input = input_file.is_some() || text_input;
-    let invalid_import_input = !backup_command && import_command != has_input;
+    let document_input_command = import_command
+        || matches!(
+            command,
+            CliCommand::NodeImport
+                | CliCommand::NodeEdit
+                | CliCommand::NodeOverrideApply
+                | CliCommand::SubscriptionEdit
+        );
+    let invalid_import_input = !backup_command && document_input_command != has_input;
     let invalid_backup_input = backup_command && (input_file.is_none() || text_input);
-    let invalid_format_hint = !import_command && import_format.is_some();
+    let invalid_format_hint = !matches!(
+        command,
+        CliCommand::SubscriptionImportPreview
+            | CliCommand::SubscriptionImportApply
+            | CliCommand::NodeImport
+    ) && import_format.is_some();
     if invalid_import_input || invalid_backup_input || invalid_format_hint {
         return Err(CliError::Usage);
     }
@@ -756,27 +976,60 @@ where
     }
     let event_session = event_session_id.is_some() || event_max_runtime_seconds.is_some();
     if event_session
-        && (command != CliCommand::Events
-            || event_session_id.is_none()
-            || event_max_runtime_seconds.is_none())
+        && ((!matches!(command, CliCommand::Events | CliCommand::TrafficLive))
+            || (command == CliCommand::Events
+                && (event_session_id.is_none() || event_max_runtime_seconds.is_none()))
+            || (command == CliCommand::TrafficLive && event_session_id.is_some()))
     {
         return Err(CliError::Usage);
     }
     let target_command = matches!(
         command,
         CliCommand::NodeTest
+            | CliCommand::NodeShow
+            | CliCommand::NodeDelay
+            | CliCommand::NodeUseManual
             | CliCommand::NodeSelectManual
             | CliCommand::NodeRemove
             | CliCommand::NodeExport
             | CliCommand::NodeOverrideGet
+            | CliCommand::NodeOverrideApply
             | CliCommand::NodeOverrideRemove
             | CliCommand::ConnectionClose
+            | CliCommand::ConnectionShow
     );
     if target.is_some() != target_command {
         return Err(CliError::Usage);
     }
+    if command == CliCommand::Update && source_id.is_none() && positional.len() == 1 {
+        source_id = Some(positional.remove(0));
+    }
+    let source_query_command = matches!(
+        command,
+        CliCommand::SubscriptionInspect
+            | CliCommand::SubscriptionShow
+            | CliCommand::SubscriptionDiagnose
+            | CliCommand::SubscriptionHistory
+    );
+    if source_query_command && source_id.is_none() && positional.len() == 1 {
+        source_id = Some(positional.remove(0));
+    }
+    if source_query_command && source_id.is_none() {
+        return Err(CliError::Usage);
+    }
+    if source_id.as_deref().is_some_and(|value| {
+        value.len() != 36
+            || !value.starts_with("src_")
+            || !value[4..]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(CliError::Usage);
+    }
     let expected_positionals = match command {
         CliCommand::SubscriptionAdd | CliCommand::NetworkSet => Some(2),
+        CliCommand::RuleSetShow => Some(1),
+        CliCommand::ApplicationPolicySet => Some(1),
         CliCommand::SubscriptionRemove
         | CliCommand::SubscriptionMove
         | CliCommand::SubscriptionEnable
@@ -826,6 +1079,7 @@ where
         human,
         event_session_id,
         event_max_runtime_seconds,
+        android_user_id,
     })
 }
 
@@ -969,11 +1223,28 @@ pub fn build_request(
                 input.ok_or(CliError::InputRequired)?,
             )
         }
-        CliCommand::ConfigMutate => ControlParams::mutation(
-            invocation.expected_digest.clone().ok_or(CliError::Usage)?,
-            serde_json::from_value::<ConfigMutation>(input.ok_or(CliError::InputRequired)?)
-                .map_err(|_| CliError::InvalidInput)?,
-        ),
+        CliCommand::ConfigMutate | CliCommand::NodeEdit | CliCommand::SubscriptionEdit => {
+            ControlParams::mutation(
+                invocation.expected_digest.clone().ok_or(CliError::Usage)?,
+                serde_json::from_value::<ConfigMutation>(input.ok_or(CliError::InputRequired)?)
+                    .map_err(|_| CliError::InvalidInput)?,
+            )
+        }
+        CliCommand::ApplicationPolicySet => {
+            let mode = match invocation.positional[0].as_str() {
+                "all" => nethop_protocol::ApplicationPolicyMode::All,
+                "blacklist" => nethop_protocol::ApplicationPolicyMode::Blacklist,
+                "whitelist" => nethop_protocol::ApplicationPolicyMode::Whitelist,
+                _ => return Err(CliError::Usage),
+            };
+            ControlParams::mutation(
+                invocation.expected_digest.clone().ok_or(CliError::Usage)?,
+                ConfigMutation::SetApplicationPolicy {
+                    mode,
+                    targets: Vec::new(),
+                },
+            )
+        }
         CliCommand::SubscriptionAdd => ControlParams::mutation(
             invocation.expected_digest.clone().ok_or(CliError::Usage)?,
             ConfigMutation::AddSource {
@@ -982,13 +1253,18 @@ pub fn build_request(
                 settings: None,
             },
         ),
-        CliCommand::SubscriptionImportPreview | CliCommand::SubscriptionImportApply => {
+        CliCommand::SubscriptionImportPreview | CliCommand::NodeImport => {
             ControlParams::import_document(
                 invocation.expected_digest.clone().ok_or(CliError::Usage)?,
-                invocation.candidate_digest.clone(),
+                None,
                 input.ok_or(CliError::InputRequired)?,
             )
         }
+        CliCommand::SubscriptionImportApply => ControlParams::import_document(
+            invocation.expected_digest.clone().ok_or(CliError::Usage)?,
+            invocation.candidate_digest.clone(),
+            input.ok_or(CliError::InputRequired)?,
+        ),
         CliCommand::SubscriptionRemove => ControlParams::mutation(
             invocation.expected_digest.clone().ok_or(CliError::Usage)?,
             ConfigMutation::RemoveSource {
@@ -1024,11 +1300,20 @@ pub fn build_request(
                 invocation.command == CliCommand::SubscriptionEnable,
             )
         }
+        CliCommand::SubscriptionShow | CliCommand::SubscriptionInspect => {
+            ControlParams::subscription_query(invocation.source_id.clone().ok_or(CliError::Usage)?)
+        }
+        CliCommand::SubscriptionDiagnose => {
+            ControlParams::subscription_query(invocation.source_id.clone().ok_or(CliError::Usage)?)
+        }
+        CliCommand::SubscriptionHistory => {
+            ControlParams::subscription_query(invocation.source_id.clone().ok_or(CliError::Usage)?)
+        }
         CliCommand::ApplicationAddPackage => ControlParams::mutation(
             invocation.expected_digest.clone().ok_or(CliError::Usage)?,
             ConfigMutation::AddApplicationTarget {
                 target: nethop_protocol::ApplicationTarget::Package {
-                    android_user_id: 0,
+                    android_user_id: invocation.android_user_id.unwrap_or(0),
                     package: invocation.positional[0].clone(),
                 },
             },
@@ -1037,7 +1322,7 @@ pub fn build_request(
             invocation.expected_digest.clone().ok_or(CliError::Usage)?,
             ConfigMutation::RemoveApplicationTarget {
                 target: nethop_protocol::ApplicationTarget::Package {
-                    android_user_id: 0,
+                    android_user_id: invocation.android_user_id.unwrap_or(0),
                     package: invocation.positional[0].clone(),
                 },
             },
@@ -1079,7 +1364,10 @@ pub fn build_request(
         CliCommand::Events | CliCommand::LogsTail => {
             ControlParams::event_subscription(invocation.event_kinds.clone())
         }
+        CliCommand::TrafficLive => ControlParams::event_subscription(vec![EventKind::Traffic]),
         CliCommand::NodeTest
+        | CliCommand::NodeDelay
+        | CliCommand::NodeUseManual
         | CliCommand::NodeSelectManual
         | CliCommand::NodeExport
         | CliCommand::NodeOverrideGet
@@ -1087,12 +1375,25 @@ pub fn build_request(
         | CliCommand::ConnectionClose => {
             ControlParams::target(invocation.target.clone().ok_or(CliError::Usage)?)
         }
+        CliCommand::NodeOverrideApply => {
+            let document: nethop_protocol::NodeOverrideDocument =
+                serde_json::from_value(input.ok_or(CliError::InputRequired)?)
+                    .map_err(|_| CliError::InvalidInput)?;
+            ControlParams::node_override(
+                invocation.target.clone().ok_or(CliError::Usage)?,
+                document,
+            )
+        }
+        CliCommand::ConnectionShow => {
+            ControlParams::list(invocation.target.clone(), invocation.limit)
+        }
         CliCommand::NodeRemove => ControlParams::mutation(
             invocation.expected_digest.clone().ok_or(CliError::Usage)?,
             ConfigMutation::RemoveNode {
                 node_id: invocation.target.clone().ok_or(CliError::Usage)?,
             },
         ),
+        CliCommand::NodeShow => ControlParams::list(invocation.target.clone(), invocation.limit),
         CliCommand::NodeList | CliCommand::ConnectionsGet => {
             ControlParams::list(invocation.query.clone(), invocation.limit)
         }
@@ -1102,6 +1403,10 @@ pub fn build_request(
             invocation.if_needed,
             invocation.source_id.clone(),
         ),
+        CliCommand::CaptureEnable
+        | CliCommand::CaptureDisable
+        | CliCommand::CoreStart
+        | CliCommand::CoreStop => ControlParams::lifecycle(invocation.wait, None, None),
         CliCommand::WebUiPayloadCreate => {
             ControlParams::payload_create(parse_payload_namespace(&invocation.positional[0])?)
         }
@@ -1226,7 +1531,7 @@ fn valid_display_version(value: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum CliError {
     #[error(
-        "usage: nethopctl <status|start|stop|probe|update|ruleset|config|node|connections|connection|logs|diagnose|topology|traffic|metrics>"
+        "usage: nethopctl <status|start|stop|capture|core|resource|probe|update|ruleset|config|node|connections|connection|logs|diagnose|topology|traffic|metrics>"
     )]
     Usage,
     #[error("control socket is unavailable")]

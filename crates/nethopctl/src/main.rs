@@ -30,6 +30,20 @@ fn main() -> ExitCode {
 
 fn run() -> Result<bool, CliError> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--help" | "-h"))
+    {
+        print_help(&arguments);
+        return Ok(true);
+    }
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--version" | "-V"))
+    {
+        println!("nethopctl {}", env!("CARGO_PKG_VERSION"));
+        return Ok(true);
+    }
     #[cfg(unix)]
     if let Some(session_id) = nethopctl::parse_event_termination(&arguments)? {
         let terminated = nethopctl::terminate_event_session(&session_id)?;
@@ -46,16 +60,24 @@ fn run() -> Result<bool, CliError> {
     {
         let input = if matches!(
             invocation.command(),
-            CliCommand::SubscriptionImportPreview | CliCommand::SubscriptionImportApply
+            CliCommand::SubscriptionImportPreview
+                | CliCommand::SubscriptionImportApply
+                | CliCommand::NodeImport
         ) {
             Some(read_import_input(&invocation)?)
         } else if matches!(invocation.command(), CliCommand::BackupRestore) {
             Some(read_backup_input(&invocation)?)
         } else if matches!(
             invocation.command(),
-            CliCommand::ConfigValidate | CliCommand::ConfigApply | CliCommand::ConfigMutate
+            CliCommand::ConfigValidate
+                | CliCommand::ConfigApply
+                | CliCommand::ConfigMutate
+                | CliCommand::SubscriptionEdit
+                | CliCommand::NodeImport
+                | CliCommand::NodeEdit
+                | CliCommand::NodeOverrideApply
         ) {
-            Some(read_json_stdin()?)
+            Some(read_json_input(&invocation)?)
         } else {
             None
         };
@@ -63,7 +85,7 @@ fn run() -> Result<bool, CliError> {
         let mut transport = nethopctl::UnixControlTransport::new(DEFAULT_SOCKET_PATH, timeout)?;
         if matches!(
             invocation.command(),
-            CliCommand::Events | CliCommand::LogsTail
+            CliCommand::Events | CliCommand::LogsTail | CliCommand::TrafficLive
         ) {
             let request = build_request(&invocation, request_id, None)?;
             let max_runtime = invocation
@@ -95,6 +117,36 @@ fn run() -> Result<bool, CliError> {
             Duration::from_secs(5),
         );
         Err(CliError::UnsupportedPlatform)
+    }
+}
+
+fn print_help(arguments: &[String]) {
+    let topic = arguments
+        .iter()
+        .find(|argument| !argument.starts_with('-'))
+        .map(String::as_str);
+    match topic {
+        Some("service") => println!("nethopctl service <check|status|restart|reload> [--wait]"),
+        Some("config") => {
+            println!("nethopctl config <check|get|schema|validate|apply|mutate|reload>")
+        }
+        Some("subscription") => println!(
+            "nethopctl subscription <list|show|inspect|edit|diagnose|history|update|update-all|mode|select|add|remove|move|enable|disable|import>"
+        ),
+        Some("node") => println!(
+            "nethopctl node <list|current|show|test|test-all|selection|select|use|delay|import|edit|remove|export|override>"
+        ),
+        Some("application") => println!(
+            "nethopctl application <list|users|policy set|mode|add-package|remove-package|add-uid|remove-uid>"
+        ),
+        Some("network") => println!("nethopctl network <status|evaluate|set>"),
+        Some("capture") => println!("nethopctl capture <status|check|enable|disable>"),
+        Some("ruleset") => println!("nethopctl ruleset <list|show|status|update>"),
+        Some("logs") => println!("nethopctl logs <get|tail|clear|export>"),
+        Some("traffic") => println!("nethopctl traffic [live]"),
+        _ => println!(
+            "nethopctl commands:\n  service  config  subscription  node  application\n  network  capture  ruleset  logs  traffic\n  status  diagnose  topology  metrics  backup  events\n\nUse `nethopctl <command> --help` for command details."
+        ),
     }
 }
 
@@ -132,12 +184,25 @@ fn read_import_input(invocation: &nethopctl::CliInvocation) -> Result<serde_json
 }
 
 #[cfg(unix)]
-fn read_json_stdin() -> Result<serde_json::Value, CliError> {
-    let mut bytes = Vec::new();
-    std::io::stdin()
-        .take((MAX_FRAME_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| CliError::InvalidInput)?;
+fn read_json_input(invocation: &nethopctl::CliInvocation) -> Result<serde_json::Value, CliError> {
+    let bytes = if let Some(path) = invocation.input_file() {
+        let path = std::path::Path::new(path);
+        let metadata = std::fs::symlink_metadata(path).map_err(|_| CliError::InvalidInput)?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() as usize > MAX_FRAME_BYTES
+        {
+            return Err(CliError::InvalidInput);
+        }
+        std::fs::read(path).map_err(|_| CliError::InvalidInput)?
+    } else {
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .take((MAX_FRAME_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| CliError::InvalidInput)?;
+        bytes
+    };
     if bytes.is_empty() || bytes.len() > MAX_FRAME_BYTES {
         return Err(CliError::InvalidInput);
     }

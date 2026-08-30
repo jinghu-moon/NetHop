@@ -422,6 +422,26 @@ impl ControlRequestHandler for WorkerControlHandler {
                 self.queue_command(ControlCommand::Stop);
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
             }
+            ControlMethod::ServiceRestart => {
+                self.queue_command(ControlCommand::Stop);
+                self.queue_command(ControlCommand::Start);
+                ControlResponse::success(
+                    request_id,
+                    generation,
+                    json!({"accepted":true,"restart":true}),
+                )
+            }
+            ControlMethod::CaptureEnable
+            | ControlMethod::CaptureDisable
+            | ControlMethod::CaptureStatus
+            | ControlMethod::CoreStart
+            | ControlMethod::CoreStop
+            | ControlMethod::CoreStatus
+            | ControlMethod::ResourceStatus => ControlResponse::failure(
+                request_id,
+                generation,
+                unavailable_control_error(ErrorDomain::Core, "LIFECYCLE-CONTROL-UNAVAILABLE"),
+            ),
             ControlMethod::CapabilityProbe => {
                 self.queue_command(ControlCommand::Probe);
                 ControlResponse::success(request_id, generation, json!({"accepted":true}))
@@ -446,6 +466,7 @@ impl ControlRequestHandler for WorkerControlHandler {
             ),
             ControlMethod::ProtocolHello
             | ControlMethod::ConfigGet
+            | ControlMethod::ConfigCheck
             | ControlMethod::ConfigExport
             | ControlMethod::CoreVersionCheck
             | ControlMethod::RuleSetStatus
@@ -457,6 +478,9 @@ impl ControlRequestHandler for WorkerControlHandler {
             | ControlMethod::ConfigMutate
             | ControlMethod::SubscriptionImportPreview
             | ControlMethod::SubscriptionImportApply
+            | ControlMethod::SubscriptionInspect
+            | ControlMethod::SubscriptionDiagnose
+            | ControlMethod::SubscriptionHistory
             | ControlMethod::SubscriptionModeGet
             | ControlMethod::SubscriptionModeSet
             | ControlMethod::SubscriptionSelect

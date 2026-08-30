@@ -385,6 +385,53 @@ fn control_timeout_is_method_scoped_and_bounded() {
 }
 
 #[test]
+fn lifecycle_cli_commands_map_to_strict_protocol_methods() {
+    for (args, command, method) in [
+        (
+            vec!["capture", "enable"],
+            CliCommand::CaptureEnable,
+            ControlMethod::CaptureEnable,
+        ),
+        (
+            vec!["capture", "disable"],
+            CliCommand::CaptureDisable,
+            ControlMethod::CaptureDisable,
+        ),
+        (
+            vec!["capture", "status"],
+            CliCommand::CaptureStatus,
+            ControlMethod::CaptureStatus,
+        ),
+        (
+            vec!["core", "start"],
+            CliCommand::CoreStart,
+            ControlMethod::CoreStart,
+        ),
+        (
+            vec!["core", "stop"],
+            CliCommand::CoreStop,
+            ControlMethod::CoreStop,
+        ),
+        (
+            vec!["core", "status"],
+            CliCommand::CoreStatus,
+            ControlMethod::CoreStatus,
+        ),
+        (
+            vec!["resource", "status"],
+            CliCommand::ResourceStatus,
+            ControlMethod::ResourceStatus,
+        ),
+    ] {
+        let invocation = parse_invocation(args).unwrap();
+        assert_eq!(invocation.command(), command);
+        let request =
+            build_request(&invocation, RequestId::new("req-lifecycle").unwrap(), None).unwrap();
+        assert_eq!(request.method(), method);
+    }
+}
+
+#[test]
 fn command_parser_is_exact_and_maps_only_minimal_methods() {
     assert_eq!(parse_command(["status"]).unwrap(), CliCommand::Status);
     assert_eq!(parse_command(["start"]).unwrap(), CliCommand::Start);
@@ -770,6 +817,173 @@ fn human_status_is_bounded_and_surfaces_a_core_update_without_raw_json() {
     assert_eq!(
         render_status_human(&injected).unwrap_err(),
         CliError::InvalidResponse
+    );
+}
+
+#[test]
+fn expanded_mobile_command_tree_maps_to_existing_typed_methods() {
+    let cases = [
+        (
+            ["service", "check"].as_slice(),
+            nethop_protocol::ControlMethod::StatusGet,
+        ),
+        (
+            ["service", "restart"].as_slice(),
+            nethop_protocol::ControlMethod::ServiceRestart,
+        ),
+        (
+            ["config", "check"].as_slice(),
+            nethop_protocol::ControlMethod::ConfigCheck,
+        ),
+        (
+            ["subscription", "update-all"].as_slice(),
+            nethop_protocol::ControlMethod::SubscriptionUpdate,
+        ),
+        (
+            ["node", "current"].as_slice(),
+            nethop_protocol::ControlMethod::NodeSelectionGet,
+        ),
+        (
+            ["node", "use", "auto"].as_slice(),
+            nethop_protocol::ControlMethod::NodeSelectAuto,
+        ),
+        (
+            ["network", "status"].as_slice(),
+            nethop_protocol::ControlMethod::TopologyGet,
+        ),
+        (
+            ["capture", "check"].as_slice(),
+            nethop_protocol::ControlMethod::CapabilityProbe,
+        ),
+        (
+            ["traffic", "live"].as_slice(),
+            nethop_protocol::ControlMethod::EventsSubscribe,
+        ),
+        (
+            ["ruleset", "show", "provider"].as_slice(),
+            nethop_protocol::ControlMethod::RuleSetStatus,
+        ),
+    ];
+    for (arguments, method) in cases {
+        let invocation = parse_invocation(arguments).unwrap_or_else(|_| panic!("{arguments:?}"));
+        assert_eq!(invocation.command().method(), method);
+    }
+}
+
+#[test]
+fn application_user_is_carried_into_typed_package_mutation() {
+    let digest = "b".repeat(64);
+    let invocation = parse_invocation([
+        "application",
+        "add-package",
+        "com.example.app",
+        "--user",
+        "12",
+        "--expected-digest",
+        digest.as_str(),
+    ])
+    .unwrap();
+    let request = build_request(&invocation, RequestId::new("app-user").unwrap(), None).unwrap();
+    match request.params().mutation_value().unwrap() {
+        nethop_protocol::ConfigMutation::AddApplicationTarget {
+            target:
+                nethop_protocol::ApplicationTarget::Package {
+                    android_user_id,
+                    package,
+                },
+        } => {
+            assert_eq!(*android_user_id, 12);
+            assert_eq!(package, "com.example.app");
+        }
+        mutation => panic!("unexpected mutation: {mutation:?}"),
+    }
+}
+
+#[test]
+fn traffic_live_uses_a_bounded_traffic_event_subscription() {
+    let invocation = parse_invocation(["traffic", "live", "--max-runtime-seconds", "30"]).unwrap();
+    assert_eq!(invocation.command(), CliCommand::TrafficLive);
+    let request =
+        build_request(&invocation, RequestId::new("traffic-live").unwrap(), None).unwrap();
+    assert_eq!(
+        request.method(),
+        nethop_protocol::ControlMethod::EventsSubscribe
+    );
+    assert_eq!(
+        request.params().event_kinds().unwrap(),
+        &[nethop_protocol::EventKind::Traffic]
+    );
+}
+
+#[test]
+fn config_check_uses_daemon_disk_validation_without_stdin() {
+    let mut transport = ScriptedTransport {
+        responses: VecDeque::from([ControlResponse::success(
+            RequestId::new("config-check").unwrap(),
+            Some(9),
+            json!({"valid": true, "matches_active": true}),
+        )]),
+        observed: Vec::new(),
+    };
+    let invocation = parse_invocation(["config", "check"]).unwrap();
+    let response = execute_with_input(
+        &mut transport,
+        &invocation,
+        RequestId::new("config-check").unwrap(),
+        None,
+    )
+    .unwrap();
+    assert!(response.ok());
+    assert_eq!(transport.observed.len(), 1);
+    assert_eq!(
+        transport.observed[0].method(),
+        nethop_protocol::ControlMethod::ConfigCheck
+    );
+}
+
+#[test]
+fn subscription_inspect_accepts_source_flag_and_uses_a_typed_query() {
+    let source = "src_0123456789abcdef0123456789abcdef";
+    let invocation = parse_invocation(["subscription", "inspect", "--source", source]).unwrap();
+    let request = build_request(&invocation, RequestId::new("sub-inspect").unwrap(), None).unwrap();
+    assert_eq!(
+        request.method(),
+        nethop_protocol::ControlMethod::SubscriptionInspect
+    );
+    assert_eq!(request.params().source_id(), Some(source));
+    assert!(parse_invocation(["subscription", "diagnose"]).is_err());
+}
+
+#[test]
+fn policy_shortcut_and_node_override_apply_require_bounded_inputs() {
+    let digest = "d".repeat(64);
+    let policy = parse_invocation([
+        "application",
+        "policy",
+        "set",
+        "all",
+        "--expected-digest",
+        digest.as_str(),
+    ])
+    .unwrap();
+    let policy_request = build_request(&policy, RequestId::new("policy").unwrap(), None).unwrap();
+    assert!(matches!(
+        policy_request.params().mutation_value(),
+        Some(nethop_protocol::ConfigMutation::SetApplicationPolicy { mode: nethop_protocol::ApplicationPolicyMode::All, targets }) if targets.is_empty()
+    ));
+
+    let node = "nh1s-0123456789abcdef";
+    let override_invocation =
+        parse_invocation(["node", "override", "apply", node, "--text"]).unwrap();
+    let request = build_request(
+        &override_invocation,
+        RequestId::new("override").unwrap(),
+        Some(json!({"display_name":"test","outbound":{"type":"direct"}})),
+    )
+    .unwrap();
+    assert_eq!(
+        request.method(),
+        nethop_protocol::ControlMethod::NodeOverrideApply
     );
 }
 
