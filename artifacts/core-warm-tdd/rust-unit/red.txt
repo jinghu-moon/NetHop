@@ -1,0 +1,1 @@
+PRODUCT_RED was captured by the new lifecycle tests before the model existed: no typed Core/Capture/Resource axes or idle decision function were available.

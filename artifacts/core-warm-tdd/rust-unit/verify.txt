@@ -1,0 +1,2 @@
+cargo test -p nethop-core
+cargo test -p nethopd --lib

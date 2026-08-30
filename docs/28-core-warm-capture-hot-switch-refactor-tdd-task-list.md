@@ -1,6 +1,6 @@
 # NetHop Core Warm 与流量接管热切换 TDD 测试开发任务清单
 
-> 状态：未开始
+> 状态：执行中（主机确定性阶段已落地；Android 真机阶段待设备证据）
 >
 > 日期：2026-08-24
 >
@@ -11,6 +11,20 @@
 > 目标平台：Android arm64 Root 模块、KernelSU/APatch WebUI、可选 Companion APK
 >
 > 兼容策略：项目处于开发期，允许删除 `service.start/stop` 的旧 toggle 语义、旧状态字段和兼容 wrapper；不保留旧 wire 兼容层。用户行为、代理正确性、反泄漏和可恢复性必须通过 before/after 测试保持正常。
+
+## 执行记录
+
+截至当前工作树，已完成并验证：
+
+- B001-B005：`nethop-core` 三轴生命周期、确定性 reducer、Idle Policy、资源聚合和恢复成本 DTO；
+- C001-C004：`capture.*`、`core.*`、`resource.status` 严格 protocol/CLI 方法与参数校验；
+- D001、D003、D005：TPROXY capture seam、幂等 attach/detach 入口、TUN 热切换拒绝边界；
+- E003 的停止顺序：核心停止路径复用 daemon 单写路径并先撤销 TPROXY 接管；
+- F001：daemon-owned `IdlePolicyController` 及 WARM/IDLE/COLD 决策测试；
+- G001、G003、G004：Companion bridge allowlist、WebUI 概览 capture 操作、设置页核心启停入口；
+- Rust `nethop-core`、`nethop-protocol`、`nethopctl`、`nethopd` contract tests，Companion JVM tests，WebUI typecheck/unit tests均通过。
+
+尚未宣称完成的任务：D002/D004 的真实 Android 网络 owner/数据面证据、E002/E004 的完整 warm supervisor 接管、F002-F006 的后台 scheduler/采样接线、G002 Quick Settings 真实 capture 入口、G005 polling coordinator，以及 H002-H006 Android 真机/Perfetto/FGS/资源长稳态和恢复成本证据。没有 Android 设备和最终模块构建时，不把这些任务伪装为完成。
 
 ## 1. 目标与边界
 

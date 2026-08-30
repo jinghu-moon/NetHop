@@ -1,0 +1,7 @@
+{
+  "tests": 115,
+  "failed": 0,
+  "capture_commands": ["capture.enable", "capture.disable"],
+  "core_commands": ["core.start", "core.stop", "core.status"],
+  "contains_sensitive_data": false
+}

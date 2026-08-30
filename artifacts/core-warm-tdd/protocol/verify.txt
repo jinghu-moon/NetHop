@@ -1,0 +1,3 @@
+cargo fmt --all
+cargo test -p nethop-protocol --tests
+cargo test -p nethopctl --tests

@@ -1,0 +1,1 @@
+PRODUCT_RED was captured by the TPROXY capture seam and daemon lifecycle command tests before the seam and handlers existed.

@@ -1,0 +1,1 @@
+PRODUCT_RED was captured by strict lifecycle protocol/CLI tests before capture/core/resource methods and typed lifecycle arguments existed.

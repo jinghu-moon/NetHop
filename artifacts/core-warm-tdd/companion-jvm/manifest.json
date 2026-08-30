@@ -1,0 +1,11 @@
+{
+  "task_ids": ["G001", "G002"],
+  "design": "docs/27-core-warm-capture-hot-switch-refactor-design.md",
+  "revision": "working-tree",
+  "commands": ["./gradlew test"],
+  "exit_code": 0,
+  "target": "companion-debug-jvm",
+  "feature_set": "bridge-allowlist",
+  "fixture_digest": "bridge-policy-tests",
+  "contains_sensitive_data": false
+}

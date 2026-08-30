@@ -1,0 +1,11 @@
+{
+  "task_ids": ["G003", "G004"],
+  "design": "docs/27-core-warm-capture-hot-switch-refactor-design.md",
+  "revision": "working-tree",
+  "commands": ["npm run typecheck", "npm run test:unit"],
+  "exit_code": 0,
+  "target": "host-vitest",
+  "feature_set": "native-ui-foundation",
+  "fixture_digest": "bridge-operation-contracts",
+  "contains_sensitive_data": false
+}

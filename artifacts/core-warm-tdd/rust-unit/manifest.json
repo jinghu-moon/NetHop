@@ -1,0 +1,11 @@
+{
+  "task_ids": ["B001", "B002", "B003", "B004", "B005", "F001"],
+  "design": "docs/27-core-warm-capture-hot-switch-refactor-design.md",
+  "revision": "working-tree",
+  "commands": ["cargo test -p nethop-core", "cargo test -p nethopd --lib"],
+  "exit_code": 0,
+  "target": "host-deterministic",
+  "feature_set": "default",
+  "fixture_digest": "not-applicable",
+  "contains_sensitive_data": false
+}

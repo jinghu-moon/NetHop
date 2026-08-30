@@ -1,0 +1,2 @@
+cargo test -p nethop-protocol --tests: all protocol contract tests passed.
+cargo test -p nethopctl --tests: all CLI contract tests passed.

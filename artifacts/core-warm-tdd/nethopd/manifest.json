@@ -1,0 +1,11 @@
+{
+  "task_ids": ["D001", "D003", "D005", "E003", "G003"],
+  "design": "docs/27-core-warm-capture-hot-switch-refactor-design.md",
+  "revision": "working-tree",
+  "commands": ["cargo check -p nethopd", "cargo test -p nethopd --tests"],
+  "exit_code": 0,
+  "target": "host-fake-backend",
+  "feature_set": "default",
+  "fixture_digest": "worker-contracts",
+  "contains_sensitive_data": false
+}

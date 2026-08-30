@@ -1,0 +1,1 @@
+cargo check -p nethopd passed; full nethopd contract suite passed.

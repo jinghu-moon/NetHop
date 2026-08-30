@@ -1,0 +1,1 @@
+PRODUCT_RED was captured by bridge operation tests when lifecycle commands were absent from the WebUI allowlist.
