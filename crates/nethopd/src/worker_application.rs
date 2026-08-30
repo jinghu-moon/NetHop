@@ -21,7 +21,7 @@ use nethop_android::{
 };
 #[cfg(feature = "subscription-update")]
 use nethop_android::{CapabilityStatus, ResourceCandidate, WifiFactsSource};
-use nethop_core::{CapturePolicy, GenerationId, RuntimeState};
+use nethop_core::{CaptureMode, CapturePolicy, GenerationId, RuntimeState};
 #[cfg(feature = "subscription-update")]
 use nethop_core::{ManagedOptions, SealedGeneration, TunStack};
 #[cfg(feature = "subscription-update")]
@@ -4567,16 +4567,6 @@ where
                         unavailable_control_error(ErrorDomain::Core, "CORE-START-FAILED"),
                     );
                 };
-                if runtime.state() == RuntimeState::RunningTun {
-                    return ControlResponse::failure(
-                        request_id,
-                        generation,
-                        unavailable_control_error(
-                            ErrorDomain::Network,
-                            "CAPTURE-HOT-SWITCH-UNSUPPORTED-TUN",
-                        ),
-                    );
-                }
                 let started_at = std::time::Instant::now();
                 match runtime.enable_capture(&mut self.network) {
                     Ok(()) => {
@@ -4603,18 +4593,8 @@ where
                         self.lifecycle_status("capture"),
                     );
                 };
-                if runtime.state() == RuntimeState::RunningTun {
-                    return ControlResponse::failure(
-                        request_id,
-                        generation,
-                        unavailable_control_error(
-                            ErrorDomain::Network,
-                            "CAPTURE-HOT-SWITCH-UNSUPPORTED-TUN",
-                        ),
-                    );
-                }
                 let started_at = std::time::Instant::now();
-                match runtime.disable_capture(&mut self.network) {
+                match runtime.disable_capture(&mut self.network, &mut self.verifier) {
                     Ok(()) => {
                         self.lifecycle_timing.capture_rollback_ms =
                             started_at.elapsed().as_millis() as u64;
@@ -4687,7 +4667,35 @@ where
             ("ready", "disabled") => "warm",
             _ => "cold",
         };
-        json!({"subject": subject, "core_state": core_state, "capture_state": capture_state, "resource_state": resource_state, "generation": self.snapshot().generation.map(GenerationId::get), "completed": true, "timing": self.lifecycle_timing_json()})
+        let attachment_kind = runtime.map(|runtime| match runtime.state() {
+            RuntimeState::RunningTproxy => "tproxy",
+            RuntimeState::RunningTun => "tun",
+            _ => "unknown",
+        });
+        let capture_mode = runtime
+            .map(|runtime| match runtime.state() {
+                RuntimeState::RunningTproxy => "tproxy",
+                RuntimeState::RunningTun => "tun",
+                _ => "unknown",
+            })
+            .unwrap_or_else(|| match self.policy.mode() {
+                CaptureMode::Tproxy => "tproxy",
+                CaptureMode::Tun => "tun",
+                CaptureMode::Direct => "direct",
+            });
+        json!({
+            "subject": subject,
+            "core_state": core_state,
+            "capture_state": capture_state,
+            "resource_state": resource_state,
+            "capture_mode": capture_mode,
+            "attachment_kind": attachment_kind,
+            "detachable": runtime.is_some(),
+            "generation": self.snapshot().generation.map(GenerationId::get),
+            "capture_generation": (capture_state == "enabled").then(|| self.snapshot().generation.map(GenerationId::get)).flatten(),
+            "completed": true,
+            "timing": self.lifecycle_timing_json()
+        })
     }
 }
 

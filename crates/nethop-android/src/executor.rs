@@ -63,24 +63,31 @@ impl CommandInvocation {
                 action,
                 family,
                 table,
+                device,
+                local,
             } => {
                 let destination = match family {
                     IpFamily::Ipv4 => "0.0.0.0/0",
                     IpFamily::Ipv6 => "::/0",
                 };
+                let mut arguments = vec![
+                    family_flag(*family).to_owned(),
+                    "route".to_owned(),
+                    action_name(*action).to_owned(),
+                ];
+                if *local {
+                    arguments.push("local".to_owned());
+                }
+                arguments.extend([
+                    destination.to_owned(),
+                    "dev".to_owned(),
+                    device.clone(),
+                    "table".to_owned(),
+                    table.to_string(),
+                ]);
                 Self {
                     program: NetworkProgram::Ip,
-                    arguments: vec![
-                        family_flag(*family).to_owned(),
-                        "route".to_owned(),
-                        action_name(*action).to_owned(),
-                        "local".to_owned(),
-                        destination.to_owned(),
-                        "dev".to_owned(),
-                        "lo".to_owned(),
-                        "table".to_owned(),
-                        table.to_string(),
-                    ],
+                    arguments,
                     stdin: None,
                 }
             }

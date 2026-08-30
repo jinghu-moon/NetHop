@@ -91,6 +91,82 @@ fn full_plan() -> nethop_android::NetworkPlan {
         .unwrap()
 }
 
+fn tun_plan() -> nethop_android::NetworkPlan {
+    let allocation = candidate(0x100, 100, 10_000);
+    let policy = CapturePolicy::new(
+        CaptureMode::Tun,
+        true,
+        None,
+        Some(0x200),
+        vec![10_001],
+        vec![],
+    )
+    .unwrap();
+    NetworkPlanner
+        .build_tun(
+            GenerationId::new(7).unwrap(),
+            PlanSlot::A,
+            &policy,
+            &report(
+                CapabilityStatus::Supported,
+                vec![AllocationCapability::new(
+                    allocation,
+                    CapabilityStatus::Supported,
+                )],
+            ),
+        )
+        .unwrap()
+}
+
+#[derive(Debug)]
+struct DisabledPlanProbe {
+    attached: bool,
+}
+
+impl ProbeBackend for DisabledPlanProbe {
+    fn run(&mut self, command: ProbeCommand) -> Result<ProbeOutput, CapabilityError> {
+        let output = match command {
+            ProbeCommand::ListeningSockets => {
+                ProbeOutput::new(true, "tcp LISTEN 0 128 127.0.0.1:7893", "")
+            }
+            ProbeCommand::Links => {
+                ProbeOutput::new(true, "5: nethop0: <POINTOPOINT,UP> mtu 1500", "")
+            }
+            ProbeCommand::NetfilterSnapshot(_, _) if self.attached => ProbeOutput::new(
+                true,
+                "-N NH_TUN_A\n-A OUTPUT -m comment --comment nethop:tun:g=7 -j NH_TUN_A",
+                "",
+            ),
+            ProbeCommand::NetfilterSnapshot(_, _) => ProbeOutput::new(true, "*filter\nCOMMIT", ""),
+            ProbeCommand::PolicyRules(_) if self.attached => {
+                ProbeOutput::new(true, "10000: from all fwmark 0x100/0xff00 lookup 100", "")
+            }
+            ProbeCommand::PolicyRules(_) => ProbeOutput::new(true, "0: from all lookup local", ""),
+            ProbeCommand::RouteTable(_, _) if self.attached => {
+                ProbeOutput::new(true, "default dev nethop0", "")
+            }
+            ProbeCommand::RouteTable(_, _) => ProbeOutput::new(true, "", ""),
+            _ => panic!("unexpected health probe command: {command:?}"),
+        };
+        Ok(output)
+    }
+}
+
+#[test]
+fn disabled_tun_verifier_requires_interface_but_rejects_owned_attachment() {
+    let plan = tun_plan();
+    let mut verifier =
+        NetworkPlanVerifier::new(DisabledPlanProbe { attached: false }, PORT).unwrap();
+    verifier.verify_disabled(&plan).unwrap();
+
+    let mut verifier =
+        NetworkPlanVerifier::new(DisabledPlanProbe { attached: true }, PORT).unwrap();
+    assert_eq!(
+        verifier.verify_disabled(&plan).unwrap_err().code(),
+        NetworkHealthDiagnosticCode::CaptureStillAttached
+    );
+}
+
 #[derive(Debug)]
 struct AppliedPlanProbe {
     owner_present: bool,
@@ -1082,6 +1158,46 @@ fn executor_uses_only_typed_programs_and_rolls_back_in_reverse_order() {
             .filter(|call| call.stdin().is_some())
             .all(|call| call.arguments() == ["--noflush"])
     );
+}
+
+#[test]
+fn tun_plan_routes_to_owned_interface_and_is_reversible() {
+    let allocation = candidate(0x100, 100, 10_000);
+    let capabilities = report(
+        CapabilityStatus::Supported,
+        vec![AllocationCapability::new(
+            allocation,
+            CapabilityStatus::Supported,
+        )],
+    );
+    let tun_policy =
+        CapturePolicy::new(CaptureMode::Tun, true, None, None, vec![], vec![]).unwrap();
+    let plan = NetworkPlanner
+        .build_tun(
+            GenerationId::new(12).unwrap(),
+            PlanSlot::B,
+            &tun_policy,
+            &capabilities,
+        )
+        .unwrap();
+    let mut executor = NetworkExecutor::new(RecordingBackend::default());
+    let mut receipt = executor.apply(&plan).unwrap();
+    let calls = executor.into_backend().calls;
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.arguments().iter().any(|arg| arg == "nethop0"))
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.arguments().iter().any(|arg| arg == "local"))
+    );
+    assert!(receipt.completed_steps() > 0);
+    let mut executor = NetworkExecutor::new(RecordingBackend::default());
+    receipt = executor.apply(&plan).unwrap();
+    executor.rollback(&plan, &mut receipt).unwrap();
+    assert_eq!(receipt.completed_steps(), 0);
 }
 
 #[test]

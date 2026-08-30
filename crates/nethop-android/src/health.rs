@@ -8,6 +8,12 @@ use crate::{
 pub trait NetworkHealthVerifier {
     fn verify(&mut self, plan: &NetworkPlan) -> Result<(), NetworkHealthError>;
 
+    /// Verify that the capture attachment has been fully withdrawn while the
+    /// core (and, for TUN, its interface) may remain alive.
+    fn verify_disabled(&mut self, _plan: &NetworkPlan) -> Result<(), NetworkHealthError> {
+        Ok(())
+    }
+
     fn replace_inbound_port(&mut self, _inbound_port: u16) -> Result<(), NetworkHealthError> {
         Ok(())
     }
@@ -42,6 +48,20 @@ impl<B: ProbeBackend> NetworkHealthVerifier for NetworkPlanVerifier<B> {
             return Err(NetworkHealthError::InboundPortMissing);
         }
 
+        if plan.mode() == nethop_core::CaptureMode::Tun {
+            self.verify_tun_owner(plan, IpFamily::Ipv4)?;
+            self.verify_tun_routing(plan, IpFamily::Ipv4)?;
+            self.verify_dns_guard(plan, IpFamily::Ipv4)?;
+            if plan.ipv6_captured() {
+                self.verify_tun_owner(plan, IpFamily::Ipv6)?;
+                self.verify_tun_routing(plan, IpFamily::Ipv6)?;
+                self.verify_dns_guard(plan, IpFamily::Ipv6)?;
+            } else if plan.ipv6_guarded() {
+                self.verify_owner(plan, IpFamily::Ipv6)?;
+            }
+            return Ok(());
+        }
+
         self.verify_owner(plan, IpFamily::Ipv4)?;
         self.verify_dns_guard(plan, IpFamily::Ipv4)?;
         self.verify_routing(plan, IpFamily::Ipv4)?;
@@ -55,6 +75,79 @@ impl<B: ProbeBackend> NetworkHealthVerifier for NetworkPlanVerifier<B> {
             self.verify_routing(plan, IpFamily::Ipv6)?;
         } else if plan.ipv6_guarded() {
             self.verify_owner(plan, IpFamily::Ipv6)?;
+        }
+        Ok(())
+    }
+
+    fn verify_disabled(&mut self, plan: &NetworkPlan) -> Result<(), NetworkHealthError> {
+        let mangle4 = self.run(ProbeCommand::NetfilterSnapshot(
+            IpFamily::Ipv4,
+            NetfilterTable::Mangle,
+        ))?;
+        if capture_attachment_present(&mangle4, plan) {
+            return Err(NetworkHealthError::CaptureStillAttached);
+        }
+        if plan.mode() == nethop_core::CaptureMode::Tun {
+            let Some(interface) = plan.capture_interface() else {
+                return Err(NetworkHealthError::TunInterfaceMissing);
+            };
+            let links = self.run(ProbeCommand::Links)?;
+            if !link_output_contains_interface(&links, interface) {
+                return Err(NetworkHealthError::TunInterfaceMissing);
+            }
+        }
+
+        let rules4 = self.run(ProbeCommand::PolicyRules(IpFamily::Ipv4))?;
+        if rules4
+            .lines()
+            .any(|line| policy_rule_matches(line, plan.allocation()))
+        {
+            return Err(NetworkHealthError::CaptureStillAttached);
+        }
+        let routes4 = self.run(ProbeCommand::RouteTable(
+            IpFamily::Ipv4,
+            plan.allocation().route_table(),
+        ))?;
+        if route_targets_capture(&routes4, plan) {
+            return Err(NetworkHealthError::CaptureStillAttached);
+        }
+        let filter4 = self.run(ProbeCommand::NetfilterSnapshot(
+            IpFamily::Ipv4,
+            NetfilterTable::Filter,
+        ))?;
+        if filter4.contains(&plan.owner_marker()) || filter4.contains(&plan.dns_guard_chain()) {
+            return Err(NetworkHealthError::CaptureStillAttached);
+        }
+
+        if plan.ipv6_captured() || plan.ipv6_guarded() {
+            let mangle6 = self.run(ProbeCommand::NetfilterSnapshot(
+                IpFamily::Ipv6,
+                NetfilterTable::Mangle,
+            ))?;
+            if capture_attachment_present(&mangle6, plan) {
+                return Err(NetworkHealthError::CaptureStillAttached);
+            }
+            let rules6 = self.run(ProbeCommand::PolicyRules(IpFamily::Ipv6))?;
+            if rules6
+                .lines()
+                .any(|line| policy_rule_matches(line, plan.allocation()))
+            {
+                return Err(NetworkHealthError::CaptureStillAttached);
+            }
+            let routes6 = self.run(ProbeCommand::RouteTable(
+                IpFamily::Ipv6,
+                plan.allocation().route_table(),
+            ))?;
+            if route_targets_capture(&routes6, plan) {
+                return Err(NetworkHealthError::CaptureStillAttached);
+            }
+            let filter6 = self.run(ProbeCommand::NetfilterSnapshot(
+                IpFamily::Ipv6,
+                NetfilterTable::Filter,
+            ))?;
+            if filter6.contains(&plan.owner_marker()) || filter6.contains(&plan.dns_guard_chain()) {
+                return Err(NetworkHealthError::CaptureStillAttached);
+            }
         }
         Ok(())
     }
@@ -143,6 +236,54 @@ impl<B: ProbeBackend> NetworkPlanVerifier<B> {
         Ok(())
     }
 
+    fn verify_tun_owner(
+        &mut self,
+        plan: &NetworkPlan,
+        family: IpFamily,
+    ) -> Result<(), NetworkHealthError> {
+        let snapshot = self.run(ProbeCommand::NetfilterSnapshot(
+            family,
+            NetfilterTable::Mangle,
+        ))?;
+        let chain = plan.capture_chain(family);
+        if !snapshot.contains(&plan.owner_marker()) || !snapshot.contains(&chain) {
+            return Err(NetworkHealthError::OwnerMarkerMissing);
+        }
+        if !snapshot
+            .lines()
+            .any(|line| line.starts_with(&format!("-A {chain} ")) && line.contains(" -j MARK "))
+        {
+            return Err(NetworkHealthError::DnsCaptureMissing);
+        }
+        Ok(())
+    }
+
+    fn verify_tun_routing(
+        &mut self,
+        plan: &NetworkPlan,
+        family: IpFamily,
+    ) -> Result<(), NetworkHealthError> {
+        let allocation = plan.allocation();
+        let rules = self.run(ProbeCommand::PolicyRules(family))?;
+        if !rules
+            .lines()
+            .any(|line| policy_rule_matches(line, allocation))
+        {
+            return Err(NetworkHealthError::PolicyRuleMissing);
+        }
+        let routes = self.run(ProbeCommand::RouteTable(family, allocation.route_table()))?;
+        let Some(interface) = plan.capture_interface() else {
+            return Err(NetworkHealthError::RouteMissing);
+        };
+        if !routes
+            .lines()
+            .any(|line| line.contains("default") && line.contains(&format!("dev {interface}")))
+        {
+            return Err(NetworkHealthError::RouteMissing);
+        }
+        Ok(())
+    }
+
     fn verify_forwarding(&mut self, plan: &NetworkPlan) -> Result<(), NetworkHealthError> {
         let snapshot = self.run(ProbeCommand::NetfilterSnapshot(
             IpFamily::Ipv4,
@@ -218,6 +359,8 @@ pub enum NetworkHealthDiagnosticCode {
     ForwardingChainMissing,
     ForwardingInterfaceJumpMissing,
     ForwardingIpv6GuardMissing,
+    CaptureStillAttached,
+    TunInterfaceMissing,
 }
 
 impl NetworkHealthDiagnosticCode {
@@ -238,6 +381,8 @@ impl NetworkHealthDiagnosticCode {
                 "network_health_forwarding_interface_jump_missing"
             }
             Self::ForwardingIpv6GuardMissing => "network_health_forwarding_ipv6_guard_missing",
+            Self::CaptureStillAttached => "network_health_capture_still_attached",
+            Self::TunInterfaceMissing => "network_health_tun_interface_missing",
         }
     }
 }
@@ -270,6 +415,10 @@ pub enum NetworkHealthError {
     ForwardingInterfaceJumpMissing,
     #[error("forwarding IPv6 fail-closed guard is missing")]
     ForwardingIpv6GuardMissing,
+    #[error("capture attachment remains installed after rollback")]
+    CaptureStillAttached,
+    #[error("TUN interface is missing while capture is disabled")]
+    TunInterfaceMissing,
 }
 
 impl NetworkHealthError {
@@ -292,8 +441,44 @@ impl NetworkHealthError {
             Self::ForwardingIpv6GuardMissing => {
                 NetworkHealthDiagnosticCode::ForwardingIpv6GuardMissing
             }
+            Self::CaptureStillAttached => NetworkHealthDiagnosticCode::CaptureStillAttached,
+            Self::TunInterfaceMissing => NetworkHealthDiagnosticCode::TunInterfaceMissing,
         }
     }
+}
+
+fn capture_attachment_present(snapshot: &str, plan: &NetworkPlan) -> bool {
+    let chains = [
+        plan.capture_chain(IpFamily::Ipv4),
+        plan.entry_chain(IpFamily::Ipv4),
+        plan.prerouting_chain(),
+    ];
+    snapshot.contains(&plan.owner_marker())
+        || chains.iter().any(|chain| {
+            snapshot.contains(&format!(":{chain} "))
+                || snapshot.lines().any(|line| {
+                    line.starts_with(&format!("-N {chain}"))
+                        || line.starts_with(&format!("-A {chain} "))
+                })
+        })
+}
+
+fn route_targets_capture(routes: &str, plan: &NetworkPlan) -> bool {
+    plan.capture_interface().is_some_and(|interface| {
+        routes
+            .lines()
+            .any(|line| line.contains(&format!("dev {interface}")))
+    }) || routes
+        .lines()
+        .any(|line| line.contains("dev lo") && plan.mode() == nethop_core::CaptureMode::Tproxy)
+}
+
+fn link_output_contains_interface(output: &str, interface: &str) -> bool {
+    output.lines().any(|line| {
+        line.split_once(':')
+            .map(|(_, rest)| rest.trim_start().starts_with(&format!("{interface}:")))
+            .unwrap_or(false)
+    })
 }
 
 fn dns_capture_present(snapshot: &str, plan: &NetworkPlan) -> bool {

@@ -239,14 +239,21 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
             .map_err(|_| WorkerRuntimeError::CaptureOperationFailed)
     }
 
-    pub fn disable_capture<N>(&mut self, network: &mut N) -> Result<(), WorkerRuntimeError>
+    pub fn disable_capture<N, V>(
+        &mut self,
+        network: &mut N,
+        verifier: &mut V,
+    ) -> Result<(), WorkerRuntimeError>
     where
         N: NetworkController<Receipt = R>,
+        V: RuntimeHealthVerifier,
     {
-        self.active
-            .as_mut()
-            .ok_or(WorkerRuntimeError::NotRunning)?
+        let active = self.active.as_mut().ok_or(WorkerRuntimeError::NotRunning)?;
+        active
             .disable_capture(network)
+            .map_err(|_| WorkerRuntimeError::CaptureOperationFailed)?;
+        verifier
+            .verify_capture_disabled(active.attachment())
             .map_err(|_| WorkerRuntimeError::CaptureOperationFailed)
     }
 
@@ -346,12 +353,13 @@ impl<P: CandidateProcess, R> WorkerRuntime<P, R> {
             return Ok(RuntimeTick::Healthy);
         }
         self.next_reconcile = now.saturating_add(self.limits.reconcile_interval);
-        let attachment = self
-            .active
-            .as_ref()
-            .ok_or(WorkerRuntimeError::NotRunning)?
-            .attachment();
-        let healthy = verifier.verify(attachment).is_ok();
+        let active = self.active.as_ref().ok_or(WorkerRuntimeError::NotRunning)?;
+        let attachment = active.attachment();
+        let healthy = if active.capture_enabled() {
+            verifier.verify(attachment).is_ok()
+        } else {
+            verifier.verify_capture_disabled(attachment).is_ok()
+        };
         if healthy {
             return Ok(RuntimeTick::Reconciled);
         }

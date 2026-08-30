@@ -667,7 +667,8 @@ impl DataPlaneHealthProbe<FakeProcess> for FakeTunDataPlane<'_> {
         assert!(matches!(
             attachment,
             RuntimeAttachmentView::Tun {
-                interface: "nethop0"
+                interface: "nethop0",
+                ..
             }
         ));
         assert_eq!(
@@ -770,7 +771,10 @@ fn tun_activation_waits_for_interface_health_without_touching_netfilter() {
         store.current_generation().unwrap(),
         Some(GenerationId::new(2).unwrap())
     );
-    assert_eq!(events.borrow().as_slice(), ["core_start", "tun_health"]);
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "network_apply", "tun_health"]
+    );
 
     let mut runtime_health = FakeTunRuntimeHealth {
         events: Rc::clone(&events),
@@ -780,7 +784,14 @@ fn tun_activation_waits_for_interface_health_without_touching_netfilter() {
     active.stop(&mut network, &mut runtime_health).unwrap();
     assert_eq!(
         events.borrow().as_slice(),
-        ["core_start", "tun_health", "core_stop", "tun_absent"]
+        [
+            "core_start",
+            "network_apply",
+            "tun_health",
+            "network_rollback",
+            "core_stop",
+            "tun_absent"
+        ]
     );
 }
 
@@ -823,7 +834,14 @@ fn tun_health_failure_stops_staged_core_and_preserves_previous_generation() {
     assert_candidate_removed(&store);
     assert_eq!(
         events.borrow().as_slice(),
-        ["core_start", "tun_health", "core_stop", "tun_absent"]
+        [
+            "core_start",
+            "network_apply",
+            "tun_health",
+            "network_rollback",
+            "core_stop",
+            "tun_absent"
+        ]
     );
 }
 
@@ -897,7 +915,14 @@ fn tun_commit_failure_stops_core_and_confirms_interface_cleanup() {
     assert_candidate_removed(&store);
     assert_eq!(
         events.borrow().as_slice(),
-        ["core_start", "tun_health", "core_stop", "tun_absent"]
+        [
+            "core_start",
+            "network_apply",
+            "tun_health",
+            "network_rollback",
+            "core_stop",
+            "tun_absent"
+        ]
     );
 }
 
@@ -938,7 +963,10 @@ fn recovery_restores_a_tun_generation_without_applying_netfilter() {
     .unwrap();
 
     assert_eq!(active.state(), RuntimeState::RunningTun);
-    assert_eq!(events.borrow().as_slice(), ["core_start", "tun_health"]);
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["core_start", "network_apply", "tun_health"]
+    );
     active
         .stop(
             &mut network,
@@ -1057,8 +1085,10 @@ fn tun_runtime_reconcile_never_attempts_a_netfilter_repair() {
         events.borrow().as_slice(),
         [
             "core_start",
+            "network_apply",
             "tun_health",
             "tun_reconcile",
+            "network_rollback",
             "core_stop",
             "tun_absent"
         ]

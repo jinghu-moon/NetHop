@@ -3,6 +3,8 @@ use thiserror::Error;
 
 use crate::capability::{CapabilityReport, CapabilityStatus, IpFamily, ResourceCandidate};
 
+const DEFAULT_TUN_BYPASS_MARK: u32 = 0x4000_0000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanSlot {
     A,
@@ -32,6 +34,8 @@ pub enum NetworkOperationKind {
 pub struct NetworkPlan {
     generation: GenerationId,
     slot: PlanSlot,
+    mode: CaptureMode,
+    capture_interface: Option<String>,
     allocation: ResourceCandidate,
     bypass_mark: u32,
     ipv6_captured: bool,
@@ -48,6 +52,14 @@ impl NetworkPlan {
 
     pub const fn slot(&self) -> PlanSlot {
         self.slot
+    }
+
+    pub const fn mode(&self) -> CaptureMode {
+        self.mode
+    }
+
+    pub fn capture_interface(&self) -> Option<&str> {
+        self.capture_interface.as_deref()
     }
 
     pub const fn slot_suffix(&self) -> &'static str {
@@ -83,7 +95,11 @@ impl NetworkPlan {
     }
 
     pub fn owner_marker(&self) -> String {
-        format!("nethop:g={}", self.generation.get())
+        if self.mode == CaptureMode::Tun {
+            format!("nethop:tun:g={}", self.generation.get())
+        } else {
+            format!("nethop:g={}", self.generation.get())
+        }
     }
 
     pub fn operation_kinds(&self) -> impl ExactSizeIterator<Item = NetworkOperationKind> + '_ {
@@ -106,6 +122,14 @@ impl NetworkPlan {
             format!("NH_V6G_{}", self.slot.suffix())
         } else {
             format!("NH_OUT_{}", self.slot.suffix())
+        }
+    }
+
+    pub(crate) fn capture_chain(&self, family: IpFamily) -> String {
+        if self.mode == CaptureMode::Tun {
+            format!("NH_TUN_{}", self.slot.suffix())
+        } else {
+            self.entry_chain(family)
         }
     }
 
@@ -141,6 +165,8 @@ pub(crate) enum NetworkOperation {
         action: MutationAction,
         family: IpFamily,
         table: u32,
+        device: String,
+        local: bool,
     },
     PolicyRule {
         action: MutationAction,
@@ -225,9 +251,9 @@ impl NetworkPlanner {
             ));
         }
 
-        push_policy_steps(&mut steps, IpFamily::Ipv4, allocation);
+        push_policy_steps(&mut steps, IpFamily::Ipv4, allocation, "lo", true);
         if ipv6_tproxy {
-            push_policy_steps(&mut steps, IpFamily::Ipv6, allocation);
+            push_policy_steps(&mut steps, IpFamily::Ipv6, allocation, "lo", true);
         }
 
         let (apply4, rollback4) = tproxy_payloads(
@@ -320,9 +346,143 @@ impl NetworkPlanner {
         Ok(NetworkPlan {
             generation,
             slot,
+            mode: CaptureMode::Tproxy,
+            capture_interface: None,
             allocation,
             bypass_mark,
             ipv6_captured: ipv6_tproxy,
+            ipv6_guarded,
+            dns_guarded: true,
+            forwarding_interfaces,
+            steps,
+        })
+    }
+
+    pub fn build_tun(
+        &self,
+        generation: GenerationId,
+        slot: PlanSlot,
+        policy: &CapturePolicy,
+        capabilities: &CapabilityReport,
+    ) -> Result<NetworkPlan, NetworkPlanError> {
+        if generation.get() == 0 {
+            return Err(NetworkPlanError::InvalidGeneration);
+        }
+        if policy.mode() != CaptureMode::Tun {
+            return Err(NetworkPlanError::UnsupportedCaptureMode);
+        }
+        if !capabilities.android().is_supported() || !capabilities.root().is_supported() {
+            return Err(NetworkPlanError::PlatformUnavailable);
+        }
+        if capabilities.tun() != CapabilityStatus::Supported {
+            return Err(NetworkPlanError::TunUnavailable);
+        }
+        if capabilities.active_tunnel() != CapabilityStatus::Supported {
+            return Err(NetworkPlanError::ExistingTunnelConflict);
+        }
+        let allocation = capabilities
+            .allocations()
+            .iter()
+            .find(|allocation| allocation.status().is_supported())
+            .map(|allocation| allocation.candidate())
+            .ok_or(NetworkPlanError::ResourceConflict)?;
+        let bypass_mark = policy.bypass_mark().unwrap_or(DEFAULT_TUN_BYPASS_MARK);
+        if bypass_mark & allocation.mask() == allocation.mark() {
+            return Err(NetworkPlanError::BypassMarkConflict);
+        }
+        let interfaces = resolve_interfaces(policy.interface_policy(), capabilities.interfaces())?;
+        let forwarding_interfaces =
+            resolve_forwarding_interfaces(policy.forwarding_policy(), capabilities.interfaces())?;
+        let ipv6_present = match capabilities.ipv6().address() {
+            CapabilityStatus::Supported => true,
+            CapabilityStatus::NotPresent => false,
+            _ => return Err(NetworkPlanError::Ipv6LeakRisk),
+        };
+        let ipv6_guarded = !ipv6_present;
+        if ipv6_guarded && (!policy.ipv6_guard() || !capabilities.ipv6().supports_guard()) {
+            return Err(NetworkPlanError::Ipv6LeakRisk);
+        }
+        let owner = format!("nethop:tun:g={}", generation.get());
+        let mut steps = Vec::with_capacity(if ipv6_present { 5 } else { 4 });
+        if ipv6_guarded {
+            let (apply, rollback) = ipv6_guard_payloads(slot, policy, &owner);
+            steps.push(restore_step(
+                NetworkOperationKind::Ipv6GuardRestore,
+                IpFamily::Ipv6,
+                apply,
+                rollback,
+            ));
+        }
+        push_policy_steps(&mut steps, IpFamily::Ipv4, allocation, "nethop0", false);
+        if ipv6_present {
+            push_policy_steps(&mut steps, IpFamily::Ipv6, allocation, "nethop0", false);
+        }
+        let (apply, rollback) = tun_payloads(
+            IpFamily::Ipv4,
+            slot,
+            policy,
+            allocation,
+            &owner,
+            interfaces.as_deref(),
+        );
+        steps.push(restore_step(
+            NetworkOperationKind::NetfilterRestore,
+            IpFamily::Ipv4,
+            apply,
+            rollback,
+        ));
+        let (dns_apply, dns_rollback) = dns_guard_payloads(
+            IpFamily::Ipv4,
+            slot,
+            policy,
+            allocation,
+            &owner,
+            interfaces.as_deref(),
+        );
+        steps.push(restore_step(
+            NetworkOperationKind::DnsGuardRestore,
+            IpFamily::Ipv4,
+            dns_apply,
+            dns_rollback,
+        ));
+        if ipv6_present {
+            let (apply6, rollback6) = tun_payloads(
+                IpFamily::Ipv6,
+                slot,
+                policy,
+                allocation,
+                &owner,
+                interfaces.as_deref(),
+            );
+            steps.push(restore_step(
+                NetworkOperationKind::NetfilterRestore,
+                IpFamily::Ipv6,
+                apply6,
+                rollback6,
+            ));
+            let (dns_apply6, dns_rollback6) = dns_guard_payloads(
+                IpFamily::Ipv6,
+                slot,
+                policy,
+                allocation,
+                &owner,
+                interfaces.as_deref(),
+            );
+            steps.push(restore_step(
+                NetworkOperationKind::DnsGuardRestore,
+                IpFamily::Ipv6,
+                dns_apply6,
+                dns_rollback6,
+            ));
+        }
+        Ok(NetworkPlan {
+            generation,
+            slot,
+            mode: CaptureMode::Tun,
+            capture_interface: Some("nethop0".to_owned()),
+            allocation,
+            bypass_mark,
+            ipv6_captured: ipv6_present,
             ipv6_guarded,
             dns_guarded: true,
             forwarding_interfaces,
@@ -352,7 +512,7 @@ fn dns_guard_payloads(
         ),
         format!(
             "-A {chain} -m mark --mark 0x{:x}/0xffffffff -j RETURN",
-            policy.bypass_mark().expect("validated TPROXY policy")
+            policy.bypass_mark().unwrap_or(DEFAULT_TUN_BYPASS_MARK)
         ),
     ];
     let mut append_drop = |protocol: &str, port: u16| {
@@ -383,6 +543,42 @@ fn dns_guard_payloads(
     (apply.join("\n") + "\n", rollback)
 }
 
+fn tun_payloads(
+    _family: IpFamily,
+    slot: PlanSlot,
+    policy: &CapturePolicy,
+    allocation: ResourceCandidate,
+    owner: &str,
+    interfaces: Option<&[String]>,
+) -> (String, String) {
+    let chain = format!("NH_TUN_{}", slot.suffix());
+    let mut apply = vec![
+        "*mangle".to_owned(),
+        format!("-N {chain}"),
+        format!("-A OUTPUT -m comment --comment {owner} -j {chain}"),
+        format!(
+            "-A {chain} -m mark --mark 0x{:x}/0x{:x} -j RETURN",
+            policy.bypass_mark().unwrap_or(DEFAULT_TUN_BYPASS_MARK),
+            allocation.mask()
+        ),
+        format!("-A {chain} -o lo -j RETURN"),
+        format!("-A {chain} -m conntrack --ctdir REPLY -j ACCEPT"),
+    ];
+    append_output_uid_bypasses(&mut apply, &chain, policy);
+    append_output_capture_rules(&mut apply, &chain, policy, allocation, interfaces);
+    apply.extend([format!("-A {chain} -j RETURN"), "COMMIT".to_owned()]);
+    let rollback = [
+        "*mangle".to_owned(),
+        format!("-D OUTPUT -m comment --comment {owner} -j {chain}"),
+        format!("-F {chain}"),
+        format!("-X {chain}"),
+        "COMMIT".to_owned(),
+    ]
+    .join("\n")
+        + "\n";
+    (apply.join("\n") + "\n", rollback)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanDiagnosticCode {
     InvalidGeneration,
@@ -394,6 +590,7 @@ pub enum PlanDiagnosticCode {
     Ipv4TproxyUnavailable,
     Ipv6LeakRisk,
     ResourceConflict,
+    TunUnavailable,
     BypassMarkConflict,
     InterfaceSelectionEmpty,
     ForwardingInterfaceSelectionEmpty,
@@ -411,6 +608,7 @@ impl PlanDiagnosticCode {
             Self::Ipv4TproxyUnavailable => "network_plan_ipv4_tproxy_unavailable",
             Self::Ipv6LeakRisk => "network_plan_ipv6_leak_risk",
             Self::ResourceConflict => "network_plan_resource_conflict",
+            Self::TunUnavailable => "network_plan_tun_unavailable",
             Self::BypassMarkConflict => "network_plan_bypass_mark_conflict",
             Self::InterfaceSelectionEmpty => "network_plan_interface_selection_empty",
             Self::ForwardingInterfaceSelectionEmpty => {
@@ -440,6 +638,8 @@ pub enum NetworkPlanError {
     Ipv6LeakRisk,
     #[error("no conflict-free mark, route table and rule priority are available")]
     ResourceConflict,
+    #[error("TUN capability is unavailable")]
+    TunUnavailable,
     #[error("capture mark conflicts with the core bypass mark")]
     BypassMarkConflict,
     #[error("configured interface scope matches no safe Android interface")]
@@ -460,6 +660,7 @@ impl NetworkPlanError {
             Self::Ipv4TproxyUnavailable => PlanDiagnosticCode::Ipv4TproxyUnavailable,
             Self::Ipv6LeakRisk => PlanDiagnosticCode::Ipv6LeakRisk,
             Self::ResourceConflict => PlanDiagnosticCode::ResourceConflict,
+            Self::TunUnavailable => PlanDiagnosticCode::TunUnavailable,
             Self::BypassMarkConflict => PlanDiagnosticCode::BypassMarkConflict,
             Self::InterfaceSelectionEmpty => PlanDiagnosticCode::InterfaceSelectionEmpty,
             Self::ForwardingInterfaceSelectionEmpty => {
@@ -469,18 +670,28 @@ impl NetworkPlanError {
     }
 }
 
-fn push_policy_steps(steps: &mut Vec<PlanStep>, family: IpFamily, allocation: ResourceCandidate) {
+fn push_policy_steps(
+    steps: &mut Vec<PlanStep>,
+    family: IpFamily,
+    allocation: ResourceCandidate,
+    device: &str,
+    local: bool,
+) {
     steps.push(PlanStep {
         kind: NetworkOperationKind::PolicyRouteAdd,
         apply: NetworkOperation::PolicyRoute {
             action: MutationAction::Add,
             family,
             table: allocation.route_table(),
+            device: device.to_owned(),
+            local,
         },
         rollback: NetworkOperation::PolicyRoute {
             action: MutationAction::Delete,
             family,
             table: allocation.route_table(),
+            device: device.to_owned(),
+            local,
         },
     });
     steps.push(PlanStep {
@@ -545,7 +756,7 @@ fn tproxy_payloads(
         format!("-A PREROUTING -m comment --comment {owner} -j {prerouting_chain}"),
         format!(
             "-A {output_chain} -m mark --mark 0x{:x}/0x{:x} -j RETURN",
-            policy.bypass_mark().expect("validated TPROXY policy"),
+            policy.bypass_mark().unwrap_or(DEFAULT_TUN_BYPASS_MARK),
             allocation.mask()
         ),
         format!("-A {output_chain} -m conntrack --ctdir REPLY -j ACCEPT"),

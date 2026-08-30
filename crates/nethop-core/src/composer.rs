@@ -751,8 +751,10 @@ fn compose_inbounds(profile: &ManagedProfile) -> Vec<Value> {
                     "stack".to_owned(),
                     Value::String(profile.tun_stack.as_str().to_owned()),
                 ),
-                ("auto_route".to_owned(), Value::Bool(true)),
-                ("strict_route".to_owned(), Value::Bool(true)),
+                // NetHop owns the policy routes so TUN capture can be detached
+                // without stopping the warm sing-box core.
+                ("auto_route".to_owned(), Value::Bool(false)),
+                ("strict_route".to_owned(), Value::Bool(false)),
             ]);
             if !profile.capture.include_uids().is_empty() {
                 inbound.insert(
