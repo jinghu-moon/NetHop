@@ -39,14 +39,16 @@ export function presentServiceStatus(status: StatusDto | undefined, loadFailed =
   if (lifecycle && typeof lifecycle === "object" && !Array.isArray(lifecycle)) {
     const state = (lifecycle as Record<string, unknown>).capture_state;
     const core = (lifecycle as Record<string, unknown>).core_state;
+    const attachment = (lifecycle as Record<string, unknown>).attachment_kind;
+    const isTun = attachment === "tun";
     if (core === "stopped") {
       return { phase: "stopped", title: "核心已停止", description: "概览开关将在需要时启动核心", switchValue: false, switchDisabled: false, switchLoading: false };
     }
     if (state === "enabled") {
-      return { phase: "running", title: "代理运行中", description: "流量接管已生效", switchValue: true, switchDisabled: false, switchLoading: false };
+      return { phase: "running", title: isTun ? "TUN 代理运行中" : "代理运行中", description: isTun ? "TUN 路由接管已生效" : "流量接管已生效", switchValue: true, switchDisabled: false, switchLoading: false };
     }
     if (core === "ready" && state === "disabled") {
-      return { phase: "stopped", title: "代理已关闭", description: "核心保持就绪，流量未被接管", switchValue: false, switchDisabled: false, switchLoading: false };
+      return { phase: "stopped", title: isTun ? "TUN 接管已关闭" : "代理已关闭", description: isTun ? "核心和 TUN 接口保持就绪，路由未被接管" : "核心保持就绪，流量未被接管", switchValue: false, switchDisabled: false, switchLoading: false };
     }
   }
 

@@ -15,9 +15,12 @@ export function createAppHost(): HostAdapter {
   if (capability.available && capability.kind !== "browser") return createKernelSuHost();
   const primaryId = "src_11111111111111111111111111111111";
   const backupId = "src_22222222222222222222222222222222";
+  const statefulMock = Boolean((globalThis as typeof globalThis & { __NETHOP_PERF_MOCK__?: boolean }).__NETHOP_PERF_MOCK__);
   let mockSubscriptionMode: "single" | "merge" = "single";
   let mockActiveSourceIds = [primaryId];
   let mockConfigRevision = 0;
+  let mockCaptureState: "enabled" | "disabled" = "enabled";
+  let mockCaptureStateObserved = false;
   let mockManualNodeId: string | undefined;
   const autoNodeId = "nh1s-0123456789abcdef";
   const manualNodeId = "nh1s-fedcba9876543210";
@@ -76,12 +79,12 @@ export function createAppHost(): HostAdapter {
   ], selection: nodeSelection() });
   return createMockHost({ responses: {
     hello: { errno: 0, stdout: envelope({ manager_version: "webui-0.1.0", compatible: true, daemon_protocol_min: 6, daemon_protocol_max: 6, daemon_schema_min: 3, daemon_schema_max: 3, active_schema_version: 3, supported_operations: [], supported_features: ["subscription_selection_v3", "node_territory_metadata_v1", "typed_active_terminal_v2", "node_benchmark_fast_selection_v1", "webui_icon_v1"] }), stderr: "" },
-    "status.get": { errno: 0, stdout: envelope({ schema_version: 2, state: "fail_open_direct", generation: null, last_update: "never", service: { configured_enabled: true, effective_enabled: true, override: null }, diagnostic_code: "fail_open_direct", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} }), stderr: "" },
-    "capture.status": { errno: 0, stdout: envelope({ subject: "capture", core_state: "ready", capture_state: "disabled", resource_state: "warm", generation: 1, completed: true }), stderr: "" },
+    "status.get": () => ({ errno: 0, stdout: envelope(statefulMock && mockCaptureStateObserved ? { schema_version: 2, state: mockCaptureState === "enabled" ? "running_tproxy" : "fail_open_direct", generation: 1, last_update: "succeeded", service: { configured_enabled: true, effective_enabled: mockCaptureState === "enabled", override: null }, diagnostic_code: mockCaptureState === "enabled" ? null : "fail_open_direct", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {}, lifecycle: { core_state: "ready", capture_state: mockCaptureState, capture_mode: "tproxy", attachment_kind: "tproxy", detachable: true } } : { schema_version: 2, state: "fail_open_direct", generation: null, last_update: "never", service: { configured_enabled: true, effective_enabled: true, override: null }, diagnostic_code: "fail_open_direct", watcher_health: {}, runtime: {}, subscription: {}, core_update: {}, rule_set: {}, dns_split: {}, capture: {}, operational: {} }), stderr: "" }),
+    "capture.status": () => ({ errno: 0, stdout: envelope({ subject: "capture", core_state: "ready", capture_state: mockCaptureState, capture_mode: "tproxy", attachment_kind: "tproxy", detachable: true, resource_state: mockCaptureState === "enabled" ? "active" : "warm", generation: 1, completed: true }), stderr: "" }),
     "core.status": { errno: 0, stdout: envelope({ subject: "core", core_state: "ready", capture_state: "disabled", resource_state: "warm", generation: 1, completed: true }), stderr: "" },
     "resource.status": { errno: 0, stdout: envelope({ subject: "resource", core_state: "ready", capture_state: "disabled", resource_state: "warm", generation: 1, completed: true }), stderr: "" },
-    "capture.enable": { errno: 0, stdout: envelope({ subject: "capture", core_state: "ready", capture_state: "enabled", resource_state: "active", generation: 1, completed: true }), stderr: "" },
-    "capture.disable": { errno: 0, stdout: envelope({ subject: "capture", core_state: "ready", capture_state: "disabled", resource_state: "warm", generation: 1, completed: true }), stderr: "" },
+    "capture.enable": () => { if (statefulMock) { mockCaptureState = "enabled"; mockCaptureStateObserved = true; } return { errno: 0, stdout: envelope({ subject: "capture", core_state: "ready", capture_state: "enabled", resource_state: "active", generation: 1, completed: true }), stderr: "" }; },
+    "capture.disable": () => { if (statefulMock) { mockCaptureState = "disabled"; mockCaptureStateObserved = true; } return { errno: 0, stdout: envelope({ subject: "capture", core_state: "ready", capture_state: "disabled", resource_state: "warm", generation: 1, completed: true }), stderr: "" }; },
     "core.start": { errno: 0, stdout: envelope({ subject: "core", core_state: "ready", capture_state: "disabled", resource_state: "warm", generation: 1, completed: true }), stderr: "" },
     "core.stop": { errno: 0, stdout: envelope({ subject: "core", core_state: "stopped", capture_state: "disabled", resource_state: "cold", generation: null, completed: true }), stderr: "" },
     "traffic.get": { errno: 0, stdout: envelope({ kind: "traffic", state: "ok", sample: { up_bps: 0, down_bps: 0 }, observed_at_unix_ms: mockNowSeconds * 1_000, interval_ms: 1_000 }), stderr: "" },

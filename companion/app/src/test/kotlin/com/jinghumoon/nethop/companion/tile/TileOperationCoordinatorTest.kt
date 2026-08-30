@@ -32,6 +32,7 @@ class TileOperationCoordinatorTest {
                 }
                 RootOperation.ServiceStop -> error("unexpected stop")
                 RootOperation.CaptureEnable, RootOperation.CaptureDisable -> error("unexpected capture operation")
+                RootOperation.CaptureStatus -> error("unexpected capture status")
                 is RootOperation.WebUi -> error("unexpected WebUI operation")
             }
         }

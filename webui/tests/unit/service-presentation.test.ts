@@ -22,6 +22,13 @@ function status(
   };
 }
 
+function tunLifecycleStatus(captureState: "enabled" | "disabled"): StatusDto {
+  return {
+    ...status(captureState === "enabled" ? "running_tun" : "running_tun"),
+    extension: { lifecycle: { core_state: "ready", capture_state: captureState, attachment_kind: "tun", detachable: true } },
+  };
+}
+
 describe("presentServiceStatus", () => {
   it("keeps an absent status in loading instead of reporting a stopped service", () => {
     expect(presentServiceStatus(undefined)).toEqual({
@@ -49,6 +56,22 @@ describe("presentServiceStatus", () => {
       title: "代理运行中",
       switchValue: true,
       switchDisabled: false,
+    });
+  });
+
+  it("identifies an enabled TUN attachment instead of presenting it as TPROXY", () => {
+    expect(presentServiceStatus(tunLifecycleStatus("enabled"))).toMatchObject({
+      phase: "running",
+      title: "TUN 代理运行中",
+      description: "TUN 路由接管已生效",
+    });
+  });
+
+  it("identifies a disabled TUN attachment while keeping the core warm", () => {
+    expect(presentServiceStatus(tunLifecycleStatus("disabled"))).toMatchObject({
+      phase: "stopped",
+      title: "TUN 接管已关闭",
+      description: "核心和 TUN 接口保持就绪，路由未被接管",
     });
   });
 
