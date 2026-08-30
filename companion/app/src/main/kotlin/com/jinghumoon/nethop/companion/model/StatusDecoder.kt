@@ -31,6 +31,7 @@ data class StatusDocument(
     @SerialName("rule_set") val ruleSet: JsonElement,
     @SerialName("dns_split") val dnsSplit: JsonElement,
     val capture: JsonElement,
+    val lifecycle: JsonElement? = null,
     val operational: JsonElement,
 )
 

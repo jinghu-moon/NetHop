@@ -50,6 +50,13 @@ object BridgeCommandPolicy {
             "status.get" -> args == listOf("status", "--json")
             "service.start" -> args == listOf("start", "--json") || args == listOf("start", "--json", "--wait")
             "service.stop" -> args == listOf("stop", "--json") || args == listOf("stop", "--json", "--wait")
+            "capture.enable" -> args == listOf("capture", "enable", "--json") || args == listOf("capture", "enable", "--json", "--wait")
+            "capture.disable" -> args == listOf("capture", "disable", "--json") || args == listOf("capture", "disable", "--json", "--wait")
+            "capture.status" -> args == listOf("capture", "status", "--json")
+            "core.start" -> args == listOf("core", "start", "--json") || args == listOf("core", "start", "--json", "--wait")
+            "core.stop" -> args == listOf("core", "stop", "--json") || args == listOf("core", "stop", "--json", "--wait")
+            "core.status" -> args == listOf("core", "status", "--json")
+            "resource.status" -> args == listOf("resource", "status", "--json")
             "capability.get" -> args == listOf("capability", "get", "--json")
             "config.get" -> args == listOf("config", "get", "--json")
             "config.schema" -> args == listOf("config", "schema", "--json")
@@ -100,7 +107,7 @@ object BridgeCommandPolicy {
         if (!valid || spawn != (operationId == "events.subscribe")) return null
         val timeout = when {
             spawn -> 0L
-            operationId in setOf("service.start", "service.stop", "config.reload", "subscription.update", "ruleset.update", "webui.payload.commit") -> 30_000L
+            operationId in setOf("service.start", "service.stop", "capture.enable", "capture.disable", "core.start", "core.stop", "config.reload", "subscription.update", "ruleset.update", "webui.payload.commit") -> 30_000L
             operationId == "node.test-all" -> 7_000L
             operationId == "node.test" -> 15_000L
             else -> 5_000L
@@ -208,6 +215,10 @@ object BridgeCommandPolicy {
     private val mutatingOperations = setOf(
         "service.start",
         "service.stop",
+        "capture.enable",
+        "capture.disable",
+        "core.start",
+        "core.stop",
         "config.reload",
         "node.test",
         "node.test-all",

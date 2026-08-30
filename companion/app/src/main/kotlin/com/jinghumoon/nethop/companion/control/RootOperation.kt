@@ -26,6 +26,14 @@ sealed interface RootOperation {
         override fun command() = spec(listOf("stop", "--json", "--wait"), 20_000, 256 * 1024, 32 * 1024, mutating = true)
     }
 
+    data object CaptureEnable : RootOperation {
+        override fun command() = spec(listOf("capture", "enable", "--json", "--wait"), 20_000, 256 * 1024, 32 * 1024, mutating = true)
+    }
+
+    data object CaptureDisable : RootOperation {
+        override fun command() = spec(listOf("capture", "disable", "--json", "--wait"), 20_000, 256 * 1024, 32 * 1024, mutating = true)
+    }
+
     class WebUi internal constructor(private val spec: RootCommandSpec) : RootOperation {
         override fun command(): RootCommandSpec = spec
     }

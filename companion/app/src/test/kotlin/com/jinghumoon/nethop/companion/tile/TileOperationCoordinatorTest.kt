@@ -31,6 +31,7 @@ class TileOperationCoordinatorTest {
                     CommandResult.Success("{}".encodeToByteArray(), byteArrayOf())
                 }
                 RootOperation.ServiceStop -> error("unexpected stop")
+                RootOperation.CaptureEnable, RootOperation.CaptureDisable -> error("unexpected capture operation")
                 is RootOperation.WebUi -> error("unexpected WebUI operation")
             }
         }

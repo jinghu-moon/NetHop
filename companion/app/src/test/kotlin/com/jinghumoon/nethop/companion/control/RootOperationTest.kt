@@ -11,6 +11,8 @@ class RootOperationTest {
         assertEquals(listOf("status", "--json"), RootOperation.StatusGet.command().args)
         assertEquals(listOf("start", "--json", "--wait"), RootOperation.ServiceStart.command().args)
         assertEquals(listOf("stop", "--json", "--wait"), RootOperation.ServiceStop.command().args)
+        assertEquals(listOf("capture", "enable", "--json", "--wait"), RootOperation.CaptureEnable.command().args)
+        assertEquals(listOf("capture", "disable", "--json", "--wait"), RootOperation.CaptureDisable.command().args)
         for (operation in listOf(RootOperation.StatusGet, RootOperation.ServiceStart, RootOperation.ServiceStop)) {
             assertEquals(NETHOPCTL_PATH, operation.command().executable)
         }
