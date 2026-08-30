@@ -137,7 +137,7 @@ export function parseHello(value: unknown): HelloDto {
 }
 
 export function parseStatus(value: unknown): StatusDto {
-  const allowed = ["schema_version", "state", "generation", "last_update", "service", "diagnostic_code", "watcher_health", "runtime", "subscription", "core_update", "rule_set", "dns_split", "capture", "operational"];
+  const allowed = ["schema_version", "state", "generation", "last_update", "service", "diagnostic_code", "watcher_health", "runtime", "subscription", "core_update", "rule_set", "dns_split", "capture", "lifecycle", "operational"];
   const object = record(value, "$.result", allowed);
   const service = record(object.service, "$.result.service", ["configured_enabled", "effective_enabled", "override"]);
   const override = service.override === null || service.override === undefined
@@ -147,7 +147,7 @@ export function parseStatus(value: unknown): StatusDto {
     ? undefined
     : enumeration(object.diagnostic_code, "$.result.diagnostic_code", ["config_unavailable", "fail_open_direct", "runtime_degraded", "runtime_backoff", "runtime_circuit_open"] as const);
   const extensionKeys = allowed.slice(6);
-  const extension = Object.fromEntries(extensionKeys.map((key) => [key, safeExtension(object[key], `$.result.${key}`)]));
+  const extension = Object.fromEntries(extensionKeys.map((key) => [key, object[key] === undefined ? null : safeExtension(object[key], `$.result.${key}`)]));
   const schemaVersion = integer(object.schema_version, "$.result.schema_version", 2, 2);
   return {
     schemaVersion: schemaVersion as 2,
@@ -256,8 +256,8 @@ export function parseConfigSchema(value: unknown): ConfigSchemaDto {
   if (object.features !== undefined) safeExtension(object.features, "$.result.features");
   const fields = array(object.fields, "$.result.fields", 512).map((value, index): ConfigSchemaFieldDto => {
     const path = `$.result.fields[${index}]`;
-    const field = record(value, path, ["field_id", "path", "value_type", "default", "title_key", "description_key", "group", "order", "advanced", "experimental", "deprecated", "sensitive", "read_only", "write_only", "apply_impact", "risk_level", "capability_key", "stage", "enum_values", "min", "max", "max_items"]);
-    ["default", "description_key", "deprecated", "write_only", "stage", "min", "max", "max_items"].forEach((key) => { if (field[key] !== undefined) safeExtension(field[key], `${path}.${key}`); });
+    const field = record(value, path, ["field_id", "path", "value_type", "default", "title_key", "description_key", "group", "order", "advanced", "experimental", "deprecated", "sensitive", "read_only", "write_only", "apply_impact", "risk_level", "capability_key", "confirmation_key", "stage", "enum", "enum_values", "range", "min", "max", "min_items", "max_items"]);
+    ["description_key", "deprecated", "write_only", "stage", "min", "max", "min_items", "max_items"].forEach((key) => { if (field[key] !== undefined) safeExtension(field[key], `${path}.${key}`); });
     const options = field.enum_values === undefined ? [] : array(field.enum_values, `${path}.enum_values`, 128).map((item, itemIndex) => string(item, `${path}.enum_values[${itemIndex}]`, 128));
     const minimum = field.min === undefined || field.min === null ? undefined : integer(field.min, `${path}.min`, 0, 4_294_967_295);
     const maximum = field.max === undefined || field.max === null ? undefined : integer(field.max, `${path}.max`, 0, 4_294_967_295);

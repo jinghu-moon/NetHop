@@ -13,6 +13,7 @@ import PageState from "@/components/ui/feedback/PageState.vue";
 import StatusLine from "@/components/StatusLine.vue";
 import Dialog from "@/components/ui/overlay/Dialog.vue";
 import Button from "@/components/ui/primitives/Button.vue";
+import Switch from "@/components/ui/primitives/Switch.vue";
 import Textarea from "@/components/ui/primitives/Textarea.vue";
 import Segmented from "@/components/ui/navigation/Segmented.vue";
 import { useHost } from "@/bridge/context";
@@ -46,6 +47,8 @@ const editorMode = ref<"form" | "json">("form");
 const rawConfig = ref("");
 const rawError = ref("");
 const operations = createOperationStore();
+const corePending = ref(false);
+const coreRunning = ref(false);
 const editorModeOptions = [
   { value: "form", label: "常用设置" },
   { value: "json", label: "专家 JSON" },
@@ -73,8 +76,34 @@ const activeDigest = computed(() => {
   return digest ? digest.slice(0, 10) + "…" : "未知";
 });
 
+async function syncCoreStatus(): Promise<void> {
+  try {
+    const response = await runJson(host, { id: "core.status" }) as { result?: { core_state?: unknown } };
+    coreRunning.value = response.result?.core_state === "ready";
+  } catch {
+    coreRunning.value = false;
+  }
+}
+
 function changeThemeMode(context: { value: string | number }): void {
   if (context.value === "system" || context.value === "light" || context.value === "dark") setThemeMode(context.value);
+}
+
+async function toggleCore(): Promise<void> {
+  if (corePending.value) return;
+  corePending.value = true;
+  const operationId = "core-service";
+  operations.begin(operationId, "core");
+  operations.update(operationId, "running");
+  try {
+    await runJson(host, { id: coreRunning.value ? "core.stop" : "core.start", wait: true });
+    coreRunning.value = !coreRunning.value;
+    operations.update(operationId, "success", { message: coreRunning.value ? "核心已启用" : "核心已停止" });
+  } catch {
+    operations.update(operationId, "failure", { code: "NH-UI-CORE", message: "核心状态切换失败" });
+  } finally {
+    corePending.value = false;
+  }
 }
 
 function getValue(path: string): unknown {
@@ -164,11 +193,17 @@ function impactLabel(value: unknown): string {
 async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
+  const timings: Record<string, number> = {};
+  const timed = async <T>(name: string, task: Promise<T>): Promise<T> => {
+    const started = performance.now();
+    try { return await task; }
+    finally { timings[name] = Math.round(performance.now() - started); }
+  };
   try {
     const [config, schema, report] = await Promise.all([
-      validatedQuery(host, { id: "config.get" }, parseConfig),
-      validatedQuery(host, { id: "config.schema" }, parseConfigSchema),
-      validatedQuery(host, { id: "capability.get" }, parseCapability),
+      timed("config.get", validatedQuery(host, { id: "config.get" }, parseConfig)),
+      timed("config.schema", validatedQuery(host, { id: "config.schema" }, parseConfigSchema)),
+      timed("capability.get", validatedQuery(host, { id: "capability.get" }, parseCapability)),
     ]);
     uiStores.config.load(config);
     fields.value = schema.fields;
@@ -176,8 +211,9 @@ async function load(): Promise<void> {
     rawConfig.value = serializeConfigDocument(config.document);
     rawError.value = "";
     conflict.value = false;
-  } catch {
-    error.value = "配置或设备能力加载失败";
+  } catch (cause) {
+    console.info("[NetHop timing] settings.load", timings);
+    error.value = cause instanceof Error ? `配置或设备能力加载失败：${cause.message}` : "配置或设备能力加载失败";
   } finally {
     loading.value = false;
   }
@@ -231,7 +267,10 @@ async function reload(): Promise<void> {
   }
 }
 
-onActivated(() => { if (!uiStores.config.dirty.value) void load(); });
+onActivated(() => {
+  void syncCoreStatus();
+  if (!uiStores.config.dirty.value) void load();
+});
 </script>
 
 <template>
@@ -250,6 +289,12 @@ onActivated(() => { if (!uiStores.config.dirty.value) void load(); });
             </SettingsRow>
             <SettingsRow title="运维" description="日志、备份、诊断和版本检查" arrow clickable @activate="router.push('/operations')">
               <template #icon><IconActivity :size="15" /></template>
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup title="核心服务" description="核心生命周期独立于概览页流量接管开关">
+            <SettingsRow title="sing-box 核心" :description="coreRunning ? '核心运行中，可快速恢复流量接管' : '核心已停止，启用代理时将重新启动'">
+              <template #icon><IconActivity :size="15" /></template>
+              <template #trailing><Switch :model-value="coreRunning" :loading="corePending" aria-label="启用 sing-box 核心" @change="toggleCore" /></template>
             </SettingsRow>
           </SettingsGroup>
           <SettingsGroup title="配置" description="来自 daemon schema 的真实设置">

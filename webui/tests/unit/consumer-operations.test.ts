@@ -5,6 +5,15 @@ const nodeId = "nh1s-0123456789abcdef";
 const digest = "a".repeat(64);
 
 describe("consumer operation allowlist", () => {
+  it("maps core and capture lifecycle commands to fixed argv", () => {
+    expect(buildCommand({ id: "capture.enable", wait: true }).args).toEqual(["capture", "enable", "--json", "--wait"]);
+    expect(buildCommand({ id: "capture.disable" }).args).toEqual(["capture", "disable", "--json"]);
+    expect(buildCommand({ id: "capture.status" }).args).toEqual(["capture", "status", "--json"]);
+    expect(buildCommand({ id: "core.start", wait: true }).args).toEqual(["core", "start", "--json", "--wait"]);
+    expect(buildCommand({ id: "core.stop" }).args).toEqual(["core", "stop", "--json"]);
+    expect(buildCommand({ id: "core.status" }).args).toEqual(["core", "status", "--json"]);
+    expect(buildCommand({ id: "resource.status" }).args).toEqual(["resource", "status", "--json"]);
+  });
   it("maps node operations to fixed typed argv", () => {
     expect(buildCommand({ id: "node.test", nodeId }).args).toEqual(["node", "test", nodeId, "--json"]);
     const testAll = buildCommand({ id: "node.test-all" });

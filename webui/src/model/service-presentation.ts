@@ -35,6 +35,21 @@ export function presentServiceStatus(status: StatusDto | undefined, loadFailed =
     };
   }
 
+  const lifecycle = status.extension.lifecycle;
+  if (lifecycle && typeof lifecycle === "object" && !Array.isArray(lifecycle)) {
+    const state = (lifecycle as Record<string, unknown>).capture_state;
+    const core = (lifecycle as Record<string, unknown>).core_state;
+    if (core === "stopped") {
+      return { phase: "stopped", title: "核心已停止", description: "概览开关将在需要时启动核心", switchValue: false, switchDisabled: false, switchLoading: false };
+    }
+    if (state === "enabled") {
+      return { phase: "running", title: "代理运行中", description: "流量接管已生效", switchValue: true, switchDisabled: false, switchLoading: false };
+    }
+    if (core === "ready" && state === "disabled") {
+      return { phase: "stopped", title: "代理已关闭", description: "核心保持就绪，流量未被接管", switchValue: false, switchDisabled: false, switchLoading: false };
+    }
+  }
+
   if (!status.service.configuredEnabled) {
     return {
       phase: "stopped",

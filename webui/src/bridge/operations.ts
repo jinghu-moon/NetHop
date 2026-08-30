@@ -20,6 +20,13 @@ export type OperationRequest =
   | { readonly id: "status.get" }
   | { readonly id: "service.start"; readonly wait?: boolean }
   | { readonly id: "service.stop"; readonly wait?: boolean }
+  | { readonly id: "capture.enable"; readonly wait?: boolean }
+  | { readonly id: "capture.disable"; readonly wait?: boolean }
+  | { readonly id: "capture.status" }
+  | { readonly id: "core.start"; readonly wait?: boolean }
+  | { readonly id: "core.stop"; readonly wait?: boolean }
+  | { readonly id: "core.status" }
+  | { readonly id: "resource.status" }
   | { readonly id: "capability.get" }
   | { readonly id: "config.get" }
   | { readonly id: "config.schema" }
@@ -121,6 +128,13 @@ export function buildCommand(request: OperationRequest): BuiltCommand {
     case "status.get": return { executable: NETHOPCTL_PATH, args: ["status", "--json"], timeoutMs: 5000, sensitive: false };
     case "service.start": return { executable: NETHOPCTL_PATH, args: ["start", "--json", ...(request.wait ? ["--wait"] : [])], timeoutMs: request.wait ? 30000 : 5000, sensitive: false };
     case "service.stop": return { executable: NETHOPCTL_PATH, args: ["stop", "--json", ...(request.wait ? ["--wait"] : [])], timeoutMs: request.wait ? 30000 : 5000, sensitive: false };
+    case "capture.enable": return { executable: NETHOPCTL_PATH, args: ["capture", "enable", "--json", ...(request.wait ? ["--wait"] : [])], timeoutMs: request.wait ? 30000 : 10000, sensitive: false };
+    case "capture.disable": return { executable: NETHOPCTL_PATH, args: ["capture", "disable", "--json", ...(request.wait ? ["--wait"] : [])], timeoutMs: request.wait ? 30000 : 10000, sensitive: false };
+    case "capture.status": return { executable: NETHOPCTL_PATH, args: ["capture", "status", "--json"], timeoutMs: 5000, sensitive: false };
+    case "core.start": return { executable: NETHOPCTL_PATH, args: ["core", "start", "--json", ...(request.wait ? ["--wait"] : [])], timeoutMs: request.wait ? 30000 : 10000, sensitive: false };
+    case "core.stop": return { executable: NETHOPCTL_PATH, args: ["core", "stop", "--json", ...(request.wait ? ["--wait"] : [])], timeoutMs: request.wait ? 30000 : 10000, sensitive: false };
+    case "core.status": return { executable: NETHOPCTL_PATH, args: ["core", "status", "--json"], timeoutMs: 5000, sensitive: false };
+    case "resource.status": return { executable: NETHOPCTL_PATH, args: ["resource", "status", "--json"], timeoutMs: 5000, sensitive: false };
     case "capability.get": return { executable: NETHOPCTL_PATH, args: ["capability", "get", "--json"], timeoutMs: 5000, sensitive: false };
     case "config.get": return { executable: NETHOPCTL_PATH, args: ["config", "get", "--json"], timeoutMs: 5000, sensitive: false };
     case "config.reload": return { executable: NETHOPCTL_PATH, args: ["config", "reload", "--json", "--wait"], timeoutMs: 30000, sensitive: false };

@@ -14,6 +14,7 @@ export interface BoundedResult {
   readonly response: unknown;
   readonly stderr: string;
   readonly errno: number;
+  readonly durationMs: number;
 }
 
 const MAX_OUTPUT_BYTES = MAX_JSON_BYTES;
@@ -37,6 +38,7 @@ function daemonFailure(response: unknown): BridgeError | undefined {
 }
 
 export async function runJson(host: HostAdapter, request: OperationRequest): Promise<BoundedResult> {
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const command = buildCommand(request);
   if (command.timeoutMs === 0) throw new BridgeError("host_error", "stream operation requires spawn");
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -51,7 +53,8 @@ export async function runJson(host: HostAdapter, request: OperationRequest): Pro
     const response = parseSingleJsonEnvelope(result.stdout);
     const failure = daemonFailure(response);
     if (failure) throw failure;
-    return { response, stderr: result.stderr, errno: result.errno };
+    const endedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    return { response, stderr: result.stderr, errno: result.errno, durationMs: Math.max(0, Math.round(endedAt - startedAt)) };
   } catch (error) {
     if (error instanceof BridgeError) throw error;
     throw new BridgeError("host_error", "host operation failed");

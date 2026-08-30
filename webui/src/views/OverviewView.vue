@@ -155,6 +155,12 @@ async function refresh(): Promise<void> {
   if ([statusResult, trafficResult, configResult, nodesResult, metricsResult].every((result) => result.status === "rejected")) throw new Error("overview unavailable");
 }
 
+async function refreshStatusOnly(): Promise<void> {
+  const next = await validatedQuery(host, { id: "status.get" }, parseStatus);
+  uiStores.session.setStatus(next);
+  statusLoadFailed.value = false;
+}
+
 async function refreshMetrics(): Promise<void> {
   if (metricsRefreshing) return;
   metricsRefreshing = true;
@@ -212,13 +218,15 @@ async function changeCaptureMode(context: { value: string | number }): Promise<v
 const toggle = async (value: unknown): Promise<void> => {
   const desired = value === true || value === "true";
   await lock.run("service", async () => {
+    const uiStartedAt = performance.now();
     pending.value = true;
     operations.begin("service", "service");
     operations.update("service", "running");
     try {
-      await runJson(host, { id: desired ? "service.start" : "service.stop", wait: true });
-      await refresh();
-      operations.update("service", "success", { message: desired ? "代理已启动" : "代理已关闭" });
+      const result = await runJson(host, { id: desired ? "capture.enable" : "capture.disable", wait: true });
+      const uiDurationMs = Math.max(0, Math.round(performance.now() - uiStartedAt));
+      operations.update("service", "success", { message: `${desired ? "代理已启动" : "代理已关闭"}（bridge ${result.durationMs} ms · UI ${uiDurationMs} ms）` });
+      void refreshStatusOnly().catch(() => undefined);
     } catch {
       operations.update("service", "failure", { code: "NH-UI-OPERATION", message: "代理状态切换失败" });
     } finally {

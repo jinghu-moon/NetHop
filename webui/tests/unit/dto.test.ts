@@ -72,11 +72,11 @@ describe("strict DTO validators", () => {
       stage: 2,
       enum_values: ["system", "gvisor"],
     };
-    const schema = parseConfigSchema({ schema_version: 3, fields: [field], features: [] });
+    const schema = parseConfigSchema({ schema_version: 3, fields: [{ ...field, range: null, min_items: null }], features: [] });
 
     expect(schema.fields[0]?.options).toEqual(["system", "gvisor"]);
     expect(schema.fields[0]?.capabilityKey).toBe("capture.tun");
-    expect(() => parseConfigSchema({ schema_version: 3, fields: [{ ...field, enum: field.enum_values }], features: [] })).toThrow("unknown field");
+    expect(parseConfigSchema({ schema_version: 3, fields: [{ ...field, enum: field.enum_values }], features: [] }).fields[0]?.options).toEqual(["system", "gvisor"]);
   });
 
   it("accepts u32 configuration ranges emitted by the daemon", () => {
@@ -87,6 +87,17 @@ describe("strict DTO validators", () => {
       enum_values: [], min: 1, max: 4_294_967_295,
     };
     expect(parseConfigSchema({ schema_version: 3, fields: [field], features: [] }).fields[0]?.maximum).toBe(4_294_967_295);
+  });
+
+  it("accepts empty and null schema defaults without treating them as user strings", () => {
+    const field = {
+      field_id: "subscriptions.sources[].url", path: "subscriptions.sources[].url", value_type: "string", default: "",
+      title_key: "config.url.title", description_key: "config.url.description", group: "subscriptions", order: 25,
+      advanced: false, experimental: false, deprecated: false, sensitive: true, read_only: false, write_only: false,
+      apply_impact: "generation_activation", risk_level: "normal", capability_key: null, confirmation_key: null,
+      stage: 1, enum: null, enum_values: [], range: null, min: null, max: null, min_items: null, max_items: null,
+    };
+    expect(parseConfigSchema({ schema_version: 3, fields: [field], features: [] }).fields[0]?.valueType).toBe("string");
   });
 
   it("rejects source URL leakage and credential-shaped node fields", () => {
