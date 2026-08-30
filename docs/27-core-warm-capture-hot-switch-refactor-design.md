@@ -559,7 +559,7 @@ PREROUTING
 
 ## 6. TUN 边界
 
-### 6.1 第一阶段不做 TUN 热停
+### 6.1 TUN 热切换实现边界
 
 TUN 包含：
 
@@ -570,18 +570,20 @@ TUN 包含：
 - IPv4/IPv6 guard；
 - 可能的热点/USB 转发。
 
-因此第一阶段规定：
+实现 TUN 热切换后，规定如下：
 
 ```text
-capture.mode = tproxy -> 支持 core warm
-capture.mode = tun    -> 保持受控 stop/start
+capture.mode = tproxy -> core warm + NetHop policy route attach/detach
+capture.mode = tun    -> core/TUN interface warm + NetHop policy route attach/detach
 ```
 
-UI 必须明确显示：TUN 模式启停会有数据面切换窗口，不能伪装为与 TPROXY 相同的瞬时切换。
+TPROXY <-> TUN 的模式变更仍然属于完整 activation；TUN enabled <-> disabled 只切换
+NetHop 自有的 route/netfilter attachment，不重启 sing-box、不重建 `nethop0`。UI 必须显示结构化
+切换阶段和失败原因，不得把首次模式变更伪装成热切换。
 
 ### 6.2 后续 TUN 实验门槛
 
-只有同时满足以下条件，才允许设计 `tun_attachment.detach/attach`：
+TUN route attachment 已按以下条件实现并持续受真机 gate 约束：
 
 1. Android 真机验证保留 TUN 接口时关闭所有系统捕获不会泄漏；
 2. 关闭和重新启用不残留默认路由、rule priority、DNS 和 IPv6 guard；
@@ -1133,6 +1135,47 @@ COLD -> ACTIVE
 | COLD -> ACTIVE resume | 必须记录完整冷启动成本 |
 
 性能比较必须同时记录 before/after，不能只报告 UI 感知时间。若热切换减少了等待但引入规则执行、CPU wakeup 或内存超预算，不能判定完成。未完成 Android 真机资源基线前，不得把“核心常驻”标记为默认完成能力。
+
+### 10.1 CLI 后端耗时测试
+
+为了单独观察 CLI 到 daemon 的后端耗时，使用：
+
+```powershell
+pwsh -NoProfile -File "scripts/cli-backend-performance.ps1" `
+  -Samples 20 `
+  -IncludeCaptureToggle
+```
+
+该测试直接在 Android root shell 内计时固定的 `nethopctl` 命令，覆盖：
+
+- `status --json`、`config check --json`、`capture status --json`、`core status --json`；
+- `node list --limit 64 --json`；
+- 可选的 TPROXY `capture enable/disable --wait`。
+
+计时范围包含 CLI 进程启动、参数解析、Unix socket/daemon 请求、daemon 处理、JSON 序列化和 root shell 内命令收尾，不包含 WebUI 渲染和 Android Bridge 的 UI 逻辑。脚本输出每个命令的 `p50/p95/max/failures`，并写入 `artifacts/cli-performance/android/`；启用 capture 变更测试时会在结束后恢复初始状态。
+
+默认门禁为只读命令 p95 `<= 500ms`、capture enable/disable p95 `<= 2s`。这些是 CLI 后端开发期门槛，不替代文档前述的 TPROXY 入口切换和完整数据面 verify 指标；正式结论仍需在同一设备上进行 before/after 配对采样。
+
+### 10.2 WebUI 前端耗时测试
+
+WebUI 性能测试使用 Playwright 的 Pixel 7 浏览器仿真，覆盖概览页 capture 开关的完整前端交互路径：点击、操作提示首次出现、`runJson` 返回和成功状态渲染。测试同时解析操作提示中的 `bridge N ms · UI M ms`，分别记录桥接封装耗时和前端 UI 总耗时。
+
+运行命令：
+
+```powershell
+npm --prefix "webui" run typecheck
+npm --prefix "webui" run test:e2e -- tests/e2e/frontend-performance.spec.ts
+```
+
+或运行统一编排脚本（先执行 Android 真机 CLI，再执行 WebUI）：
+
+```powershell
+pwsh -NoProfile -File "scripts/cli-frontend-performance.ps1" `
+  -Samples 20 `
+  -IncludeCaptureToggle
+```
+
+脚本报告写入 `artifacts/cli-performance/webui/frontend-*.json`，并生成 `artifacts/cli-performance/cli-frontend-*.json` 合并报告。前端报告的默认门禁是 toggle 后首次可见操作反馈 p95 `<= 100ms`；成功完成、bridge 和 UI 子耗时作为诊断指标一并保留。浏览器测试使用仓库 mock host，不能替代 Android WebView/真实 Android Bridge 的端到端结论；合并报告必须保持这两个数据源的边界。
 
 ## 11. 安全与故障语义
 

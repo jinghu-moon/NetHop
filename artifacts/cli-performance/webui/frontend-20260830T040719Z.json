@@ -1,0 +1,350 @@
+{
+  "schema": "nethop-webui-frontend-performance-v1",
+  "scope": "Chromium Pixel 7 emulation with the WebUI mock host; excludes Android WebView and real bridge transport",
+  "samples_per_direction": 20,
+  "budgets": {
+    "first_feedback_p95_ms": 100
+  },
+  "summaries": {
+    "feedback": {
+      "enable": {
+        "count": 20,
+        "p50_ms": 18.75,
+        "p95_ms": 23.22,
+        "max_ms": 23.6
+      },
+      "disable": {
+        "count": 20,
+        "p50_ms": 18.6,
+        "p95_ms": 23.675,
+        "max_ms": 32.7
+      }
+    },
+    "success": {
+      "enable": {
+        "count": 20,
+        "p50_ms": 28.976,
+        "p95_ms": 35.393,
+        "max_ms": 37.371
+      },
+      "disable": {
+        "count": 20,
+        "p50_ms": 28.042,
+        "p95_ms": 33.843,
+        "max_ms": 50.838
+      }
+    },
+    "bridge": {
+      "enable": {
+        "count": 20,
+        "p50_ms": 3,
+        "p95_ms": 4.15,
+        "max_ms": 7
+      },
+      "disable": {
+        "count": 20,
+        "p50_ms": 3,
+        "p95_ms": 4,
+        "max_ms": 4
+      }
+    },
+    "reported_ui": {
+      "enable": {
+        "count": 20,
+        "p50_ms": 3,
+        "p95_ms": 4.15,
+        "max_ms": 7
+      },
+      "disable": {
+        "count": 20,
+        "p50_ms": 3,
+        "p95_ms": 4,
+        "max_ms": 4
+      }
+    }
+  },
+  "samples": [
+    {
+      "direction": "disable",
+      "feedback_ms": 32.7,
+      "success_ms": 50.838,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 23.2,
+      "success_ms": 37.371,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 19.4,
+      "success_ms": 29.717,
+      "bridge_ms": 2,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 20.1,
+      "success_ms": 28.927,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 18.9,
+      "success_ms": 28.506,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 19.5,
+      "success_ms": 31.906,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 15.4,
+      "success_ms": 27.207,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 20.9,
+      "success_ms": 30.512,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 21.3,
+      "success_ms": 30.051,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 20.2,
+      "success_ms": 29.024,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 15.1,
+      "success_ms": 24.323,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 19,
+      "success_ms": 29.78,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 19,
+      "success_ms": 28.196,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 23.6,
+      "success_ms": 35.289,
+      "bridge_ms": 7,
+      "reported_ui_ms": 7
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 19.4,
+      "success_ms": 28.367,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 19.2,
+      "success_ms": 30.233,
+      "bridge_ms": 2,
+      "reported_ui_ms": 2
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 15.9,
+      "success_ms": 23.938,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 19.8,
+      "success_ms": 30.254,
+      "bridge_ms": 3,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 14.1,
+      "success_ms": 23.422,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 16.8,
+      "success_ms": 27.129,
+      "bridge_ms": 2,
+      "reported_ui_ms": 2
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 23.2,
+      "success_ms": 32.948,
+      "bridge_ms": 2,
+      "reported_ui_ms": 2
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 16.5,
+      "success_ms": 25.233,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 19.3,
+      "success_ms": 28.315,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 18.8,
+      "success_ms": 29.46,
+      "bridge_ms": 2,
+      "reported_ui_ms": 2
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 18.3,
+      "success_ms": 27.888,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 18.3,
+      "success_ms": 27.759,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 20.2,
+      "success_ms": 28.971,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 18.7,
+      "success_ms": 29.156,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 18.9,
+      "success_ms": 31.932,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 16.3,
+      "success_ms": 24.089,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 14.6,
+      "success_ms": 22.76,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 15.9,
+      "success_ms": 23.93,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 14.4,
+      "success_ms": 22.207,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 0.7,
+      "success_ms": 26.131,
+      "bridge_ms": 2,
+      "reported_ui_ms": 2
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 13.4,
+      "success_ms": 21.776,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 14.7,
+      "success_ms": 23.882,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 14.3,
+      "success_ms": 22.67,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 15.2,
+      "success_ms": 23.31,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 0.3,
+      "success_ms": 24.927,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 14.3,
+      "success_ms": 22.356,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    }
+  ],
+  "passed": true,
+  "contains_sensitive_data": false
+}

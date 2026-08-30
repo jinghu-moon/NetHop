@@ -1,0 +1,956 @@
+{
+  "schema": "nethop-cli-backend-performance-v1",
+  "revision": "2ccfd29522e9cae8d81cb55d863b2b0334e19a89",
+  "device": {
+    "serial": "dc39c31d",
+    "model": "M2012K11AC",
+    "android_release": "13",
+    "android_sdk": "33",
+    "abi": "arm64-v8a"
+  },
+  "scope": "device-side nethopctl plus nethopd UDS handling; excludes WebUI and Android Bridge rendering",
+  "samples_per_read_only_case": 20,
+  "include_capture_toggle": true,
+  "initial_capture_enabled": true,
+  "budgets": {
+    "read_only_p95_ms": 500,
+    "capture_p95_ms": 2000
+  },
+  "summaries": [
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 20,
+        "p50_ms": 183.5,
+        "p95_ms": 194.45,
+        "max_ms": 203.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 20,
+        "p50_ms": 116.0,
+        "p95_ms": 150.05,
+        "max_ms": 189.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 20,
+        "p50_ms": 120.5,
+        "p95_ms": 129.15,
+        "max_ms": 132.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 20,
+        "p50_ms": 116.0,
+        "p95_ms": 136.05,
+        "max_ms": 137.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 20,
+        "p50_ms": 134.0,
+        "p95_ms": 142.1,
+        "max_ms": 144.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "budget_p95_ms": 2000,
+      "stats": {
+        "count": 20,
+        "p50_ms": 299.0,
+        "p95_ms": 323.4,
+        "max_ms": 331.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "budget_p95_ms": 2000,
+      "stats": {
+        "count": 20,
+        "p50_ms": 303.5,
+        "p95_ms": 341.1,
+        "max_ms": 343.0,
+        "failures": 0
+      },
+      "passed": true
+    }
+  ],
+  "samples": [
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 203
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 174
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 168
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 168
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 185
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 181
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 167
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 194
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 191
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 185
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 186
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 172
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 185
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 176
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 181
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 178
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 184
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 188
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 186
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 183
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 125
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 113
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 111
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 130
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 111
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 112
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 122
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 114
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 130
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 114
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 100
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 138
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 116
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 116
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 148
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 98
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 128
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 189
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 115
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 138
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 110
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 126
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 122
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 125
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 108
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 121
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 114
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 126
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 104
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 127
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 101
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 123
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 112
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 132
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 122
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 118
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 120
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 129
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 104
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 117
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 101
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 117
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 137
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 102
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 122
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 100
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 133
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 103
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 119
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 125
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 114
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 123
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 127
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 102
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 114
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 123
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 115
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 136
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 105
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 104
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 106
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 129
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 129
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 114
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 144
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 134
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 135
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 134
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 127
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 137
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 137
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 129
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 142
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 127
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 142
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 141
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 123
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 121
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 140
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 135
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 298
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 303
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 289
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 343
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 293
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 296
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 290
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 303
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 300
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 302
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 323
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 310
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 319
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 302
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 294
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 296
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 317
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 324
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 303
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 315
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 313
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 304
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 280
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 298
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 290
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 341
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 305
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 288
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 331
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 320
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 297
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 314
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 303
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 300
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 281
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 334
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 278
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 308
+    },
+    {
+      "name": "capture-disable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture disable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 300
+    },
+    {
+      "name": "capture-enable",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture enable --json --wait",
+      "exit_code": 0,
+      "elapsed_ms": 297
+    }
+  ],
+  "passed": true,
+  "contains_sensitive_data": false
+}

@@ -1,0 +1,140 @@
+{
+  "schema": "nethop-webui-frontend-performance-v1",
+  "scope": "Chromium Pixel 7 emulation with the WebUI mock host; excludes Android WebView and real bridge transport",
+  "samples_per_direction": 5,
+  "budgets": {
+    "first_feedback_p95_ms": 100
+  },
+  "summaries": {
+    "feedback": {
+      "enable": {
+        "count": 5,
+        "p50_ms": 18.1,
+        "p95_ms": 19.54,
+        "max_ms": 19.7
+      },
+      "disable": {
+        "count": 5,
+        "p50_ms": 17.6,
+        "p95_ms": 44.18,
+        "max_ms": 49.9
+      }
+    },
+    "success": {
+      "enable": {
+        "count": 5,
+        "p50_ms": 27.648,
+        "p95_ms": 29.88,
+        "max_ms": 30.368
+      },
+      "disable": {
+        "count": 5,
+        "p50_ms": 26.1,
+        "p95_ms": 57.954,
+        "max_ms": 64.864
+      }
+    },
+    "bridge": {
+      "enable": {
+        "count": 5,
+        "p50_ms": 3,
+        "p95_ms": 4,
+        "max_ms": 4
+      },
+      "disable": {
+        "count": 5,
+        "p50_ms": 3,
+        "p95_ms": 3.8,
+        "max_ms": 4
+      }
+    },
+    "reported_ui": {
+      "enable": {
+        "count": 5,
+        "p50_ms": 3,
+        "p95_ms": 4,
+        "max_ms": 4
+      },
+      "disable": {
+        "count": 5,
+        "p50_ms": 3,
+        "p95_ms": 3.8,
+        "max_ms": 4
+      }
+    }
+  },
+  "samples": [
+    {
+      "direction": "disable",
+      "feedback_ms": 49.9,
+      "success_ms": 64.864,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 19.7,
+      "success_ms": 30.368,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 16.3,
+      "success_ms": 25.015,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 17.5,
+      "success_ms": 27.648,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 15.8,
+      "success_ms": 24.696,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 18.1,
+      "success_ms": 27.234,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 21.3,
+      "success_ms": 30.315,
+      "bridge_ms": 3,
+      "reported_ui_ms": 3
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 18.9,
+      "success_ms": 27.93,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "disable",
+      "feedback_ms": 17.6,
+      "success_ms": 26.1,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    },
+    {
+      "direction": "enable",
+      "feedback_ms": 14.9,
+      "success_ms": 24.111,
+      "bridge_ms": 4,
+      "reported_ui_ms": 4
+    }
+  ],
+  "passed": true,
+  "contains_sensitive_data": false
+}

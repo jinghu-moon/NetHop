@@ -1,0 +1,180 @@
+{
+  "schema": "nethop-cli-backend-performance-v1",
+  "revision": "2ccfd29522e9cae8d81cb55d863b2b0334e19a89",
+  "device": {
+    "serial": "",
+    "model": "M2012K11AC",
+    "android_release": "13",
+    "android_sdk": "33",
+    "abi": "arm64-v8a"
+  },
+  "scope": "device-side nethopctl plus nethopd UDS handling; excludes WebUI and Android Bridge rendering",
+  "samples_per_read_only_case": 3,
+  "include_capture_toggle": false,
+  "initial_capture_enabled": true,
+  "budgets": {
+    "read_only_p95_ms": 500,
+    "capture_p95_ms": 2000
+  },
+  "summaries": [
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 3,
+        "p50_ms": 176.0,
+        "p95_ms": 205.7,
+        "max_ms": 209.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 3,
+        "p50_ms": 124.0,
+        "p95_ms": 133.0,
+        "max_ms": 134.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "budget_p95_ms": 2000,
+      "stats": {
+        "count": 3,
+        "p50_ms": 115.0,
+        "p95_ms": 120.4,
+        "max_ms": 121.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 3,
+        "p50_ms": 126.0,
+        "p95_ms": 136.8,
+        "max_ms": 138.0,
+        "failures": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "budget_p95_ms": 500,
+      "stats": {
+        "count": 3,
+        "p50_ms": 124.0,
+        "p95_ms": 127.6,
+        "max_ms": 128.0,
+        "failures": 0
+      },
+      "passed": true
+    }
+  ],
+  "samples": [
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 209
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 165
+    },
+    {
+      "name": "status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl status --json",
+      "exit_code": 0,
+      "elapsed_ms": 176
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 134
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 108
+    },
+    {
+      "name": "config-check",
+      "command": "/data/adb/modules/nethop/bin/nethopctl config check --json",
+      "exit_code": 0,
+      "elapsed_ms": 124
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 115
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 106
+    },
+    {
+      "name": "capture-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl capture status --json",
+      "exit_code": 0,
+      "elapsed_ms": 121
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 138
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 124
+    },
+    {
+      "name": "core-status",
+      "command": "/data/adb/modules/nethop/bin/nethopctl core status --json",
+      "exit_code": 0,
+      "elapsed_ms": 126
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 110
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 124
+    },
+    {
+      "name": "node-list",
+      "command": "/data/adb/modules/nethop/bin/nethopctl node list --limit 64 --json",
+      "exit_code": 0,
+      "elapsed_ms": 128
+    }
+  ],
+  "passed": true,
+  "contains_sensitive_data": false
+}

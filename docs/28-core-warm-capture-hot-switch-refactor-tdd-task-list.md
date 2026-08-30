@@ -18,7 +18,7 @@
 
 - B001-B005：`nethop-core` 三轴生命周期、确定性 reducer、Idle Policy、资源聚合和恢复成本 DTO；
 - C001-C004：`capture.*`、`core.*`、`resource.status` 严格 protocol/CLI 方法与参数校验；
-- D001、D003、D005：TPROXY capture seam、幂等 attach/detach 入口、TUN 热切换拒绝边界；
+- D001、D003、D005：TPROXY/TUN capture seam、幂等 attach/detach 入口、TUN route owner/generation 边界；
 - E003 的停止顺序：核心停止路径复用 daemon 单写路径并先撤销 TPROXY 接管；
 - F001：daemon-owned `IdlePolicyController` 及 WARM/IDLE/COLD 决策测试；
 - G001、G003、G004：Companion bridge allowlist、WebUI 概览 capture 操作、设置页核心启停入口；
@@ -37,7 +37,7 @@
 5. IDLE 只暂停 NetHop 可控的非必要工作，不伪造 sing-box suspend API；
 6. 超过资源预算时由 daemon 执行 WARM -> IDLE -> COLD 降级；
 7. 记录资源成本和恢复成本，使用 Android 真机证据决定 timeout 和预算；
-8. TUN 第一阶段继续使用安全 stop/start，不声称支持 TUN 热停；
+8. TUN 模式变更继续使用安全 stop/start；TUN 已激活后的 enable/disable 仅切换受控 route attachment，不重启核心；
 9. Rust daemon、protocol、CLI、Companion bridge、WebUI、Quick Settings 和测试 fixture 使用同一事实源；
 10. 新功能增加后，原有 IPv4/IPv6、DNS、UID 策略、订阅、节点、配置 CAS、回滚、返回键和模块恢复行为正常。
 
